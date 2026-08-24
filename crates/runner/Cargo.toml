@@ -11,3 +11,19 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
+bullet-application.workspace = true
+bullet-domain.workspace = true
+bullet-harness-core.workspace = true
+chrono.workspace = true
+futures.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+bullet-harness-sim.workspace = true
+tempfile.workspace = true

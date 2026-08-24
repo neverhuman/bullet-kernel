@@ -120,6 +120,122 @@ paths:
             text/event-stream:
               schema:
                 $ref: "#/components/schemas/Event"
+  /v1/leases/acquire:
+    post:
+      summary: Acquire the writer lease for one work package (spec 26.3)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeaseAcquireRequest"
+      responses:
+        "200":
+          description: fenced attempt plus authority token and lease row
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaseAcquireResponse"
+        "400":
+          description: invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: unknown work package
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: refused (already leased, fence or idempotency conflict)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/leases/heartbeat:
+    post:
+      summary: Six-identity lease renewal (spec 26.4); zero rows is stale
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeaseHeartbeatRequest"
+      responses:
+        "204":
+          description: lease renewed
+        "409":
+          description: stale authority (zero matched rows)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/leases/release:
+    post:
+      summary: Close a lease with a terminal attempt state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeaseReleaseRequest"
+      responses:
+        "204":
+          description: released (idempotent for an already-final attempt)
+        "404":
+          description: unknown attempt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: lease held by another attempt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/attempts/advance:
+    post:
+      summary: Apply one legal attempt state transition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttemptAdvanceRequest"
+      responses:
+        "204":
+          description: transition applied
+        "400":
+          description: illegal transition or unknown state label
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: unknown attempt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/ready:
+    get:
+      summary: The next ready work package
+      responses:
+        "200":
+          description: next dispatchable package
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyView"
+        "404":
+          description: ready queue empty
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
 components:
   schemas:
     Health:
@@ -265,3 +381,165 @@ components:
         code: { type: string }
         correlation_id: { type: string }
         retryable: { type: boolean }
+    WorkspaceNonce:
+      type: array
+      items:
+        type: integer
+    Attempt:
+      type: object
+      required:
+        - id
+        - variant_id
+        - work_package_id
+        - fence
+        - runner_id
+        - runner_epoch
+        - workspace_id
+        - workspace_nonce
+        - scope_revision
+        - context_revision
+        - state
+      properties:
+        id: { type: string }
+        variant_id: { type: string }
+        work_package_id: { type: string }
+        fence: { type: integer }
+        runner_id: { type: string }
+        runner_epoch: { type: integer }
+        workspace_id: { type: string }
+        workspace_nonce:
+          $ref: "#/components/schemas/WorkspaceNonce"
+        scope_revision: { type: integer }
+        context_revision: { type: integer }
+        state: { type: string }
+    AuthorityToken:
+      type: object
+      required:
+        - organization_id
+        - repository_id
+        - mission_id
+        - acceptance_contract_id
+        - plan_revision_id
+        - graph_sequence
+        - work_package_id
+        - selection_group_id
+        - variant_id
+        - attempt_id
+        - attempt_fence
+        - runner_id
+        - runner_epoch
+        - workspace_id
+        - workspace_nonce
+        - scope_revision
+        - context_revision
+        - config_snapshot_hash
+        - policy_snapshot_hash
+        - routing_policy_hash
+        - credential_profile_id
+        - credential_generation
+      properties:
+        organization_id: { type: string }
+        repository_id: { type: string }
+        mission_id: { type: string }
+        acceptance_contract_id: { type: string }
+        plan_revision_id: { type: string }
+        graph_sequence: { type: integer }
+        work_package_id: { type: string }
+        selection_group_id: { type: string }
+        variant_id: { type: string }
+        attempt_id: { type: string }
+        attempt_fence: { type: integer }
+        runner_id: { type: string }
+        runner_epoch: { type: integer }
+        workspace_id: { type: string }
+        workspace_nonce:
+          $ref: "#/components/schemas/WorkspaceNonce"
+        scope_revision: { type: integer }
+        context_revision: { type: integer }
+        config_snapshot_hash: { type: string }
+        policy_snapshot_hash: { type: string }
+        routing_policy_hash: { type: string }
+        credential_profile_id:
+          type: [string, "null"]
+        credential_generation:
+          type: [integer, "null"]
+    ActiveLease:
+      type: object
+      required:
+        - variant_id
+        - attempt_id
+        - fence
+        - runner_id
+        - runner_epoch
+        - workspace_nonce
+        - heartbeat_at
+        - expires_at
+      properties:
+        variant_id: { type: string }
+        attempt_id: { type: string }
+        fence: { type: integer }
+        runner_id: { type: string }
+        runner_epoch: { type: integer }
+        workspace_nonce:
+          $ref: "#/components/schemas/WorkspaceNonce"
+        heartbeat_at: { type: string }
+        expires_at: { type: string }
+    LeaseAcquireRequest:
+      type: object
+      required: [work_package_id, runner_id, runner_epoch, idempotency_key]
+      properties:
+        work_package_id: { type: string }
+        runner_id: { type: string }
+        runner_epoch: { type: integer }
+        idempotency_key: { type: string }
+        ttl_seconds: { type: integer }
+    LeaseAcquireResponse:
+      type: object
+      required: [attempt, authority_token, lease]
+      properties:
+        attempt:
+          $ref: "#/components/schemas/Attempt"
+        authority_token:
+          $ref: "#/components/schemas/AuthorityToken"
+        lease:
+          $ref: "#/components/schemas/ActiveLease"
+    LeaseHeartbeatRequest:
+      type: object
+      required:
+        - variant_id
+        - attempt_id
+        - fence
+        - runner_id
+        - runner_epoch
+        - workspace_nonce
+      properties:
+        variant_id: { type: string }
+        attempt_id: { type: string }
+        fence: { type: integer }
+        runner_id: { type: string }
+        runner_epoch: { type: integer }
+        workspace_nonce:
+          $ref: "#/components/schemas/WorkspaceNonce"
+        ttl_seconds: { type: integer }
+    LeaseReleaseRequest:
+      type: object
+      required: [attempt_id, outcome]
+      properties:
+        attempt_id: { type: string }
+        outcome: { type: string }
+        requeue: { type: boolean }
+    AttemptAdvanceRequest:
+      type: object
+      required: [attempt_id, state]
+      properties:
+        attempt_id: { type: string }
+        state: { type: string }
+    ReadyView:
+      type: object
+      required: [work_package_id, mission_id, variant_id, title, enqueued_at]
+      properties:
+        work_package_id: { type: string }
+        mission_id: { type: string }
+        variant_id: { type: string }
+        title: { type: string }
+        enqueued_at: { type: string }

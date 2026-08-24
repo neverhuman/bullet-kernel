@@ -262,12 +262,27 @@ dependencies = [
 name = "bullet-effects"
 version = "0.1.0"
 dependencies = [
+ "bullet-application",
+ "bullet-domain",
  "bullet-effects-core",
+ "chrono",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
 name = "bullet-effects-core"
 version = "0.1.0"
+dependencies = [
+ "bullet-application",
+ "bullet-domain",
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror",
+]
 
 [[package]]
 name = "bullet-farmd"
@@ -277,6 +292,8 @@ dependencies = [
  "bullet-adapters",
  "bullet-application",
  "bullet-domain",
+ "bullet-runner-core",
+ "chrono",
  "clap",
  "futures-util",
  "rusqlite",
@@ -381,7 +398,13 @@ dependencies = [
 name = "bullet-runner"
 version = "0.1.0"
 dependencies = [
- "axum",
+ "bullet-domain",
+ "bullet-harness-claude",
+ "bullet-harness-codex",
+ "bullet-harness-core",
+ "bullet-harness-cursor",
+ "bullet-harness-sim",
+ "bullet-runner-core",
  "clap",
  "serde",
  "serde_json",
@@ -391,6 +414,22 @@ dependencies = [
 [[package]]
 name = "bullet-runner-core"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bullet-application",
+ "bullet-domain",
+ "bullet-harness-core",
+ "bullet-harness-sim",
+ "chrono",
+ "futures",
+ "hex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "bullet-test-simulation"
@@ -409,11 +448,23 @@ name = "bullet-verifier"
 version = "0.1.0"
 dependencies = [
  "bullet-verifier-core",
+ "clap",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
 name = "bullet-verifier-core"
 version = "0.1.0"
+dependencies = [
+ "bullet-domain",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "bumpalo"

@@ -1,37 +1,10 @@
-//! Versioned runner protocol. Structured events are authoritative.
+//! Versioned runner journal records. Structured checkpoints are
+//! authoritative; log lines are not.
 
 use serde::{Deserialize, Serialize};
 
 /// Wire version. Bump only when the schema changes.
 pub const PROTOCOL_VERSION: u32 = 1;
-
-/// Dispatch a session.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DispatchRequest {
-    /// Session id.
-    pub session: String,
-}
-
-/// Heartbeat from a live session.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HeartbeatRequest {
-    /// Session id.
-    pub session: String,
-}
-
-/// Resume from the last checkpoint.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SalvageRequest {
-    /// Session id.
-    pub session: String,
-}
-
-/// Stop a session.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TerminateRequest {
-    /// Session id.
-    pub session: String,
-}
 
 /// Durable runner checkpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

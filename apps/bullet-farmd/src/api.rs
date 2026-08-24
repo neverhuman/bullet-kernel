@@ -27,10 +27,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// Shared daemon state. The async mutex cannot poison; a panicked holder
 /// simply releases the lock.
 pub struct AppState {
-    ledger: Mutex<SqliteLedger>,
+    pub(crate) ledger: Mutex<SqliteLedger>,
 }
 
-type SharedState = Arc<AppState>;
+pub(crate) type SharedState = Arc<AppState>;
 
 /// Build the router against a SQLite file.
 ///
@@ -51,6 +51,7 @@ pub fn router(db: &FsPath) -> Result<Router, LedgerError> {
         .route("/v1/demo/run", post(run_demo_handler))
         .route("/v1/outbox", get(outbox))
         .route("/v1/events", get(events))
+        .merge(crate::leases::routes())
         .layer(CorsLayer::permissive())
         .with_state(state))
 }

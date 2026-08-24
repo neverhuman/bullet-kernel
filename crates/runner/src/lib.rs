@@ -1,3 +1,32 @@
-//! Attempt runner loop: lease, private clone via bullet-gitd, provider session, scope check, apply, gate, candidate.
-//!
-//! Scaffold registered by lane L0 so parallel lanes never edit Cargo.toml concurrently.
+//! Attempt runner loop: lease, private clone via bullet-gitd, provider
+//! session, scope check, apply, gate, candidate (ADR 0001: providers run
+//! read-only; the kernel applies `PatchProposal`s through the workspace
+//! daemon, the sole writer).
+
+pub mod attempt;
+pub mod capsule;
+pub mod clock;
+pub mod error;
+pub mod gate;
+pub mod gitd;
+pub mod heartbeat;
+pub mod http;
+pub mod http_lease;
+pub mod journal;
+pub mod lease;
+pub mod scope;
+
+pub use attempt::{run_attempt, AttemptConfig, AttemptOutcome};
+pub use capsule::Capsule;
+pub use clock::{Clock, ManualClock, MonotonicClock, SelfKillDeadline};
+pub use error::RunnerError;
+pub use gate::{run_gate, GateReport};
+pub use gitd::{gitd_available, gitd_binary, CandidateReceipt, GitdSession, WorkspaceInfo};
+pub use heartbeat::{start_heartbeat, FreezeReason, HeartbeatConfig, HeartbeatHandle};
+pub use http::HttpJson;
+pub use http_lease::HttpLeaseClient;
+pub use journal::{JournalSink, MemoryJournal};
+pub use lease::{
+    AcquireGrant, AcquireRequest, DirectLeaseClient, HeartbeatCall, LeaseClient, ReadyView,
+    ReleaseCall,
+};

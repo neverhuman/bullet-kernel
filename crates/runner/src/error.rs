@@ -1,0 +1,129 @@
+//! Typed runner failures with stable reason codes. Fail closed, never panic.
+
+use bullet_harness_core::HarnessError;
+use thiserror::Error;
+
+/// Runner failure. Every variant carries a stable reason code.
+#[derive(Debug, Error)]
+pub enum RunnerError {
+    /// The ledger no longer recognizes this incarnation's authority.
+    #[error("stale authority: {0}")]
+    StaleAuthority(String),
+    /// The local monotonic self-kill deadline passed without a renewed lease.
+    #[error("self-kill deadline passed at {elapsed_ms}ms")]
+    SelfKill {
+        /// Monotonic milliseconds when the deadline fired.
+        elapsed_ms: u64,
+    },
+    /// A proposed path is outside the granted scope prefixes.
+    #[error("scope denied: {path} is outside the granted prefixes")]
+    ScopeDenied {
+        /// The offending repository-relative path.
+        path: String,
+    },
+    /// The workspace daemon refused a call.
+    #[error("gitd refused {method}: {code}: {message}")]
+    Gitd {
+        /// Method that was refused.
+        method: String,
+        /// Daemon reason code.
+        code: String,
+        /// Daemon message.
+        message: String,
+    },
+    /// Provider adapter failure.
+    #[error(transparent)]
+    Harness(#[from] HarnessError),
+    /// The lease API refused a call.
+    #[error("lease call refused: {code}: {message}")]
+    Lease {
+        /// Server reason code.
+        code: String,
+        /// Server message.
+        message: String,
+    },
+    /// The gate command could not be executed at all.
+    #[error("gate `{command}` failed to run: {reason}")]
+    Gate {
+        /// Gate command line.
+        command: String,
+        /// OS failure text.
+        reason: String,
+    },
+    /// The bounded repair loop is spent without a passing candidate.
+    #[error("caps exhausted after {rounds} repair rounds")]
+    CapsExhausted {
+        /// Repair rounds consumed.
+        rounds: u32,
+    },
+    /// The turn closed without a usable `PatchProposal`.
+    #[error("turn produced no patch proposal: {0}")]
+    NoProposal(String),
+    /// Filesystem, socket, or pipe failure.
+    #[error("io failure in {context}: {reason}")]
+    Io {
+        /// What was being attempted.
+        context: String,
+        /// OS error text.
+        reason: String,
+    },
+    /// A wire response violated its protocol.
+    #[error("protocol violation: {0}")]
+    Protocol(String),
+}
+
+impl RunnerError {
+    /// Stable machine-readable reason code.
+    #[must_use]
+    pub fn reason_code(&self) -> &'static str {
+        match self {
+            Self::StaleAuthority(_) => "STALE_AUTHORITY",
+            Self::SelfKill { .. } => "SELF_KILL_DEADLINE",
+            Self::ScopeDenied { .. } => "SCOPE_DENIED",
+            Self::Gitd { .. } => "GITD_REFUSED",
+            Self::Harness(err) => err.reason_code(),
+            Self::Lease { .. } => "LEASE_REFUSED",
+            Self::Gate { .. } => "GATE_FAILED",
+            Self::CapsExhausted { .. } => "CAPS_EXHAUSTED",
+            Self::NoProposal(_) => "NO_PROPOSAL",
+            Self::Io { .. } => "IO_FAILED",
+            Self::Protocol(_) => "PROTOCOL_ERROR",
+        }
+    }
+
+    /// True when the failure means this incarnation's authority is gone.
+    #[must_use]
+    pub fn is_stale(&self) -> bool {
+        matches!(self, Self::StaleAuthority(_))
+    }
+
+    /// True for the freeze class: stale authority or the self-kill deadline.
+    #[must_use]
+    pub fn is_frozen(&self) -> bool {
+        matches!(self, Self::StaleAuthority(_) | Self::SelfKill { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reason_codes_are_stable() {
+        assert_eq!(
+            RunnerError::StaleAuthority("x".into()).reason_code(),
+            "STALE_AUTHORITY"
+        );
+        assert_eq!(
+            RunnerError::ScopeDenied { path: "a".into() }.reason_code(),
+            "SCOPE_DENIED"
+        );
+        assert_eq!(
+            RunnerError::SelfKill { elapsed_ms: 1 }.reason_code(),
+            "SELF_KILL_DEADLINE"
+        );
+        assert!(RunnerError::StaleAuthority("x".into()).is_frozen());
+        assert!(RunnerError::SelfKill { elapsed_ms: 1 }.is_frozen());
+        assert!(!RunnerError::CapsExhausted { rounds: 2 }.is_frozen());
+    }
+}
