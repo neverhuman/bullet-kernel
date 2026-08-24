@@ -243,7 +243,7 @@ fn stale_refused(
         .ok_or("live attempt row missing")?;
     let stale_token = LeaseService::token_for(graph, first)
         .map_err(|err| format!("STALE_TOKEN:{}: {err}", err.reason_code()))?;
-    let token_refused = LeaseService::authorize(&stale_token, &live).is_err();
+    let token_refused = LeaseService::authorize_patch_application(&stale_token, &live).is_err();
     let refused = heartbeat_refused && token_refused;
     if refused {
         let _ = store.append_event("stale_refused", first.id.as_str());

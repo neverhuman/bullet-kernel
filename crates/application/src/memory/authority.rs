@@ -234,7 +234,21 @@ impl MemoryLedger {
         let ttl_seconds = req.validated_ttl()?;
         self.tick()?;
         let (now, expires_at) = self.lease_window(ttl_seconds)?;
-        if let Some(lease) = self.leases.get_mut(&req.variant_id.to_string()) {
+        let variant_key = req.variant_id.to_string();
+        if let Some(current) = self.leases.get(&variant_key).cloned() {
+            let attempt = self
+                .attempts
+                .get(current.attempt_id.as_str())
+                .ok_or_else(|| LedgerError::Store("active lease has no Attempt".into()))?;
+            if !attempt.state.permits_lease_heartbeat() {
+                return Err(DomainError::StaleAuthority(format!(
+                    "{} cannot heartbeat while {:?}",
+                    attempt.id, attempt.state
+                ))
+                .into());
+            }
+        }
+        if let Some(lease) = self.leases.get_mut(&variant_key) {
             if lease.attempt_id == req.attempt_id
                 && lease.fence == req.fence
                 && lease.runner_id == req.runner_id
@@ -273,11 +287,13 @@ impl MemoryLedger {
                 .get(&attempt_key)
                 .cloned()
                 .ok_or_else(|| LedgerError::Store("lease without attempt".into()))?;
-            let next_state = if attempt.state.may_mutate() {
-                attempt.state.transition(AttemptState::Crashed)?
-            } else {
-                attempt.state
-            };
+            if !attempt.state.permits_expiry_reclaim() {
+                return Err(LedgerError::Store(format!(
+                    "active lease Attempt {} cannot expire from {:?}",
+                    attempt.id, attempt.state
+                )));
+            }
+            let next_state = attempt.state.transition(AttemptState::Crashed)?;
             if let Some(stored) = self.attempts.get_mut(&attempt_key) {
                 stored.state = next_state;
             }
@@ -302,7 +318,7 @@ impl MemoryLedger {
 
     pub(super) fn release_lease_impl(&mut self, req: &ReleaseRequest) -> Result<(), LedgerError> {
         self.tick()?;
-        if req.final_state.may_mutate() {
+        if !req.final_state.is_terminal_release_target() {
             return Err(DomainError::InvalidTransition {
                 from: "release".into(),
                 to: format!("{:?}", req.final_state),

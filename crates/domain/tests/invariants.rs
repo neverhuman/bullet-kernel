@@ -1,8 +1,11 @@
 //! Invariants A1–A7, W1–W3, and observation honesty.
 
+use bullet_domain::observation::{
+    PreservationDecision, PreservationOperation, PreservationOutcome, PreservationRecord,
+};
 use bullet_domain::{
-    default_catalog, reject_worktree, AttemptId, AttemptState, AuthorityToken, CommandPhase,
-    Digest, DomainError, MissionId, MissionState, Observation, WorkPackageState,
+    default_catalog, reject_worktree, Attempt, AttemptId, AttemptState, AuthorityToken,
+    CommandPhase, Digest, DomainError, MissionId, MissionState, Observation, WorkPackageState,
 };
 use proptest::prelude::*;
 
@@ -59,11 +62,73 @@ fn stale_token_cannot_authorize() {
 }
 
 #[test]
-fn superseded_attempt_cannot_mutate() {
-    assert!(!AttemptState::Superseded.may_mutate());
-    assert!(!AttemptState::Crashed.may_mutate());
-    assert!(!AttemptState::Succeeded.may_mutate());
-    assert!(AttemptState::Running.may_mutate());
+fn attempt_operation_permissions_are_exhaustive() {
+    let states = [
+        AttemptState::Created,
+        AttemptState::Starting,
+        AttemptState::Running,
+        AttemptState::Paused,
+        AttemptState::Checkpointing,
+        AttemptState::Preparing,
+        AttemptState::Succeeded,
+        AttemptState::Superseded,
+        AttemptState::Failed,
+        AttemptState::Crashed,
+        AttemptState::Cancelled,
+        AttemptState::Quarantined,
+    ];
+    for state in states {
+        let lease_resident = matches!(
+            state,
+            AttemptState::Starting
+                | AttemptState::Running
+                | AttemptState::Paused
+                | AttemptState::Checkpointing
+                | AttemptState::Preparing
+        );
+        assert_eq!(state.permits_lease_heartbeat(), lease_resident, "{state:?}");
+        assert_eq!(
+            state.permits_online_lease_check(),
+            lease_resident,
+            "{state:?}"
+        );
+        assert_eq!(state.permits_expiry_reclaim(), lease_resident, "{state:?}");
+        assert_eq!(
+            state.appears_in_active_attempt_projection(),
+            lease_resident,
+            "{state:?}"
+        );
+        assert_eq!(
+            state.permits_preserved_workspace_cleanup(),
+            matches!(
+                state,
+                AttemptState::Succeeded
+                    | AttemptState::Superseded
+                    | AttemptState::Failed
+                    | AttemptState::Crashed
+                    | AttemptState::Cancelled
+            ),
+            "{state:?}"
+        );
+        assert_eq!(
+            state.permits_patch_application(),
+            state == AttemptState::Running,
+            "{state:?}"
+        );
+        assert_eq!(
+            state.is_terminal_release_target(),
+            matches!(
+                state,
+                AttemptState::Succeeded
+                    | AttemptState::Superseded
+                    | AttemptState::Failed
+                    | AttemptState::Crashed
+                    | AttemptState::Cancelled
+                    | AttemptState::Quarantined
+            ),
+            "{state:?}"
+        );
+    }
     assert!(AttemptState::Running
         .transition(AttemptState::Superseded)
         .is_ok());
@@ -174,16 +239,126 @@ fn state_labels_parse_round_trip_and_fail_closed() {
 }
 
 #[test]
-fn unknown_never_permits_destruction() {
+fn observation_kinds_do_not_grant_generic_destruction_authority() {
     let unknown: Observation<String> = Observation::Unknown {
         source: "tmux".into(),
         reason: "read failed".into(),
     };
-    assert!(!unknown.permits_destruction());
+    assert!(!unknown.is_verified());
     assert_eq!(unknown.kind_name(), "unknown");
     assert!(unknown.render().starts_with("unknown"));
     let value = Observation::value("ok".to_string());
-    assert!(value.permits_destruction());
+    assert!(value.is_verified());
+}
+
+fn attempt(state: AttemptState) -> Attempt {
+    Attempt {
+        id: AttemptId::from_seed("preservation-attempt"),
+        variant_id: bullet_domain::VariantId::from_seed("preservation-variant"),
+        work_package_id: bullet_domain::WorkPackageId::from_seed("preservation-package"),
+        fence: 7,
+        runner_id: bullet_domain::RunnerId::from_seed("preservation-runner"),
+        runner_epoch: 2,
+        workspace_id: bullet_domain::WorkspaceId::from_seed("preservation-workspace"),
+        workspace_nonce: [9; 32],
+        scope_revision: 3,
+        context_revision: 4,
+        state,
+    }
+}
+
+fn preservation(attempt: &Attempt, outcome: PreservationOutcome) -> PreservationRecord {
+    PreservationRecord::for_attempt(
+        attempt,
+        PreservationOperation::CleanupWorkspace,
+        Digest::of(b"daemon-issued-preservation-receipt"),
+        outcome,
+    )
+}
+
+#[test]
+fn only_exact_preserved_value_constructs_cleanup_decision() {
+    let attempt = attempt(AttemptState::Superseded);
+    let outcomes = [
+        PreservationOutcome::Preserved,
+        PreservationOutcome::Failed,
+        PreservationOutcome::Unsupported,
+        PreservationOutcome::Error,
+        PreservationOutcome::Unknown,
+        PreservationOutcome::Superseded,
+    ];
+    for outcome in outcomes {
+        let observed = Observation::value(preservation(&attempt, outcome));
+        assert_eq!(
+            PreservationDecision::for_workspace_cleanup(&observed, &attempt).is_ok(),
+            outcome == PreservationOutcome::Preserved,
+            "{outcome:?}"
+        );
+    }
+
+    let non_values: [Observation<PreservationRecord>; 3] = [
+        Observation::Empty,
+        Observation::Unknown {
+            source: "bullet-gitd".into(),
+            reason: "read timeout".into(),
+        },
+        Observation::Contradictory {
+            sources: vec!["journal".into(), "cas".into()],
+            reason: "receipt roots disagree".into(),
+        },
+    ];
+    for observed in non_values {
+        assert!(PreservationDecision::for_workspace_cleanup(&observed, &attempt).is_err());
+    }
+}
+
+#[test]
+fn preservation_decision_rejects_every_stale_subject_and_state() {
+    let superseded = attempt(AttemptState::Superseded);
+    let observed = Observation::value(preservation(&superseded, PreservationOutcome::Preserved));
+    let mut stale = superseded.clone();
+    stale.fence += 1;
+    assert!(PreservationDecision::for_workspace_cleanup(&observed, &stale).is_err());
+
+    for state in [
+        AttemptState::Created,
+        AttemptState::Starting,
+        AttemptState::Running,
+        AttemptState::Paused,
+        AttemptState::Checkpointing,
+        AttemptState::Preparing,
+        AttemptState::Quarantined,
+    ] {
+        let refused = attempt(state);
+        let observation =
+            Observation::value(preservation(&refused, PreservationOutcome::Preserved));
+        assert!(PreservationDecision::for_workspace_cleanup(&observation, &refused).is_err());
+    }
+
+    for state in [
+        AttemptState::Succeeded,
+        AttemptState::Superseded,
+        AttemptState::Failed,
+        AttemptState::Crashed,
+        AttemptState::Cancelled,
+    ] {
+        let terminal = attempt(state);
+        let observation =
+            Observation::value(preservation(&terminal, PreservationOutcome::Preserved));
+        assert!(PreservationDecision::for_workspace_cleanup(&observation, &terminal).is_ok());
+    }
+
+    let decision = PreservationDecision::for_workspace_cleanup(&observed, &superseded)
+        .expect("exact terminal decision");
+    let mut quarantined = superseded;
+    quarantined.state = AttemptState::Quarantined;
+    assert!(decision.authorize_workspace_cleanup(&quarantined).is_err());
+}
+
+#[test]
+fn corrupt_preservation_record_never_deserializes_as_authority() {
+    let corrupt = r#"{"kind":"value","value":{"subject":{"attempt_id":"bad","fence":7,"workspace_id":"bad","workspace_nonce":[9,9]},"operation":"cleanup_workspace","receipt_digest":"00","outcome":"PRESERVED"}}"#;
+    assert!(serde_json::from_str::<Observation<PreservationRecord>>(corrupt).is_err());
 }
 
 #[test]

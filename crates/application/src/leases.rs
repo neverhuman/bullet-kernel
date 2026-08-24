@@ -7,7 +7,8 @@ use crate::records::{
 };
 use crate::store::{Ledger, LedgerError};
 use bullet_domain::{
-    Attempt, AttemptState, AuthorityToken, Digest, DomainError, RunnerId, WorkspaceId,
+    observation::PreservationDecision, Attempt, AttemptState, AuthorityToken, Digest, DomainError,
+    RunnerId, WorkspaceId,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 
@@ -152,38 +153,33 @@ impl LeaseService {
         })
     }
 
-    /// Refuse cleanup when the observation is not a verified value.
+    /// Consume an exact preservation decision before workspace cleanup.
     ///
     /// # Errors
     ///
-    /// Returns stale authority when `observation` does not permit destruction.
-    pub fn cleanup_if_verified<T>(
-        observation: &bullet_domain::Observation<T>,
+    /// Returns stale authority when the decision no longer matches the Attempt.
+    pub fn authorize_workspace_cleanup(
+        decision: PreservationDecision,
         attempt: &Attempt,
-    ) -> Result<(), LedgerError> {
-        if !observation.permits_destruction() {
-            return Err(DomainError::StaleAuthority(format!(
-                "unknown cannot destroy {}",
-                attempt.id
-            ))
-            .into());
-        }
-        if !attempt.state.may_mutate() {
-            return Err(DomainError::StaleAuthority(format!("{} is stale", attempt.id)).into());
-        }
-        Ok(())
+    ) -> Result<Digest, LedgerError> {
+        decision
+            .authorize_workspace_cleanup(attempt)
+            .map_err(Into::into)
     }
 
-    /// Refuse a mutation from a stale token.
+    /// Refuse patch application from a stale token or non-running Attempt.
     ///
     /// # Errors
     ///
     /// Returns `StaleAuthority` when the token does not match.
-    pub fn authorize(token: &AuthorityToken, attempt: &Attempt) -> Result<(), LedgerError> {
+    pub fn authorize_patch_application(
+        token: &AuthorityToken,
+        attempt: &Attempt,
+    ) -> Result<(), LedgerError> {
         token.verify(&attempt.id, attempt.fence)?;
-        if !attempt.state.may_mutate() {
+        if !attempt.state.permits_patch_application() {
             return Err(DomainError::StaleAuthority(format!(
-                "{} is {:?}",
+                "{} cannot apply a patch while {:?}",
                 attempt.id, attempt.state
             ))
             .into());

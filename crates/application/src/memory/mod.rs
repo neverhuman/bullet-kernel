@@ -280,7 +280,10 @@ impl Ledger for MemoryLedger {
         Ok(self
             .attempts
             .values()
-            .find(|attempt| attempt.work_package_id == *package && attempt.state.may_mutate())
+            .find(|attempt| {
+                attempt.work_package_id == *package
+                    && attempt.state.appears_in_active_attempt_projection()
+            })
             .cloned())
     }
 

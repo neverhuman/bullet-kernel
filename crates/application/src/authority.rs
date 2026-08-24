@@ -76,7 +76,7 @@ pub fn check_active_lease_snapshot(
         ));
     }
     if expires <= now
-        || !attempt.state.may_mutate()
+        || !attempt.state.permits_online_lease_check()
         || lease.variant_id != subject.variant_id
         || lease.attempt_id != subject.attempt_id
         || lease.fence != subject.fence

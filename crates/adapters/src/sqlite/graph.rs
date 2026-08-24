@@ -12,8 +12,7 @@ use bullet_domain::{
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
-pub(super) const LIVE_STATES: &str =
-    "('created','starting','running','paused','checkpointing','preparing')";
+pub(super) const LIVE_STATES: &str = "('starting','running','paused','checkpointing','preparing')";
 
 pub(super) fn nonce_from(blob: Vec<u8>) -> Result<[u8; 32], LedgerError> {
     blob.try_into()

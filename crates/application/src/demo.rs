@@ -131,7 +131,7 @@ fn fresh_flow<L: Ledger>(ledger: &mut L, graph: &StoredGraph) -> Result<(), Ledg
         Err(err) => return Err(err),
         Ok(()) => false,
     };
-    let token_refused = match LeaseService::authorize(&token1, &a2) {
+    let token_refused = match LeaseService::authorize_patch_application(&token1, &a2) {
         Err(LedgerError::Domain(DomainError::StaleAuthority(_))) => true,
         Err(err) => return Err(err),
         Ok(()) => false,

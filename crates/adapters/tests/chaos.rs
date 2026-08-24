@@ -2,7 +2,10 @@
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::{materialize_plan, run_demo, LeaseService, Ledger, PlanInput};
-use bullet_domain::{AttemptState, DomainError, TaskClass};
+use bullet_domain::observation::{
+    PreservationDecision, PreservationOperation, PreservationOutcome, PreservationRecord,
+};
+use bullet_domain::{AttemptState, Digest, DomainError, Observation, TaskClass};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
 
@@ -121,22 +124,98 @@ fn stale_delta_cannot_rewind_successor_fence() {
 }
 
 #[test]
-fn unknown_liveness_cannot_destroy() {
+fn exact_preservation_decision_is_consumed_before_cleanup() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("ledger.sqlite");
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let graph = materialize_plan(&mut ledger, "unknown", &plan(), &ts(0)).expect("plan");
-    let (attempt, _token, _grant) =
+    let (attempt, _token, grant) =
         LeaseService::acquire(&mut ledger, &graph, 0, "unk-a", 15).expect("lease");
-    let unknown: bullet_domain::Observation<()> = bullet_domain::Observation::Unknown {
+
+    let mut running = attempt.clone();
+    running.state = running
+        .state
+        .transition(AttemptState::Running)
+        .expect("start writer");
+    ledger.put_attempt(&running).expect("persist running");
+    let live_record = PreservationRecord::for_attempt(
+        &running,
+        PreservationOperation::CleanupWorkspace,
+        Digest::of(b"live-preservation-receipt"),
+        PreservationOutcome::Preserved,
+    );
+    assert!(PreservationDecision::for_workspace_cleanup(
+        &Observation::value(live_record),
+        &running,
+    )
+    .is_err());
+
+    LeaseService::release(&mut ledger, &grant, AttemptState::Superseded, true)
+        .expect("terminalize before cleanup");
+    let terminal = ledger
+        .get_attempt(&attempt.id)
+        .expect("read terminal")
+        .expect("terminal Attempt");
+    assert_eq!(terminal.state, AttemptState::Superseded);
+    let unknown: Observation<PreservationRecord> = Observation::Unknown {
         source: "liveness".into(),
         reason: "probe timeout".into(),
     };
-    let err = LeaseService::cleanup_if_verified(&unknown, &attempt).expect_err("blocked");
-    assert!(matches!(
-        err,
-        bullet_application::LedgerError::Domain(DomainError::StaleAuthority(_))
-    ));
-    let verified = bullet_domain::Observation::value(());
-    LeaseService::cleanup_if_verified(&verified, &attempt).expect("verified may clean");
+    let err = PreservationDecision::for_workspace_cleanup(&unknown, &terminal)
+        .expect_err("unknown cannot construct cleanup authority");
+    assert!(matches!(err, DomainError::StaleAuthority(_)));
+    let record = PreservationRecord::for_attempt(
+        &terminal,
+        PreservationOperation::CleanupWorkspace,
+        Digest::of(b"preservation-receipt"),
+        PreservationOutcome::Preserved,
+    );
+    let decision =
+        PreservationDecision::for_workspace_cleanup(&Observation::value(record), &terminal)
+            .expect("exact preservation constructs decision");
+    let digest = LeaseService::authorize_workspace_cleanup(decision, &terminal)
+        .expect("superseded salvage authorizes exact cleanup");
+    assert_eq!(digest, Digest::of(b"preservation-receipt"));
+}
+
+#[test]
+fn corrupt_or_superseded_active_lease_fails_closed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("corrupt-active.sqlite");
+    let mut ledger = SqliteLedger::open(&path).expect("open");
+    let graph = materialize_plan(&mut ledger, "corrupt-active", &plan(), &ts(0)).expect("plan");
+    let (_attempt, _token, grant) =
+        LeaseService::acquire(&mut ledger, &graph, 0, "corrupt-active-a", 5).expect("lease");
+    drop(ledger);
+
+    Connection::open(&path)
+        .expect("raw open")
+        .execute(
+            "UPDATE attempts SET state = 'superseded' WHERE id = ?1",
+            [grant.attempt.id.as_str()],
+        )
+        .expect("inject terminal holder");
+
+    let mut ledger = SqliteLedger::open(&path).expect("reopen");
+    assert_eq!(
+        ledger
+            .heartbeat(&LeaseService::heartbeat_of(&grant))
+            .expect_err("superseded cannot heartbeat")
+            .reason_code(),
+        "STALE_AUTHORITY"
+    );
+    drop(ledger);
+    force_expired(&path);
+    let mut ledger = SqliteLedger::open(&path).expect("reopen expired");
+    assert_eq!(
+        ledger
+            .expire_leases()
+            .expect_err("terminal holder is corrupt lease truth")
+            .reason_code(),
+        "STORE_FAILURE"
+    );
+    assert!(ledger
+        .get_lease(&grant.lease.variant_id)
+        .expect("read lease")
+        .is_some());
 }

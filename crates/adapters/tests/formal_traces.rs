@@ -168,7 +168,7 @@ impl LeaseReplay {
     }
 
     fn apply_stale(&self) -> &'static str {
-        assert!(LeaseService::authorize(
+        assert!(LeaseService::authorize_patch_application(
             self.first_token.as_ref().unwrap(),
             self.second_attempt.as_ref().unwrap(),
         )

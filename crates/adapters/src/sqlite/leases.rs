@@ -20,8 +20,11 @@ pub(super) fn heartbeat(conn: &mut Connection, req: &HeartbeatRequest) -> Result
         .map_err(store)?;
     let (now, expires_at) = lease_time::database_window(&tx, ttl_seconds)?;
     let current = get_lease(&tx, &req.variant_id)?;
-    let live = current.as_ref().is_some_and(|lease| {
-        lease.attempt_id == req.attempt_id
+    let live = if let Some(lease) = current.as_ref() {
+        let attempt = graph::get_attempt(&tx, &lease.attempt_id)?
+            .ok_or_else(|| LedgerError::Store("active lease has no Attempt".into()))?;
+        attempt.state.permits_lease_heartbeat()
+            && lease.attempt_id == req.attempt_id
             && lease.fence == req.fence
             && lease.runner_id == req.runner_id
             && lease.runner_epoch == req.runner_epoch
@@ -29,7 +32,9 @@ pub(super) fn heartbeat(conn: &mut Connection, req: &HeartbeatRequest) -> Result
             && lease.ttl_seconds == ttl_seconds
             && lease.heartbeat_at <= now
             && now < lease.expires_at
-    });
+    } else {
+        false
+    };
     if !live {
         return Err(DomainError::StaleAuthority(format!(
             "heartbeat matched zero live lease rows for {}",
@@ -180,11 +185,13 @@ pub(super) fn expire_leases(conn: &mut Connection) -> Result<Vec<ExpiredLease>, 
     for lease in expired {
         let attempt = graph::get_attempt(&tx, &lease.attempt_id)?
             .ok_or_else(|| LedgerError::Store("lease without attempt".into()))?;
-        let next_state = if attempt.state.may_mutate() {
-            attempt.state.transition(AttemptState::Crashed)?
-        } else {
-            attempt.state
-        };
+        if !attempt.state.permits_expiry_reclaim() {
+            return Err(LedgerError::Store(format!(
+                "active lease Attempt {} cannot expire from {:?}",
+                attempt.id, attempt.state
+            )));
+        }
+        let next_state = attempt.state.transition(AttemptState::Crashed)?;
         tx.execute(
             "UPDATE attempts SET state = ?2 WHERE id = ?1",
             params![attempt.id.to_string(), next_state.as_str()],
@@ -219,7 +226,7 @@ pub(super) fn release_lease(
     conn: &mut Connection,
     req: &ReleaseRequest,
 ) -> Result<(), LedgerError> {
-    if req.final_state.may_mutate() {
+    if !req.final_state.is_terminal_release_target() {
         return Err(DomainError::InvalidTransition {
             from: "release".into(),
             to: format!("{:?}", req.final_state),

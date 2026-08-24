@@ -70,6 +70,6 @@ mod tests {
         };
         let obs = scm.push_candidate("refs/heads/bullet/candidate/x");
         assert_eq!(obs.kind_name(), "unknown");
-        assert!(!obs.permits_destruction());
+        assert!(!obs.is_verified());
     }
 }

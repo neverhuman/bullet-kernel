@@ -299,18 +299,69 @@ impl AttemptState {
         )
     }
 
-    /// Live incarnations may heartbeat, expand scope, or create effects.
-    /// Superseded and every other closed state cannot.
+    /// Whether a persisted active lease may accept a heartbeat in this state.
     #[must_use]
-    pub fn may_mutate(self) -> bool {
+    pub fn permits_lease_heartbeat(self) -> bool {
         matches!(
             self,
-            Self::Created
-                | Self::Starting
-                | Self::Running
-                | Self::Paused
-                | Self::Checkpointing
-                | Self::Preparing
+            Self::Starting | Self::Running | Self::Paused | Self::Checkpointing | Self::Preparing
+        )
+    }
+
+    /// Whether an online authority check may observe this Attempt as the
+    /// holder of an active lease. This observation is not mutation authority.
+    #[must_use]
+    pub fn permits_online_lease_check(self) -> bool {
+        matches!(
+            self,
+            Self::Starting | Self::Running | Self::Paused | Self::Checkpointing | Self::Preparing
+        )
+    }
+
+    /// Whether a token may authorize applying a patch to the private workspace.
+    #[must_use]
+    pub fn permits_patch_application(self) -> bool {
+        matches!(self, Self::Running)
+    }
+
+    /// Whether expiry may move the active lease holder to `Crashed`.
+    #[must_use]
+    pub fn permits_expiry_reclaim(self) -> bool {
+        matches!(
+            self,
+            Self::Starting | Self::Running | Self::Paused | Self::Checkpointing | Self::Preparing
+        )
+    }
+
+    /// Whether a release request names an absorbing terminal state.
+    #[must_use]
+    pub fn is_terminal_release_target(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded
+                | Self::Superseded
+                | Self::Failed
+                | Self::Crashed
+                | Self::Cancelled
+                | Self::Quarantined
+        )
+    }
+
+    /// Whether this Attempt belongs in the active-attempt projection.
+    #[must_use]
+    pub fn appears_in_active_attempt_projection(self) -> bool {
+        matches!(
+            self,
+            Self::Starting | Self::Running | Self::Paused | Self::Checkpointing | Self::Preparing
+        )
+    }
+
+    /// Whether exact preservation may authorize cleanup after lease release.
+    #[must_use]
+    pub fn permits_preserved_workspace_cleanup(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Superseded | Self::Failed | Self::Crashed | Self::Cancelled
         )
     }
 
