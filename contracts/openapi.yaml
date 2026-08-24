@@ -28,6 +28,13 @@ paths:
       responses:
         "200":
           description: missions
+          headers:
+            X-Bullet-As-Of-Sequence:
+              description: Latest durable event sequence covered by this snapshot.
+              required: true
+              schema:
+                type: integer
+                format: uint64
           content:
             application/json:
               schema:
@@ -52,6 +59,13 @@ paths:
       responses:
         "200":
           description: mission view
+          headers:
+            X-Bullet-As-Of-Sequence:
+              description: Latest durable event sequence covered by this snapshot.
+              required: true
+              schema:
+                type: integer
+                format: uint64
           content:
             application/json:
               schema:
@@ -96,6 +110,13 @@ paths:
       responses:
         "200":
           description: outbox rows
+          headers:
+            X-Bullet-As-Of-Sequence:
+              description: Latest durable event sequence covered by this snapshot.
+              required: true
+              schema:
+                type: integer
+                format: uint64
           content:
             application/json:
               schema:
@@ -104,12 +125,17 @@ paths:
     get:
       summary: Server-sent event stream of ledger events
       description: >
-        Emits one SSE frame per ledger event with the ledger sequence as the
-        SSE id, the event kind as the SSE event name, and the Event JSON as
-        data. Poll-backed; resume with `after`.
+        Emits one default SSE message per ledger event with the ledger sequence
+        as the SSE id and an EventEnvelope as data. Resume with either `after`
+        or `Last-Event-ID`; supplying both is a typed error. Cursors are exclusive.
       parameters:
         - in: query
           name: after
+          required: false
+          schema:
+            type: integer
+        - in: header
+          name: Last-Event-ID
           required: false
           schema:
             type: integer
@@ -120,6 +146,12 @@ paths:
             text/event-stream:
               schema:
                 $ref: "#/components/schemas/Event"
+        "400":
+          description: malformed or conflicting cursor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/leases/acquire:
     post:
       summary: Acquire the writer lease for one work package (spec 26.3)
@@ -226,6 +258,13 @@ paths:
       responses:
         "200":
           description: next dispatchable package
+          headers:
+            X-Bullet-As-Of-Sequence:
+              description: Latest durable event sequence covered by this snapshot.
+              required: true
+              schema:
+                type: integer
+                format: uint64
           content:
             application/json:
               schema:
@@ -346,31 +385,17 @@ components:
     Event:
       type: object
       required:
+        - id
         - seq
+        - at
         - kind
         - body
-        - event_id
-        - stream_id
-        - sequence
-        - causation_id
-        - correlation_id
-        - authority_token_hash
       properties:
+        id: { type: string }
         seq: { type: integer }
+        at: { type: string, format: date-time }
         kind: { type: string }
         body: { type: string }
-        event_id:
-          type: [string, "null"]
-        stream_id:
-          type: [string, "null"]
-        sequence:
-          type: [integer, "null"]
-        causation_id:
-          type: [string, "null"]
-        correlation_id:
-          type: [string, "null"]
-        authority_token_hash:
-          type: [string, "null"]
     Problem:
       type: object
       required: [type, title, status, code, correlation_id, retryable]

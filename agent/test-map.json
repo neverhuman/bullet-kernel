@@ -64,6 +64,30 @@
     "crates/effects/": {
       "command": "cargo test -p bullet-effects-core",
       "purpose": "prove effect state machine and OUTCOME_UNKNOWN reconciliation"
+    },
+    "crates/behavior/": {
+      "command": "cargo test -p bullet-behavior",
+      "purpose": "prove the §17 planned catalog and non-authoritative detector scaffolds"
+    },
+    "crates/router/": {
+      "command": "cargo test -p bullet-router",
+      "purpose": "prove replayable T0 fallback and honest unknown-quota abstention"
+    },
+    "crates/fusion/": {
+      "command": "cargo test -p bullet-fusion",
+      "purpose": "prove deterministic non-gating struggle/fusion scaffolding"
+    },
+    "crates/mcp-mock/": {
+      "command": "cargo test -p bullet-mcp-mock",
+      "purpose": "prove in-repo MCP mocks never leave the process"
+    },
+    "crates/adapters-postgres/": {
+      "command": "cargo test -p bullet-adapters-postgres",
+      "purpose": "prove future team-mode configuration never connects in required CI"
+    },
+    "crates/projections/": {
+      "command": "cargo test -p bullet-projections",
+      "purpose": "prove §25 surfaces fail to unknown, not empty"
     }
   }
 }

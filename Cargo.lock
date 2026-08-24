@@ -215,9 +215,20 @@ version = "0.1.0"
 dependencies = [
  "bullet-adapters",
  "bullet-application",
+ "bullet-domain",
+ "bullet-effects-core",
+ "bullet-harness-core",
+ "bullet-harness-sim",
+ "bullet-runner-core",
+ "bullet-verifier-core",
+ "chrono",
  "clap",
+ "futures",
+ "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -235,6 +246,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bullet-adapters-postgres"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "bullet-application"
 version = "0.1.0"
 dependencies = [
@@ -244,6 +262,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "bullet-behavior"
+version = "0.1.0"
+dependencies = [
+ "bullet-domain",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -304,6 +331,15 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "bullet-fusion"
+version = "0.1.0"
+dependencies = [
+ "bullet-domain",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -395,14 +431,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "bullet-mcp-mock"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bullet-projections"
+version = "0.1.0"
+dependencies = [
+ "bullet-domain",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bullet-router"
+version = "0.1.0"
+dependencies = [
+ "bullet-domain",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "bullet-runner"
 version = "0.1.0"
 dependencies = [
  "bullet-domain",
- "bullet-harness-claude",
- "bullet-harness-codex",
  "bullet-harness-core",
- "bullet-harness-cursor",
  "bullet-harness-sim",
  "bullet-runner-core",
  "clap",

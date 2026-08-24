@@ -1,8 +1,8 @@
 //! Broker the candidate onto the local bare forge with a read-back receipt.
 //! Live forge credentials and host profiles are never inspected here.
 
-use crate::demo_live::receipt::{JeryuOut, LocalEffectOut};
-use crate::demo_live::SharedLedger;
+use crate::demo_synthetic::receipt::{JeryuOut, LocalEffectOut};
+use crate::demo_synthetic::SharedLedger;
 use bullet_adapters::SqliteLedger;
 use bullet_application::{LeaseService, Ledger, StoredGraph};
 use bullet_domain::{Attempt, AttemptState};
@@ -12,14 +12,6 @@ use bullet_effects_core::{
 };
 use chrono::Utc;
 use std::path::Path;
-
-/// Labels distinguishing the synthetic and admitted delivery paths.
-pub struct DeliveryLabels<'a> {
-    /// Policy snapshot label recorded on the intent.
-    pub policy_version: &'a str,
-    /// Idempotent delivery-lease seed.
-    pub lease_seed: &'a str,
-}
 
 fn eff(step: &'static str) -> impl Fn(EffectsError) -> String {
     move |err| format!("{step}:{}: {err}", err.reason_code())
@@ -60,7 +52,6 @@ pub fn deliver_local(
     head: &str,
     workspace_repo: &Path,
     data_dir: &Path,
-    labels: &DeliveryLabels<'_>,
 ) -> Result<LocalEffectOut, String> {
     let mut guard = ledger
         .lock()
@@ -69,7 +60,7 @@ pub fn deliver_local(
     let mut forge = open_forge(data_dir)?;
     let now = || LeaseService::rfc3339(Utc::now());
     let (attempt, token, grant) =
-        LeaseService::acquire(store, graph, 1, labels.lease_seed, Utc::now(), 120)
+        LeaseService::acquire(store, graph, 1, "demo-synthetic-delivery", Utc::now(), 120)
             .map_err(|err| format!("DELIVERY_LEASE:{}: {err}", err.reason_code()))?;
     let attempt = advance(store, &attempt, AttemptState::Running)?;
     let ref_name = format!("refs/heads/bullet/candidate/{candidate_id}");
@@ -81,7 +72,7 @@ pub fn deliver_local(
         expected_old_oid: ZERO_OID.into(),
         attempt_id: token.attempt_id.clone(),
         fence: token.attempt_fence,
-        policy_version: labels.policy_version.into(),
+        policy_version: "synthetic-only-v1".into(),
         provider_idempotency_key: None,
     };
     let (row, _created) = propose(store, &input, &now()).map_err(eff("EFFECT_PROPOSE"))?;

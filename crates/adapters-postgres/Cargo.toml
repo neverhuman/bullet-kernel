@@ -1,0 +1,14 @@
+[package]
+name = "bullet-adapters-postgres"
+description = "Phase 9 PostgreSQL ledger port. Gated: no server required for required CI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true

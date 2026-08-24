@@ -6,10 +6,17 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-const DEFAULT_GITD: &str = "/home/ubuntu/bullet/bullet-git/target/debug/bullet-gitd";
-
 fn gitd_binary() -> PathBuf {
-    std::env::var_os("BULLET_GITD_BIN").map_or_else(|| PathBuf::from(DEFAULT_GITD), PathBuf::from)
+    std::env::var_os("BULLET_GITD_BIN").map_or_else(
+        || {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(3)
+                .expect("Bullet Farm family root")
+                .join("bullet-git/target/debug/bullet-gitd")
+        },
+        PathBuf::from,
+    )
 }
 
 fn verifier_sibling() -> PathBuf {
@@ -21,22 +28,17 @@ fn verifier_sibling() -> PathBuf {
 
 #[test]
 fn synthetic_end_to_end_receipt_holds() {
-    if !gitd_binary().is_file() {
-        eprintln!("SKIP GITD_BINARY_ABSENT: build bullet-gitd or set BULLET_GITD_BIN");
-        return;
-    }
-    let verifier = if verifier_sibling().is_file() {
-        verifier_sibling()
-    } else if let Some(bin) = std::env::var_os("BULLET_VERIFIER_BIN") {
-        PathBuf::from(bin)
-    } else {
-        eprintln!("SKIP VERIFIER_BINARY_ABSENT: cargo build -p bullet-verifier first");
-        return;
-    };
-    if !verifier.is_file() {
-        eprintln!("SKIP VERIFIER_BINARY_ABSENT: cargo build -p bullet-verifier first");
-        return;
-    }
+    assert!(
+        gitd_binary().is_file(),
+        "GITD_BINARY_ABSENT: build bullet-gitd or set BULLET_GITD_BIN"
+    );
+    let verifier = std::env::var_os("BULLET_VERIFIER_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(verifier_sibling);
+    assert!(
+        verifier.is_file(),
+        "VERIFIER_BINARY_ABSENT: cargo must build bullet-verifier with this test"
+    );
     let data = tempfile::tempdir().expect("tempdir");
     let out = Command::new(env!("CARGO_BIN_EXE_bullet"))
         .arg("demo-synthetic")
@@ -73,12 +75,7 @@ fn synthetic_end_to_end_receipt_holds() {
     let jeryu = receipt["effect"]["jeryu"]["status"]
         .as_str()
         .unwrap_or_default();
-    assert!(
-        jeryu == "LIVE_FORGE_QUARANTINED"
-            || jeryu == "FORGE_UNAUTHENTICATED"
-            || jeryu == "CAPABILITY_UNPROBED",
-        "jeryu status {jeryu}"
-    );
+    assert_eq!(jeryu, "LIVE_FORGE_QUARANTINED");
     let failures = receipt["scaffold_failures"]
         .as_array()
         .expect("failures array");

@@ -34,6 +34,8 @@ pub enum ApiError {
     Invalid(DomainError),
     /// The request conflicts with current authority state.
     Conflict(DomainError),
+    /// A request-level protocol rule was violated.
+    BadRequest(&'static str),
     /// The durable store failed. Logged; the detail is not exposed.
     Internal(String),
 }
@@ -69,6 +71,8 @@ fn title_for(code: &str) -> &'static str {
         "INVALID_TRANSITION" => "Invalid state transition",
         "ENCODING_FAILURE" => "Canonical encoding failed",
         "UNKNOWN_STATE" => "Unknown state label",
+        "CONFLICTING_CURSOR" => "Conflicting event cursors",
+        "INVALID_CURSOR" => "Invalid event cursor",
         "NOT_FOUND" => "Resource not found",
         "STORE_FAILURE" => "Ledger store failure",
         _ => "Request failed",
@@ -81,6 +85,7 @@ impl ApiError {
             Self::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND".into(), false),
             Self::Invalid(err) => (StatusCode::BAD_REQUEST, err.reason_code().into(), false),
             Self::Conflict(err) => (StatusCode::CONFLICT, err.reason_code().into(), false),
+            Self::BadRequest(code) => (StatusCode::BAD_REQUEST, (*code).into(), false),
             Self::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "STORE_FAILURE".into(),

@@ -21,13 +21,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Typed skip reason when the workspace daemon binary is absent.
-pub const SKIP_REASON: &str =
-    "SKIP GITD_BINARY_ABSENT: build bullet-gitd or set BULLET_GITD_BIN to run this test";
-
-/// True when bullet-gitd can be spawned.
-pub fn gitd_ready() -> bool {
-    bullet_runner_core::gitd_available()
+/// Fail rather than silently passing when the real workspace daemon is absent.
+pub fn require_gitd() {
+    let binary = bullet_runner_core::gitd_binary();
+    assert!(
+        binary.is_file(),
+        "GITD_BINARY_ABSENT: build bullet-gitd or set BULLET_GITD_BIN; resolved {}",
+        binary.display()
+    );
 }
 
 /// Create a real git origin with one commit; returns (repo path, base SHA).

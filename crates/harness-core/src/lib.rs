@@ -22,10 +22,7 @@ pub use adapter::{
     PlanDecision, QuotaObservation, ResumeSession, SessionCheckpoint, SessionHandle, StartSession,
     SteeringMessage, Turn, TurnHandle,
 };
-pub use argv::{
-    filter_env, live_admission_granted, ArgvBuilder, InvocationBudget, PreparedInvocation,
-    LIVE_ADMISSION_TOKEN, LIVE_ADMISSION_VAR,
-};
+pub use argv::{filter_env, ArgvBuilder, InvocationBudget, PreparedInvocation};
 pub use capability::{Capability, CapabilityMatrix, CapabilityState, PromotionStage};
 pub use error::HarnessError;
 pub use event::{

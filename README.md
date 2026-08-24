@@ -7,8 +7,8 @@ crates/domain        IDs, tokens, state machines, taxonomy — no I/O
 crates/application   commands, materializer, leases/fences, demo
 crates/adapters      SQLite WAL ledger, simulators
 apps/bullet-farmd    HTTP + SSE daemon
-apps/bullet          CLI (demo, contracts generate|check)
-apps/bullet-runner   trust-boundary stub
+apps/bullet          CLI (demo, demo-synthetic, contracts generate|check)
+apps/bullet-runner   simulator-only runner boundary
 apps/bullet-verifier trust-boundary stub
 apps/bullet-effects  trust-boundary stub
 ```
@@ -25,3 +25,18 @@ stale heartbeat and stale token are refused, and that a lost SCM response is
 recorded as an unknown outcome rather than a success.
 
 The portal is a projection of this API. It is never an authority source.
+
+## Readiness
+
+| Surface | Current meaning |
+| --- | --- |
+| Component tests | Lease, workspace, verifier, broker, projection, and protocol primitives |
+| `bullet demo` | Deterministic ledger simulation only |
+| `bullet demo-synthetic` | Offline integration scaffold; its receipt is explicitly non-gating |
+| Exact five-plane transaction | Not implemented or proven |
+| Production | Not eligible; signed authority, sandbox, budgets, freeze, audit, and restore gates are incomplete |
+
+Live provider executables are unconditionally refused and the Jeryu adapter performs no
+credential lookup or network call. Provider adapter libraries remain only for offline parser and
+conformance tests. No component test or synthetic receipt establishes Transaction-ready or
+production-ready status.

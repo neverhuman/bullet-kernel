@@ -34,6 +34,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0003_effects.sql",
         include_str!("../../../../db/migrations/0003_effects.sql"),
     ),
+    (
+        "0004_event_time.sql",
+        include_str!("../../../../db/migrations/0004_event_time.sql"),
+    ),
 ];
 
 /// SQLite-backed ledger.
@@ -209,6 +213,10 @@ impl Ledger for SqliteLedger {
 
     fn list_events_after(&self, after: u64, limit: usize) -> Result<Vec<LedgerEvent>, LedgerError> {
         events::list_events_after(&self.conn, after, limit)
+    }
+
+    fn latest_event_sequence(&self) -> Result<u64, LedgerError> {
+        events::latest_sequence(&self.conn)
     }
 
     fn ready_rows(&self) -> Result<Vec<ReadyRow>, LedgerError> {

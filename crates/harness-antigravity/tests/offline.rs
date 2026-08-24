@@ -1,6 +1,6 @@
 //! Offline conformance: no provider process is spawned by these tests.
 
-use bullet_harness_antigravity::AntigravityAdapter;
+use bullet_harness_antigravity::{turn_argv, AntigravityAdapter};
 use bullet_harness_core::{
     conformance, AgentSessionId, ArgvBuilder, HarnessAdapter, SessionHandle, StartSession, Turn,
 };
@@ -13,6 +13,26 @@ async fn offline_conformance_suite() {
     conformance::offline_suite(&adapter)
         .await
         .expect("offline suite");
+}
+
+#[test]
+fn live_agy_argv_puts_prompt_last() {
+    let args = turn_argv("pong", "180s");
+    assert_eq!(
+        args,
+        [
+            "--sandbox",
+            "--mode",
+            "plan",
+            "--print-timeout",
+            "180s",
+            "-p=pong",
+        ]
+    );
+    assert!(
+        args[0] != "-p",
+        "1.1.19 treats the token after -p as the prompt"
+    );
 }
 
 #[test]

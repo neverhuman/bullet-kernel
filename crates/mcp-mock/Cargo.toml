@@ -1,0 +1,15 @@
+[package]
+name = "bullet-mcp-mock"
+description = "In-repo mock MCP stdio servers: fs, github, search. No network."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

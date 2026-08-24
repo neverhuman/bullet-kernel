@@ -267,6 +267,10 @@ impl Ledger for MemoryLedger {
             .collect())
     }
 
+    fn latest_event_sequence(&self) -> Result<u64, LedgerError> {
+        Ok(self.events.last().map_or(0, |event| event.seq))
+    }
+
     fn ready_rows(&self) -> Result<Vec<ReadyRow>, LedgerError> {
         let mut out = Vec::new();
         for (key, enqueued_at) in &self.ready {

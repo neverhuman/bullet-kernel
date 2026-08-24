@@ -1,0 +1,16 @@
+[package]
+name = "bullet-projections"
+description = "Spec §25 portal view models. Failure is unknown, never empty-as-success."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bullet-domain.workspace = true
+serde.workspace = true
+serde_json.workspace = true

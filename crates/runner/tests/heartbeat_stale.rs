@@ -83,10 +83,7 @@ fn assert_freeze_journal(stages: &[String]) {
 
 #[tokio::test]
 async fn tampered_lease_freezes_checkpoints_and_terminates() {
-    if !support::gitd_ready() {
-        eprintln!("{}", support::SKIP_REASON);
-        return;
-    }
+    support::require_gitd();
     let dir = tempfile::tempdir().expect("tempdir");
     let (origin, base_sha) = support::build_origin(dir.path());
     let (ledger, package) = support::seeded_ledger("hb-stale");

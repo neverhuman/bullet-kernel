@@ -14,6 +14,12 @@ members = [
   "crates/runner",
   "crates/verifier",
   "crates/effects",
+  "crates/behavior",
+  "crates/router",
+  "crates/fusion",
+  "crates/mcp-mock",
+  "crates/adapters-postgres",
+  "crates/projections",
   "apps/bullet-farmd",
   "apps/bullet",
   "apps/bullet-runner",
@@ -42,6 +48,12 @@ bullet-harness-antigravity = { path = "crates/harness-antigravity" }
 bullet-runner-core = { path = "crates/runner" }
 bullet-verifier-core = { path = "crates/verifier" }
 bullet-effects-core = { path = "crates/effects" }
+bullet-behavior = { path = "crates/behavior" }
+bullet-router = { path = "crates/router" }
+bullet-fusion = { path = "crates/fusion" }
+bullet-mcp-mock = { path = "crates/mcp-mock" }
+bullet-adapters-postgres = { path = "crates/adapters-postgres" }
+bullet-projections = { path = "crates/projections" }
 anyhow = "1"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["json", "macros"] }

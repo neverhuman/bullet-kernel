@@ -14,8 +14,8 @@ pub(super) fn insert_event(
     authority_token_hash: Option<&str>,
 ) -> Result<(), LedgerError> {
     conn.execute(
-        "INSERT INTO events (kind, body, stream_id, correlation_id, authority_token_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO events (kind, body, at, stream_id, correlation_id, authority_token_hash)
+         VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?3, ?4, ?5)",
         params![kind, body, stream_id, correlation_id, authority_token_hash],
     )
     .map_err(store)?;
@@ -37,17 +37,18 @@ fn read_event(row: &Row<'_>) -> rusqlite::Result<(i64, LedgerEvent)> {
             seq: 0,
             kind: row.get(1)?,
             body: row.get(2)?,
-            event_id: row.get(3)?,
-            stream_id: row.get(4)?,
-            sequence: row.get::<_, Option<i64>>(5)?.map(|v| v.unsigned_abs()),
-            causation_id: row.get(6)?,
-            correlation_id: row.get(7)?,
-            authority_token_hash: row.get(8)?,
+            at: row.get(3)?,
+            event_id: row.get(4)?,
+            stream_id: row.get(5)?,
+            sequence: row.get::<_, Option<i64>>(6)?.map(|v| v.unsigned_abs()),
+            causation_id: row.get(7)?,
+            correlation_id: row.get(8)?,
+            authority_token_hash: row.get(9)?,
         },
     ))
 }
 
-const EVENT_COLUMNS: &str = "seq, kind, body, event_id, stream_id, sequence, causation_id, \
+const EVENT_COLUMNS: &str = "seq, kind, body, at, event_id, stream_id, sequence, causation_id, \
                              correlation_id, authority_token_hash";
 
 fn collect(
@@ -86,4 +87,13 @@ pub(super) fn list_events_after(
         &format!("SELECT {EVENT_COLUMNS} FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?2"),
         &[&after, &limit],
     )
+}
+
+pub(super) fn latest_sequence(conn: &Connection) -> Result<u64, LedgerError> {
+    let sequence: i64 = conn
+        .query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |row| {
+            row.get(0)
+        })
+        .map_err(store)?;
+    u64::try_from(sequence).map_err(store)
 }

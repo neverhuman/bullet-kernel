@@ -195,7 +195,7 @@ fn unknown_worktree_is_rejected() {
 #[test]
 fn behavior_catalog_uses_spec_rule_ids() {
     let ids: Vec<String> = default_catalog().into_iter().map(|r| r.id).collect();
-    assert_eq!(ids, ["GT001", "CL001", "CP001", "CL002", "FS001"]);
+    assert_eq!(ids, ["GT001", "CL001", "CP002", "CL002", "FS004"]);
     assert!(default_catalog().iter().all(|rule| rule.fail_closed));
 }
 

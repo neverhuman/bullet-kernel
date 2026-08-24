@@ -213,6 +213,12 @@ pub trait Ledger {
     /// Store failure.
     fn list_events_after(&self, after: u64, limit: usize) -> Result<Vec<LedgerEvent>, LedgerError>;
 
+    /// Latest durable event sequence, or zero before the first event.
+    ///
+    /// # Errors
+    /// Store failure.
+    fn latest_event_sequence(&self) -> Result<u64, LedgerError>;
+
     /// Current push-maintained ready rows.
     ///
     /// # Errors

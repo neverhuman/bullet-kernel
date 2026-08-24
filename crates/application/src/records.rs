@@ -24,6 +24,8 @@ pub struct StoredGraph {
 pub struct LedgerEvent {
     /// Monotonic ledger sequence.
     pub seq: u64,
+    /// Durable occurrence time (RFC 3339 UTC).
+    pub at: String,
     /// Event kind.
     pub kind: String,
     /// Payload body.

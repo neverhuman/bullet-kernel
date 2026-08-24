@@ -20,6 +20,6 @@ pub use forge::{
     is_create, require_candidate_ref, require_oid, ForgeDescriptor, ForgeEffects, PushRequest,
     CANDIDATE_REF_PREFIX,
 };
-pub use jeryu::{JeryuForge, TokenSource, JERYU_BASE_URL, JERYU_PROVIDER, JERYU_TOKEN_ENV};
+pub use jeryu::{JeryuForge, JERYU_BASE_URL, JERYU_PROVIDER};
 pub use local::{LocalBareForge, LOCAL_PROVIDER};
 pub use lost::{LossMode, LostResponseForge};

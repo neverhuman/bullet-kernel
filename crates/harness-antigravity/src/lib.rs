@@ -1,7 +1,23 @@
 //! Antigravity (`agy`) adapter: text-only headless prompts under `--sandbox`
-//! (which ENABLES restrictions — inverted polarity vs other CLIs). No JSON
-//! surface exists, so structured capabilities are Unsupported and a fenced
-//! ```diff block is extracted best-effort; it is never a PatchProposal.
+//! (which ENABLES restrictions — inverted polarity vs other CLIs).
+//!
+//! Installed CLI on this box is 1.1.19. Flags must precede `-p=`;
+//! `agy -p --sandbox` treats `--sandbox` as the prompt (exit 2).
+//! `--mode plan` and `--json-schema` exist, but structured dispatch
+//! still excludes this adapter until conformance promotes it.
+
+/// Build the 1.1.19-safe one-shot argv. Prompt is always last via `-p=`.
+#[must_use]
+pub fn turn_argv(prompt: &str, print_timeout: &str) -> Vec<String> {
+    vec![
+        "--sandbox".into(),
+        "--mode".into(),
+        "plan".into(),
+        "--print-timeout".into(),
+        print_timeout.into(),
+        format!("-p={prompt}"),
+    ]
+}
 
 mod parse;
 
@@ -243,13 +259,7 @@ impl HarnessAdapter for AntigravityAdapter {
         let print_timeout = format!("{}s", config.wall_timeout.as_secs().max(1));
         let prep = ArgvBuilder::new(BINARY, &workdir)
             .timeout(config.wall_timeout)
-            .args([
-                "-p",
-                &turn.prompt,
-                "--sandbox",
-                "--print-timeout",
-                &print_timeout,
-            ])
+            .args(turn_argv(&turn.prompt, &print_timeout))
             .build()?;
         self.with_normalizer(&session_id, |n| n.set_invocation(invocation_id.clone()))?;
         self.emit(

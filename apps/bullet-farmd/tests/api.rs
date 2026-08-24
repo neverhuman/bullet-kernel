@@ -18,17 +18,7 @@ async fn start(db: &Path) -> SocketAddr {
 }
 
 async fn request(addr: SocketAddr, method: &str, path: &str) -> (u16, String) {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    );
-    stream.write_all(req.as_bytes()).await.expect("write");
-    let mut buf = Vec::new();
-    timeout(Duration::from_secs(10), stream.read_to_end(&mut buf))
-        .await
-        .expect("response before timeout")
-        .expect("read");
-    let text = String::from_utf8_lossy(&buf).to_string();
+    let text = raw_request(addr, method, path).await;
     let status: u16 = text
         .split_whitespace()
         .nth(1)
@@ -39,6 +29,55 @@ async fn request(addr: SocketAddr, method: &str, path: &str) -> (u16, String) {
         .map(|(_, body)| body.to_string())
         .unwrap_or_default();
     (status, body)
+}
+
+async fn raw_request(addr: SocketAddr, method: &str, path: &str) -> String {
+    raw_request_with_headers(addr, method, path, "").await
+}
+
+async fn raw_request_with_headers(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &str,
+) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{headers}Content-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).await.expect("write");
+    let mut buf = Vec::new();
+    timeout(Duration::from_secs(10), stream.read_to_end(&mut buf))
+        .await
+        .expect("response before timeout")
+        .expect("read");
+    String::from_utf8_lossy(&buf).to_string()
+}
+
+#[tokio::test]
+async fn cross_origin_requests_never_receive_wildcard_cors_authority() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let addr = start(&dir.path().join("ledger.sqlite")).await;
+    let response = raw_request_with_headers(
+        addr,
+        "GET",
+        "/health",
+        "Origin: https://attacker.invalid\r\n",
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_eq!(
+        response_header(&response, "access-control-allow-origin"),
+        None
+    );
+}
+
+fn response_header(response: &str, name: &str) -> Option<String> {
+    response.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case(name)
+            .then(|| value.trim().to_string())
+    })
 }
 
 fn json_body(body: &str) -> Value {
@@ -137,9 +176,100 @@ async fn events_sse_streams_the_first_chunk_with_sequence_ids() {
     assert!(collected.contains("text/event-stream"));
     assert!(collected.contains("id: 1"), "first frame carries seq 1");
     assert!(
-        collected.contains("planner_proposal"),
-        "first ledger event is the council proposal"
+        !collected.contains("\nevent:"),
+        "protocol uses only default SSE messages"
     );
+    assert!(
+        collected.contains("\"kind\":\"planner_proposal\"")
+            && collected.contains("\"at\":\"20")
+            && collected.contains("\"id\":"),
+        "data is a durable EventEnvelope"
+    );
+}
+
+#[tokio::test]
+async fn event_cursors_are_exclusive_and_last_event_id_resumes_after_the_cursor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let addr = start(&dir.path().join("ledger.sqlite")).await;
+    let (status, _) = request(addr, "POST", "/v1/demo/run").await;
+    assert_eq!(status, 200);
+
+    let conflict =
+        raw_request_with_headers(addr, "GET", "/v1/events?after=1", "Last-Event-ID: 1\r\n").await;
+    assert!(conflict.starts_with("HTTP/1.1 400"));
+    assert!(conflict.contains("CONFLICTING_CURSOR"));
+
+    let malformed = raw_request(addr, "GET", "/v1/events?after=not-a-sequence").await;
+    assert!(malformed.starts_with("HTTP/1.1 400"));
+    assert!(malformed.contains("INVALID_CURSOR"));
+
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    stream
+        .write_all(
+            b"GET /v1/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\nLast-Event-ID: 1\r\n\r\n",
+        )
+        .await
+        .expect("write");
+    let mut collected = String::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let read = timeout(Duration::from_secs(10), stream.read(&mut chunk))
+            .await
+            .expect("resumed SSE data before timeout")
+            .expect("read");
+        assert!(read > 0, "stream closed before resumed event");
+        collected.push_str(&String::from_utf8_lossy(&chunk[..read]));
+        if collected.contains("data:") {
+            break;
+        }
+    }
+    assert!(collected.contains("id: 2"), "cursor is exclusive");
+}
+
+#[tokio::test]
+async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let addr = start(&dir.path().join("ledger.sqlite")).await;
+
+    for path in ["/v1/missions", "/v1/outbox"] {
+        let response = raw_request(addr, "GET", path).await;
+        assert_eq!(
+            response_header(&response, "x-bullet-as-of-sequence").as_deref(),
+            Some("0")
+        );
+    }
+
+    let (status, _) = request(addr, "POST", "/v1/demo/run").await;
+    assert_eq!(status, 200);
+    let missions = raw_request(addr, "GET", "/v1/missions").await;
+    let outbox = raw_request(addr, "GET", "/v1/outbox").await;
+    let mission_sequence = response_header(&missions, "x-bullet-as-of-sequence")
+        .expect("mission watermark")
+        .parse::<u64>()
+        .expect("numeric mission watermark");
+    let outbox_sequence = response_header(&outbox, "x-bullet-as-of-sequence")
+        .expect("outbox watermark")
+        .parse::<u64>()
+        .expect("numeric outbox watermark");
+    assert!(mission_sequence > 0);
+    assert_eq!(mission_sequence, outbox_sequence);
+    let mission_body = missions
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("mission response body");
+    let mission_rows = json_body(mission_body);
+    let mission_id = mission_rows[0]["id"].as_str().expect("mission id");
+    for path in [format!("/v1/missions/{mission_id}"), "/v1/ready".into()] {
+        let response = raw_request(addr, "GET", &path).await;
+        assert_eq!(
+            response_header(&response, "x-bullet-as-of-sequence")
+                .expect("projection watermark")
+                .parse::<u64>()
+                .expect("numeric projection watermark"),
+            mission_sequence,
+            "{path} must cover the same durable sequence"
+        );
+    }
 }
 
 #[tokio::test]

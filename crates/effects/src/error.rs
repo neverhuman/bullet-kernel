@@ -19,6 +19,9 @@ pub enum EffectsError {
     /// The forge capability has no probe receipt against the live instance.
     #[error("capability unprobed: {0}")]
     CapabilityUnprobed(String),
+    /// Wave-0 quarantine: no signed forge admission validator exists.
+    #[error("live forge admission is unavailable: {0}")]
+    LiveAdmissionUnavailable(String),
     /// The remote refused the push because the precondition no longer holds.
     #[error("push rejected on {ref_name}: observed {observed:?}")]
     PushRejected {
@@ -62,6 +65,7 @@ impl EffectsError {
             Self::BadOid(_) => "BAD_OID",
             Self::ForgeUnauthenticated(_) => "FORGE_UNAUTHENTICATED",
             Self::CapabilityUnprobed(_) => "CAPABILITY_UNPROBED",
+            Self::LiveAdmissionUnavailable(_) => "LIVE_ADMISSION_UNAVAILABLE",
             Self::PushRejected { .. } => "PUSH_REJECTED",
             Self::ResponseLost(_) => "RESPONSE_LOST",
             Self::GitFailed(_) => "GIT_FAILED",

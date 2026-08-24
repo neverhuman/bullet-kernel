@@ -73,10 +73,7 @@ fn assert_ledger_truth(ledger: &Arc<Mutex<MemoryLedger>>, outcome: &AttemptOutco
 
 #[tokio::test]
 async fn scope_denied_feedback_then_exact_candidate() {
-    if !support::gitd_ready() {
-        eprintln!("{}", support::SKIP_REASON);
-        return;
-    }
+    support::require_gitd();
     let dir = tempfile::tempdir().expect("tempdir");
     let (origin, base_sha) = support::build_origin(dir.path());
     let (ledger, package) = support::seeded_ledger("loop-sim");
@@ -195,10 +192,7 @@ fn candidate_tree_paths(repo_dir: &Path, tree_hash: &str) -> Vec<String> {
 
 #[tokio::test]
 async fn delete_round_removes_created_file_from_candidate_tree() {
-    if !support::gitd_ready() {
-        eprintln!("{}", support::SKIP_REASON);
-        return;
-    }
+    support::require_gitd();
     let dir = tempfile::tempdir().expect("tempdir");
     let adapter = Arc::new(support::ScriptedSim::new());
     adapter.override_proposal(
@@ -252,10 +246,7 @@ async fn delete_round_removes_created_file_from_candidate_tree() {
 
 #[tokio::test]
 async fn path_absent_feedback_then_successful_repair() {
-    if !support::gitd_ready() {
-        eprintln!("{}", support::SKIP_REASON);
-        return;
-    }
+    support::require_gitd();
     let dir = tempfile::tempdir().expect("tempdir");
     let adapter = Arc::new(support::ScriptedSim::new());
     adapter.override_proposal(

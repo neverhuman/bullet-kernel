@@ -183,10 +183,7 @@ async fn assert_stale_gitd_refusal(
 
 #[tokio::test]
 async fn successor_fences_out_a_killed_runner() {
-    if !support::gitd_ready() {
-        eprintln!("{}", support::SKIP_REASON);
-        return;
-    }
+    support::require_gitd();
     let dir = tempfile::tempdir().expect("tempdir");
     let (origin, base_sha) = support::build_origin(dir.path());
     let (ledger, package) = support::seeded_ledger("kill-retry");

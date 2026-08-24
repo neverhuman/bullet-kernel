@@ -15,16 +15,18 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
-const DEFAULT_BINARY: &str = "/home/ubuntu/bullet/bullet-git/target/debug/bullet-gitd";
+const FAMILY_BINARY: &str = "../../../bullet-git/target/debug/bullet-gitd";
 
 /// Resolve the daemon binary: `BULLET_GITD_BIN` or the family default path.
 #[must_use]
 pub fn gitd_binary() -> PathBuf {
-    std::env::var_os("BULLET_GITD_BIN").map_or_else(|| PathBuf::from(DEFAULT_BINARY), PathBuf::from)
+    std::env::var_os("BULLET_GITD_BIN").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join(FAMILY_BINARY),
+        PathBuf::from,
+    )
 }
 
-/// True when the daemon binary exists. Tests skip gitd-dependent cases with
-/// a clear reason when it is absent.
+/// True when the daemon binary exists.
 #[must_use]
 pub fn gitd_available() -> bool {
     gitd_binary().is_file()

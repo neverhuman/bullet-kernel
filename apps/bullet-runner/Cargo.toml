@@ -10,10 +10,7 @@ workspace = true
 
 [dependencies]
 bullet-domain.workspace = true
-bullet-harness-claude.workspace = true
-bullet-harness-codex.workspace = true
 bullet-harness-core.workspace = true
-bullet-harness-cursor.workspace = true
 bullet-harness-sim.workspace = true
 bullet-runner-core.workspace = true
 clap.workspace = true

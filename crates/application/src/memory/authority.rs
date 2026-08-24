@@ -12,6 +12,7 @@ use bullet_domain::{
     Attempt, AttemptId, AttemptState, CommandId, CommandPhase, Digest, DomainError, WorkPackageId,
     WorkPackageState,
 };
+use chrono::{SecondsFormat, Utc};
 
 impl MemoryLedger {
     pub(super) fn push_event(
@@ -26,6 +27,7 @@ impl MemoryLedger {
         let event_id = Digest::of(format!("evt:{seq}:{kind}:{body}").as_bytes()).to_hex();
         self.events.push(LedgerEvent {
             seq,
+            at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             kind: kind.to_string(),
             body: body.to_string(),
             event_id: Some(event_id),

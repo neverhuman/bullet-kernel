@@ -1,5 +1,5 @@
-//! Machine-enforceable behavior catalog. Models cannot downgrade events.
-//! Rule identifiers follow the spec section 17 catalog.
+//! Behavior policy primitives. Catalog membership alone does not prove that a
+//! gateway is wired; enforcement evidence is tracked separately.
 
 use serde::{Deserialize, Serialize};
 
@@ -51,9 +51,9 @@ pub fn default_catalog() -> Vec<BehaviorRule> {
             fail_closed: true,
         },
         BehaviorRule {
-            id: "CP001".into(),
+            id: "CP002".into(),
             version: "v1".into(),
-            title: "Completion claim without exact Candidate evidence".into(),
+            title: "Emits done without exact Candidate".into(),
             action: Enforcement::Block,
             fail_closed: true,
         },
@@ -65,9 +65,9 @@ pub fn default_catalog() -> Vec<BehaviorRule> {
             fail_closed: true,
         },
         BehaviorRule {
-            id: "FS001".into(),
+            id: "FS004".into(),
             version: "v1".into(),
-            title: "Runtime files written into the product repository".into(),
+            title: "Writes runtime/provider configuration into product repository".into(),
             action: Enforcement::Quarantine,
             fail_closed: true,
         },

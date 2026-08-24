@@ -64,15 +64,11 @@ export type OutboxView = {
 };
 
 export type Event = {
+  id: string;
   seq: number;
+  at: string;
   kind: string;
   body: string;
-  event_id: string | null;
-  stream_id: string | null;
-  sequence: number | null;
-  causation_id: string | null;
-  correlation_id: string | null;
-  authority_token_hash: string | null;
 };
 
 export type Problem = {

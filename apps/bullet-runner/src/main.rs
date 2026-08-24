@@ -31,8 +31,8 @@ struct Args {
     /// Runner generation.
     #[arg(long, default_value_t = 1)]
     runner_epoch: u64,
-    /// Provider adapter: sim (default), claude, codex, cursor.
-    #[arg(long, default_value = "sim")]
+    /// Provider adapter. Wave-0 binaries expose simulator mode only.
+    #[arg(long, default_value = "sim", value_parser = ["sim"])]
     provider: String,
     /// Root for private clones and runtime dirs.
     #[arg(long)]
@@ -66,9 +66,6 @@ struct Args {
 fn adapter_for(provider: &str) -> Option<Arc<dyn HarnessAdapter>> {
     match provider {
         "sim" => Some(Arc::new(bullet_harness_sim::SimAdapter::new())),
-        "claude" => Some(Arc::new(bullet_harness_claude::ClaudeAdapter::new())),
-        "codex" => Some(Arc::new(bullet_harness_codex::CodexAdapter::new())),
-        "cursor" => Some(Arc::new(bullet_harness_cursor::CursorAdapter::new())),
         _ => None,
     }
 }
@@ -127,7 +124,7 @@ async fn main() -> ExitCode {
 async fn run(args: Args) -> ExitCode {
     let Some(adapter) = adapter_for(&args.provider) else {
         eprintln!(
-            "bullet-runner: unknown provider {} (sim|claude|codex|cursor)",
+            "bullet-runner: unavailable provider {} (simulator-only quarantine)",
             args.provider
         );
         return ExitCode::from(2);

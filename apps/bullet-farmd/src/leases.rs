@@ -2,10 +2,11 @@
 //! advancement, and the next ready package. Every mutation delegates to the
 //! Ledger's single-transaction operations; refusals map to problem-details.
 
-use crate::api::SharedState;
+use crate::api::{snapshot_response, SharedState};
 use crate::errors::ApiError;
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bullet_application::{
@@ -192,7 +193,7 @@ struct ReadyViewBody {
     enqueued_at: String,
 }
 
-async fn next_ready(State(state): State<SharedState>) -> Result<Json<ReadyViewBody>, ApiError> {
+async fn next_ready(State(state): State<SharedState>) -> Result<Response, ApiError> {
     let ledger = state.ledger.lock().await;
     let Some(row) = ledger.ready_rows()?.into_iter().next() else {
         return Err(ApiError::NotFound("ready queue is empty".into()));
@@ -205,11 +206,13 @@ async fn next_ready(State(state): State<SharedState>) -> Result<Json<ReadyViewBo
         .find(|package| package.id == row.work_package_id)
         .map(|package| package.title.clone())
         .unwrap_or_default();
-    Ok(Json(ReadyViewBody {
+    let view = ReadyViewBody {
         work_package_id: row.work_package_id.to_string(),
         mission_id: graph.mission.id.to_string(),
         variant_id: variant_id.to_string(),
         title,
         enqueued_at: row.enqueued_at,
-    }))
+    };
+    let as_of_sequence = ledger.latest_event_sequence()?;
+    snapshot_response(view, as_of_sequence)
 }
