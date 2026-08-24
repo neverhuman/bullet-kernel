@@ -8,6 +8,7 @@ pub mod error;
 pub mod gates;
 pub mod ids;
 pub mod observation;
+pub mod schema_bundle;
 pub mod states;
 pub mod taxonomy;
 
