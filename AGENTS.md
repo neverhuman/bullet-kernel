@@ -1,7 +1,8 @@
 # bullet-kernel Agent Instructions
 
 Read `SPLIT.md` first. This repository is the Bullet Farm control plane.
-Read and append `/home/ubuntu/bullet/AGENT_CHAT.md` before every claim and edit.
+Discover the outermost family root from the parent `repos.manifest.toml`. Read
+and append `<family-root>/AGENT_CHAT.md` before every claim and edit.
 
 Read `agent/JANKURAI_STANDARD.md` next.
 Do not edit outside requested ownership. Run the mapped test lane before the
