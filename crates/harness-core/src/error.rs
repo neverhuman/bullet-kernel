@@ -44,6 +44,24 @@ pub enum HarnessError {
         /// Known provider executable that was refused.
         provider: String,
     },
+    /// Provider admission input or filesystem identity was invalid.
+    #[error("provider admission refused: {reason}")]
+    AdmissionRefused {
+        /// Non-secret refusal detail.
+        reason: String,
+    },
+    /// A local receipt cannot authorize dispatch while a blocker remains.
+    #[error("provider admission blocked: {blocker}")]
+    AdmissionBlocked {
+        /// Stable blocker code.
+        blocker: String,
+    },
+    /// A canary secret reached a forbidden provider-facing surface.
+    #[error("secret canary detected on {surface}")]
+    SecretCanaryExposure {
+        /// Surface name only; the secret is never logged.
+        surface: &'static str,
+    },
     /// The per-run invocation budget is spent.
     #[error("invocation budget exhausted: max {max}")]
     InvocationBudgetExhausted {
@@ -143,6 +161,9 @@ impl HarnessError {
             Self::WorktreeFlagDenied { .. } => "WORKTREE_FLAG_DENIED",
             Self::KillSwitch => "PROVIDER_KILL_ACTIVE",
             Self::LiveAdmissionUnavailable { .. } => "LIVE_ADMISSION_UNAVAILABLE",
+            Self::AdmissionRefused { .. } => "ADMISSION_REFUSED",
+            Self::AdmissionBlocked { .. } => "PROVIDER_ADMISSION_BLOCKED",
+            Self::SecretCanaryExposure { .. } => "SECRET_CANARY_EXPOSURE",
             Self::InvocationBudgetExhausted { .. } => "INVOCATION_BUDGET_EXHAUSTED",
             Self::CapabilityUnknown { .. } => "CAPABILITY_UNKNOWN",
             Self::CapabilityUnsupported { .. } => "CAPABILITY_UNSUPPORTED",

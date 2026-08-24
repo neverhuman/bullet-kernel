@@ -4,6 +4,7 @@
 //! and the shared conformance suite (s42). No provider-specific code.
 
 pub mod adapter;
+pub mod admission;
 pub mod argv;
 pub mod capability;
 pub mod conformance;
@@ -22,6 +23,12 @@ pub use adapter::{
     PlanDecision, QuotaObservation, ResumeSession, SessionCheckpoint, SessionHandle, StartSession,
     SteeringMessage, Turn, TurnHandle,
 };
+pub use admission::{
+    capability_digest, descriptor_digest, executable_digest, AdmissionBlocker, CanarySecrets,
+    ConformanceEvidence, CredentialGrant, CredentialReceipt, EvaluatedAdmission,
+    ProtocolRequirement, ProviderAdmission, ProviderAdmissionPolicy, ProviderConformanceReceipt,
+    ProviderProtocol, RuntimeProbeSnapshot,
+};
 pub use argv::{filter_env, ArgvBuilder, InvocationBudget, PreparedInvocation};
 pub use capability::{Capability, CapabilityMatrix, CapabilityState, PromotionStage};
 pub use error::HarnessError;
@@ -32,5 +39,8 @@ pub use ids::{synthetic_uuid, AgentSessionId, EventId, InvocationId};
 pub use probe::{ExpectedProfile, ProbeResult, ProfileIdentity, ProfileRef};
 pub use proposal::{ChangeOp, FileChange, PatchProposal};
 pub use session::SessionState;
-pub use spawnrun::{kill_process_group, run_to_completion, PidSlot, RunOutcome};
+pub use spawnrun::{
+    kill_process_group, run_supervised, run_to_completion, PidSlot, RunOutcome, RunStop,
+    SupervisedOutcome, SupervisionSignal,
+};
 pub use store::{SessionEntry, SessionStore};

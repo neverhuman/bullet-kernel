@@ -10,7 +10,7 @@ Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AG
 | `crates/application` | commands, materializer, leases/fences, pure simulators, `bullet demo` |
 | `crates/adapters` | SQLite WAL ledger with `schema_version` migrations (`db/migrations`) |
 | `crates/adapters-postgres` | configuration scaffold; implements no `Ledger` and never connects in required CI |
-| `crates/harness-core`, `crates/harness-sim` | adapter trait, capability matrix, event envelope, argv gate, deterministic simulator |
+| `crates/harness-core`, `crates/harness-sim` | adapter trait, probed provider admission, event envelope, argv/supervision gate, deterministic simulator |
 | `crates/harness-{claude,codex,cursor,antigravity}` | provider adapters: offline parsers and argv guardrails, plus an opt-in live smoke test (see Lanes) |
 | `crates/runner` | attempt loop, scope check, heartbeat self-fence, `bullet-gitd` supervision |
 | `crates/verifier` | clean-room reconstruction and typed gate outcomes |
@@ -68,8 +68,25 @@ transaction, live, or release evidence. Until signed BulletGit authority is
 available, the product receipt must preserve `AUTHORITY_CONTRACT_UNAVAILABLE`
 and show no Candidate, Evidence, or effect.
 
-Every provider spawn passes through the harness argv gate, which refuses by
-default (`LIVE_ADMISSION_UNAVAILABLE`). The `--features live` smoke tests in
+The harness has one non-spawning `ProviderAdmission` evaluator. It requires an
+absolute canonical executable and exact complete descriptor/version/capability/
+profile/protocol probe; stages only digest-bound, individually allowlisted OAuth files
+in a unique 0700 HOME as 0400 files; builds the child environment from a
+positive allowlist; and checks canaries across environment, stdout, stderr,
+events, and the accepted gate-ID-only proposal. Its deterministic receipt binds
+those facts but is not authority: signed admission and audited provider-only
+egress are explicit blockers, so `build_with_admission` cannot spawn. Codex App
+Server JSONL, Cursor ACP, Antigravity structured headless with 1.1.19's
+flags-before-prompt-last-`-p=` ordering, and Claude stream JSON are the frozen
+protocol requirements; runtime probes, not provider
+names, determine conformance. The current Codex/Cursor/Antigravity adapters do
+not meet those requirements.
+
+The ordinary harness argv gate also refuses every known live provider executable
+by default (`LIVE_ADMISSION_UNAVAILABLE`). Bounded supervision kills the process
+group on deadline, cancellation, heartbeat failure, and provider crash, preserving
+typed stop facts and partial output. This is process cleanup, not network
+containment. The `--features live` smoke tests in
 `crates/harness-*/tests/live.rs` are `#[ignore]`, run only from the nightly lane
 with `BULLET_LIVE_PROVIDERS`, and fail closed rather than skip when the gate
 refuses. The Jeryu adapter performs no credential lookup or network call. No

@@ -3,6 +3,7 @@
 //! environment; honors the `BULLET_PROVIDER_KILL` switch.
 
 use crate::error::HarnessError;
+use crate::EvaluatedAdmission;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -161,14 +162,7 @@ impl ArgvBuilder {
     /// `WORKTREE_FLAG_DENIED` when any token matches the deny list; or
     /// `LIVE_ADMISSION_UNAVAILABLE` for a known live-provider executable.
     pub fn build(self) -> Result<PreparedInvocation, HarnessError> {
-        if kill_switch_active(std::env::var(KILL_SWITCH_VAR).ok().as_deref()) {
-            return Err(HarnessError::KillSwitch);
-        }
-        for arg in &self.args {
-            if denied_token(arg).is_some() {
-                return Err(HarnessError::WorktreeFlagDenied { token: arg.clone() });
-            }
-        }
+        self.validate_common()?;
         if let Some(provider) = live_provider_program(&self.program) {
             return Err(HarnessError::LiveAdmissionUnavailable {
                 provider: provider.to_owned(),
@@ -182,6 +176,46 @@ impl ArgvBuilder {
             timeout: self.timeout,
             env,
         })
+    }
+
+    /// Build against a completed local admission evaluation. This method is
+    /// structurally present so live adapters have one future chokepoint, but
+    /// current receipts always retain signed-authority and egress blockers.
+    ///
+    /// # Errors
+    ///
+    /// `PROVIDER_ADMISSION_BLOCKED` in this slice, or `ADMISSION_REFUSED`
+    /// when argv attempts to substitute a different executable.
+    pub fn build_with_admission(
+        self,
+        admission: &EvaluatedAdmission,
+    ) -> Result<PreparedInvocation, HarnessError> {
+        self.validate_common()?;
+        if Path::new(&self.program) != admission.executable() {
+            return Err(HarnessError::AdmissionRefused {
+                reason: "argv executable differs from the evaluated admission".into(),
+            });
+        }
+        admission.require_dispatch()?;
+        Ok(PreparedInvocation {
+            program: admission.executable().to_string_lossy().into_owned(),
+            args: self.args,
+            cwd: self.cwd,
+            timeout: self.timeout,
+            env: admission.child_env().to_vec(),
+        })
+    }
+
+    fn validate_common(&self) -> Result<(), HarnessError> {
+        if kill_switch_active(std::env::var(KILL_SWITCH_VAR).ok().as_deref()) {
+            return Err(HarnessError::KillSwitch);
+        }
+        for arg in &self.args {
+            if denied_token(arg).is_some() {
+                return Err(HarnessError::WorktreeFlagDenied { token: arg.clone() });
+            }
+        }
+        Ok(())
     }
 }
 
