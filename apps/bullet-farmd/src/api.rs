@@ -8,9 +8,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bullet_adapters::SqliteLedger;
-use bullet_application::{
-    derive_receipt, run_demo, DemoReceipt, Ledger, LedgerError, LedgerEvent, OutboxItem,
-};
+use bullet_application::{derive_receipt, Ledger, LedgerError, LedgerEvent, OutboxItem};
 use bullet_domain::{Digest, Mission, MissionId};
 use chrono::{DateTime, Utc};
 use futures_util::stream::Stream;
@@ -28,11 +26,14 @@ const REPLAY_BATCH_SIZE: usize = 64;
 const MAX_REPLAY_EVENTS: u64 = 1_024;
 const SNAPSHOT_SOURCE: &str = "bullet-kernel/sqlite-ledger";
 const SNAPSHOT_SEQUENCE_HEADER: HeaderName = HeaderName::from_static("x-bullet-as-of-sequence");
+const DEFAULT_ORIGIN: &str = "http://127.0.0.1:7420";
+pub(crate) const BROWSER_SESSION_SECONDS: u64 = 8 * 60 * 60;
 
 /// Shared daemon state. The async mutex cannot poison; a panicked holder
 /// simply releases the lock.
 pub struct AppState {
     pub(crate) ledger: Mutex<SqliteLedger>,
+    pub(crate) auth: Mutex<crate::auth::AuthState>,
 }
 
 pub(crate) type SharedState = Arc<AppState>;
@@ -43,9 +44,32 @@ pub(crate) type SharedState = Arc<AppState>;
 ///
 /// Returns a ledger error when the database cannot be opened or migrated.
 pub fn router(db: &FsPath) -> Result<Router, LedgerError> {
+    build_router(
+        db,
+        crate::auth::AuthState::disabled(DEFAULT_ORIGIN.to_string()),
+    )
+}
+
+/// Build the local browser router with one short-lived bootstrap token.
+///
+/// # Errors
+///
+/// Returns a ledger or invalid loopback-origin configuration error.
+pub fn router_with_bootstrap(
+    db: &FsPath,
+    bootstrap_token: &str,
+    portal_origin: String,
+) -> Result<Router, LedgerError> {
+    let auth =
+        crate::auth::AuthState::new(bootstrap_token, portal_origin).map_err(LedgerError::Store)?;
+    build_router(db, auth)
+}
+
+fn build_router(db: &FsPath, auth: crate::auth::AuthState) -> Result<Router, LedgerError> {
     let ledger = SqliteLedger::open(db)?;
     let state: SharedState = Arc::new(AppState {
         ledger: Mutex::new(ledger),
+        auth: Mutex::new(auth),
     });
     Ok(Router::new()
         .route("/health", get(health))
@@ -53,11 +77,19 @@ pub fn router(db: &FsPath) -> Result<Router, LedgerError> {
         .route("/v1/missions", get(list_missions))
         .route("/v1/missions/{id}", get(get_mission))
         .route("/v1/demo", get(get_demo))
-        .route("/v1/demo/run", post(run_demo_handler))
+        .route("/v1/demo/run", post(removed_demo_mutation))
+        .route("/v1/auth/bootstrap", post(crate::auth::bootstrap))
+        .route("/v1/commands", post(crate::commands::submit))
+        .route("/v1/commands/{id}", get(crate::commands::get))
         .route("/v1/outbox", get(outbox))
         .route("/v1/events", get(events))
-        .merge(crate::leases::routes())
+        .route("/v1/ready", get(crate::leases::next_ready))
+        .fallback(api_not_found)
         .with_state(state))
+}
+
+async fn api_not_found() -> ApiError {
+    ApiError::NotFound("API route".into())
 }
 
 #[derive(Serialize)]
@@ -112,9 +144,13 @@ async fn get_demo(State(state): State<SharedState>) -> Result<Response, ApiError
     snapshot_response(receipt, as_of_sequence)
 }
 
-async fn run_demo_handler(State(state): State<SharedState>) -> Result<Json<DemoReceipt>, ApiError> {
-    let mut ledger = state.ledger.lock().await;
-    Ok(Json(run_demo(&mut *ledger)?))
+async fn removed_demo_mutation() -> ApiError {
+    ApiError::protocol(
+        axum::http::StatusCode::GONE,
+        "MUTATION_ENDPOINT_REMOVED",
+        "Direct demo mutation was removed because transport success is not verification.",
+        "Submit an authenticated run_demo envelope to POST /v1/commands and reconcile its command id.",
+    )
 }
 
 #[derive(Serialize)]

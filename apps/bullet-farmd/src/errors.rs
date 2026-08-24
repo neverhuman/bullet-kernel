@@ -50,6 +50,17 @@ pub enum ApiError {
     UnsupportedSchema(String),
     /// The durable store failed. Logged; the detail is not exposed.
     Internal(String),
+    /// An HTTP protocol or browser-authority rule was refused.
+    Protocol {
+        /// HTTP status.
+        status: StatusCode,
+        /// Stable reason code.
+        code: &'static str,
+        /// Safe public explanation.
+        detail: &'static str,
+        /// Safe repair guidance.
+        repair: &'static str,
+    },
 }
 
 impl From<LedgerError> for ApiError {
@@ -91,6 +102,18 @@ fn title_for(code: &str) -> &'static str {
         "NOT_FOUND" => "Resource not found",
         "UNSUPPORTED_SCHEMA" => "Unsupported database schema",
         "STORE_FAILURE" => "Ledger store failure",
+        "INVALID_JSON" => "Invalid JSON request",
+        "BOOTSTRAP_UNAVAILABLE" => "Browser bootstrap unavailable",
+        "BOOTSTRAP_CONSUMED" => "Browser bootstrap already consumed",
+        "BOOTSTRAP_EXPIRED" => "Browser bootstrap expired",
+        "BOOTSTRAP_INVALID" => "Invalid browser bootstrap",
+        "SESSION_REQUIRED" => "Browser session required",
+        "SESSION_INVALID" => "Invalid browser session",
+        "CSRF_REQUIRED" => "CSRF token required",
+        "CSRF_INVALID" => "Invalid CSRF token",
+        "ORIGIN_REQUIRED" => "Origin required",
+        "ORIGIN_DENIED" => "Origin denied",
+        "MUTATION_ENDPOINT_REMOVED" => "Mutation endpoint removed",
         _ => "Request failed",
     }
 }
@@ -113,6 +136,7 @@ impl ApiError {
                 "STORE_FAILURE".into(),
                 true,
             ),
+            Self::Protocol { status, code, .. } => (*status, (*code).into(), false),
         }
     }
 }
@@ -153,6 +177,7 @@ impl IntoResponse for ApiError {
                 "This database schema is not supported by this pre-1.0 binary.".into()
             }
             Self::Internal(_) => "The durable ledger could not produce a trusted result.".into(),
+            Self::Protocol { detail, .. } => (*detail).into(),
         };
         let repair = match &self {
             Self::ReplayUnavailable(_) => "Fetch a fresh projection snapshot, then reconnect with its as_of_sequence as the exclusive cursor.",
@@ -162,6 +187,7 @@ impl IntoResponse for ApiError {
             Self::BadRequest(_) => "Remove duplicate or unknown cursor fields and send either after or Last-Event-ID, not both.",
             Self::Invalid(_) => "Correct the identified request field before retrying.",
             Self::Conflict(_) => "Refresh durable authority state before constructing a new request.",
+            Self::Protocol { repair, .. } => repair,
         };
         let problem = Problem {
             r#type: format!(
@@ -184,5 +210,30 @@ impl IntoResponse for ApiError {
             HeaderValue::from_static("application/problem+json"),
         );
         response
+    }
+}
+
+impl ApiError {
+    pub(crate) fn protocol(
+        status: StatusCode,
+        code: &'static str,
+        detail: &'static str,
+        repair: &'static str,
+    ) -> Self {
+        Self::Protocol {
+            status,
+            code,
+            detail,
+            repair,
+        }
+    }
+
+    pub(crate) fn invalid_json() -> Self {
+        Self::protocol(
+            StatusCode::BAD_REQUEST,
+            "INVALID_JSON",
+            "The request body is missing, malformed, oversized, or contains unknown fields.",
+            "Send exactly the fields declared by the current OpenAPI schema as application/json.",
+        )
     }
 }

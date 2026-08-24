@@ -63,6 +63,14 @@ pub trait Ledger {
     /// Store or idempotency failure.
     fn record_command(&mut self, request: &CommandRequest) -> Result<CommandRecord, LedgerError>;
 
+    /// Admit one public command and its correlated dispatch outbox row in one
+    /// transaction. Exact replay returns the durable command without adding a
+    /// second row; conflicting or incomplete prior truth fails closed.
+    ///
+    /// # Errors
+    /// Store or idempotency failure.
+    fn submit_command(&mut self, request: &CommandRequest) -> Result<CommandRecord, LedgerError>;
+
     /// Advance a command phase and optionally store its response.
     ///
     /// # Errors

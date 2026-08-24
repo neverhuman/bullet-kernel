@@ -5,6 +5,68 @@ use crate::{CommandRecord, CommandRequest, LedgerError, OutboxItem};
 use bullet_domain::{CommandId, CommandPhase, DomainError};
 
 impl MemoryLedger {
+    pub(super) fn submit_command_impl(
+        &mut self,
+        request: &CommandRequest,
+    ) -> Result<CommandRecord, LedgerError> {
+        let before = self.clone();
+        let transaction = (|| {
+            let existed = self.commands.contains_key(&request.idempotency_key);
+            let record = self.record_command_impl(request)?;
+            let dispatch = serde_json::to_string(request)
+                .map_err(|error| LedgerError::Store(error.to_string()))?;
+            if existed {
+                let rows = self
+                    .outbox
+                    .iter()
+                    .filter(|item| item.command_id.as_ref() == Some(&record.id))
+                    .collect::<Vec<_>>();
+                if rows.len() != 1
+                    || rows[0].kind != "command_dispatch"
+                    || rows[0].payload != dispatch
+                {
+                    return Err(LedgerError::Store(
+                        "public command has incomplete or conflicting outbox truth".into(),
+                    ));
+                }
+                let events = self
+                    .events
+                    .iter()
+                    .filter(|event| {
+                        event.kind == "command_submitted"
+                            && event.body == record.id.as_str()
+                            && event.correlation_id.as_deref() == Some(record.id.as_str())
+                    })
+                    .count();
+                if events != 1 {
+                    return Err(LedgerError::Store(
+                        "public command has incomplete or conflicting event truth".into(),
+                    ));
+                }
+            } else {
+                self.outbox_enqueue_impl(Some(record.id.clone()), "command_dispatch", &dispatch)?;
+                self.tick()?;
+                self.push_event(
+                    "command_submitted",
+                    record.id.as_str(),
+                    Some(record.id.to_string()),
+                    Some(record.id.to_string()),
+                    None,
+                );
+            }
+            Ok(record)
+        })();
+        match transaction {
+            Ok(record) => Ok(record),
+            Err(error) => {
+                let failpoint = self.fail_after_writes;
+                *self = before;
+                self.fail_after_writes = failpoint;
+                Err(error)
+            }
+        }
+    }
+
     pub(super) fn record_command_impl(
         &mut self,
         request: &CommandRequest,

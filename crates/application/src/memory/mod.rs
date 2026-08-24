@@ -99,6 +99,10 @@ impl Ledger for MemoryLedger {
         self.record_command_impl(request)
     }
 
+    fn submit_command(&mut self, request: &CommandRequest) -> Result<CommandRecord, LedgerError> {
+        self.submit_command_impl(request)
+    }
+
     fn set_command_phase(
         &mut self,
         key: &str,

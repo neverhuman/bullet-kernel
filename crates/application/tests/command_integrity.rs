@@ -37,6 +37,41 @@ fn command_digest_and_replay_bind_kind_and_exact_payload() {
 }
 
 #[test]
+fn public_submission_is_atomic_and_exactly_once_in_memory() {
+    let request = CommandRequest::new(
+        "public-command",
+        "run_demo",
+        &serde_json::json!({"requested": true}),
+    )
+    .expect("request");
+    let mut ledger = MemoryLedger::new();
+    ledger.set_failpoint(1);
+    assert_eq!(
+        ledger
+            .submit_command(&request)
+            .expect_err("outbox failpoint")
+            .reason_code(),
+        "STORE_FAILURE"
+    );
+    assert!(ledger
+        .get_command(&request.idempotency_key)
+        .expect("lookup")
+        .is_none());
+    assert!(ledger.outbox_all().expect("outbox").is_empty());
+
+    let first = ledger.submit_command(&request).expect("submit");
+    let replay = ledger.submit_command(&request).expect("replay");
+    assert_eq!(first, replay);
+    let rows = ledger.outbox_for_command(&first.id).expect("correlation");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, "command_dispatch");
+    let events = ledger.list_events().expect("events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "command_submitted");
+    assert_eq!(events[0].correlation_id.as_deref(), Some(first.id.as_str()));
+}
+
+#[test]
 fn malformed_or_incoherent_commands_are_inert() {
     for (key, kind, payload) in [
         ("", "valid", "{}"),

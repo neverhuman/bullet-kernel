@@ -1,6 +1,7 @@
 //! HTTP surface tests against a real served socket and a temp database.
 
 use bullet_adapters::SqliteLedger;
+use bullet_application::run_demo;
 use bullet_domain::Digest;
 use rusqlite::{params, Connection};
 use serde_json::Value;
@@ -131,6 +132,11 @@ fn insert_events(db: &Path, count: u64) {
     transaction.commit().expect("commit fixtures");
 }
 
+fn seed_demo(db: &Path) -> Value {
+    let mut ledger = SqliteLedger::open(db).expect("demo ledger");
+    serde_json::to_value(run_demo(&mut ledger).expect("seed durable demo")).expect("receipt json")
+}
+
 #[tokio::test]
 async fn health_missions_and_demo_are_null_safe_on_empty_db() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -154,12 +160,14 @@ async fn health_missions_and_demo_are_null_safe_on_empty_db() {
 }
 
 #[tokio::test]
-async fn demo_run_populates_views_with_real_rows() {
+async fn demo_projection_uses_durable_rows_and_direct_mutation_is_gone() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let addr = start(&dir.path().join("ledger.sqlite")).await;
+    let db = dir.path().join("ledger.sqlite");
+    let receipt = seed_demo(&db);
+    let addr = start(&db).await;
     let (status, body) = request(addr, "POST", "/v1/demo/run").await;
-    assert_eq!(status, 200);
-    let receipt = json_body(&body);
+    assert_eq!(status, 410);
+    assert_eq!(json_body(&body)["code"], "MUTATION_ENDPOINT_REMOVED");
     assert_eq!(receipt["fence_first"], 1);
     assert_eq!(receipt["fence_second"], 2);
     assert_eq!(receipt["stale_refused"], true);
@@ -188,9 +196,9 @@ async fn demo_run_populates_views_with_real_rows() {
 #[tokio::test]
 async fn events_sse_streams_the_first_chunk_with_sequence_ids() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let addr = start(&dir.path().join("ledger.sqlite")).await;
-    let (status, _body) = request(addr, "POST", "/v1/demo/run").await;
-    assert_eq!(status, 200);
+    let db = dir.path().join("ledger.sqlite");
+    seed_demo(&db);
+    let addr = start(&db).await;
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     stream
         .write_all(
@@ -235,9 +243,9 @@ async fn events_sse_streams_the_first_chunk_with_sequence_ids() {
 #[tokio::test]
 async fn event_cursors_are_exclusive_and_last_event_id_resumes_after_the_cursor() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let addr = start(&dir.path().join("ledger.sqlite")).await;
-    let (status, _) = request(addr, "POST", "/v1/demo/run").await;
-    assert_eq!(status, 200);
+    let db = dir.path().join("ledger.sqlite");
+    seed_demo(&db);
+    let addr = start(&db).await;
 
     let conflict =
         raw_request_with_headers(addr, "GET", "/v1/events?after=1", "Last-Event-ID: 1\r\n").await;
@@ -288,7 +296,8 @@ async fn event_cursors_are_exclusive_and_last_event_id_resumes_after_the_cursor(
 #[tokio::test]
 async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let addr = start(&dir.path().join("ledger.sqlite")).await;
+    let db = dir.path().join("ledger.sqlite");
+    let addr = start(&db).await;
 
     for path in ["/v1/missions", "/v1/outbox"] {
         let response = raw_request(addr, "GET", path).await;
@@ -298,8 +307,7 @@ async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
         );
     }
 
-    let (status, _) = request(addr, "POST", "/v1/demo/run").await;
-    assert_eq!(status, 200);
+    seed_demo(&db);
     let missions = raw_request(addr, "GET", "/v1/missions").await;
     let outbox = raw_request(addr, "GET", "/v1/outbox").await;
     let mission_sequence = response_header(&missions, "x-bullet-as-of-sequence")
@@ -339,8 +347,8 @@ async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
 async fn missing_durable_stale_refusal_makes_demo_projection_unknown() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = dir.path().join("ledger.sqlite");
+    seed_demo(&db);
     let addr = start(&db).await;
-    assert_eq!(request(addr, "POST", "/v1/demo/run").await.0, 200);
     Connection::open(&db)
         .expect("raw open")
         .execute(
@@ -372,8 +380,8 @@ async fn unavailable_and_corrupt_replays_fail_before_sse_200() {
     ] {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = dir.path().join(format!("{name}.sqlite"));
+        seed_demo(&db);
         let addr = start(&db).await;
-        assert_eq!(request(addr, "POST", "/v1/demo/run").await.0, 200);
         Connection::open(&db)
             .expect("raw open")
             .execute(mutation, [])

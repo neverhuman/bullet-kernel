@@ -15,6 +15,9 @@ struct Args {
     /// Bind address.
     #[arg(long, default_value = "127.0.0.1:7420")]
     bind: SocketAddr,
+    /// Exact loopback Portal origin allowed to bootstrap and mutate.
+    #[arg(long)]
+    portal_origin: Option<String>,
 }
 
 #[tokio::main]
@@ -29,11 +32,10 @@ async fn main() -> ExitCode {
         eprintln!("bullet-farmd: create data dir: {err}");
         return ExitCode::FAILURE;
     }
-    let db = args.data_dir.join("ledger.sqlite");
-    let app = match api::router(&db) {
-        Ok(app) => app,
+    let bootstrap = match bullet_farmd::auth::random_token("boot") {
+        Ok(token) => token,
         Err(err) => {
-            eprintln!("bullet-farmd: open ledger: {err}");
+            eprintln!("bullet-farmd: create bootstrap token: {err}");
             return ExitCode::FAILURE;
         }
     };
@@ -44,7 +46,27 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    tracing::info!("bullet-farmd listening on {}", args.bind);
+    let bound = match listener.local_addr() {
+        Ok(bound) => bound,
+        Err(err) => {
+            eprintln!("bullet-farmd: inspect bound address: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let origin = args
+        .portal_origin
+        .unwrap_or_else(|| format!("http://{bound}"));
+    let db = args.data_dir.join("ledger.sqlite");
+    let app = match api::router_with_bootstrap(&db, &bootstrap, origin.clone()) {
+        Ok(app) => app,
+        Err(err) => {
+            eprintln!("bullet-farmd: initialize local API: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("Bullet Farm one-time bootstrap: {bootstrap}");
+    println!("Exchange at: {origin}/v1/auth/bootstrap");
+    tracing::info!("bullet-farmd listening on {bound}");
     if let Err(err) = axum::serve(listener, app).await {
         eprintln!("bullet-farmd: serve: {err}");
         return ExitCode::FAILURE;

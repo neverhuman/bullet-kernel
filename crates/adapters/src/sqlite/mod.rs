@@ -58,6 +58,7 @@ pub struct SqliteLedger {
     materialization_fail_after: Option<u8>,
     graph_delta_fail_after: Option<u8>,
     lease_acquisition_fail_after: Option<u8>,
+    command_submission_fail_after: Option<u8>,
 }
 
 impl SqliteLedger {
@@ -81,6 +82,7 @@ impl SqliteLedger {
             materialization_fail_after: None,
             graph_delta_fail_after: None,
             lease_acquisition_fail_after: None,
+            command_submission_fail_after: None,
         })
     }
 
@@ -100,6 +102,12 @@ impl SqliteLedger {
     /// transaction boundaries. Used by crash-atomicity integration tests.
     pub fn set_lease_acquisition_failpoint(&mut self, allowed: u8) {
         self.lease_acquisition_fail_after = Some(allowed);
+    }
+
+    /// Inject a one-shot public-command transaction failure after `allowed`
+    /// internal boundaries. Used only by crash-atomicity integration tests.
+    pub fn set_command_submission_failpoint(&mut self, allowed: u8) {
+        self.command_submission_fail_after = Some(allowed);
     }
 
     /// Read projection data and its event watermark from one SQLite snapshot.
@@ -137,6 +145,14 @@ pub(crate) fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T,
 impl Ledger for SqliteLedger {
     fn record_command(&mut self, request: &CommandRequest) -> Result<CommandRecord, LedgerError> {
         commands::record_command(&self.conn, request)
+    }
+
+    fn submit_command(&mut self, request: &CommandRequest) -> Result<CommandRecord, LedgerError> {
+        commands::submit_command(
+            &mut self.conn,
+            &mut self.command_submission_fail_after,
+            request,
+        )
     }
 
     fn set_command_phase(

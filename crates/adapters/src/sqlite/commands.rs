@@ -1,9 +1,11 @@
 //! Idempotent command rows.
 
-use super::store;
+use super::{events, outbox, store};
 use bullet_application::{CommandRecord, CommandRequest, LedgerError};
 use bullet_domain::{CommandId, CommandPhase, Digest, DomainError};
 use rusqlite::{params, Connection, OptionalExtension};
+
+const DISPATCH_KIND: &str = "command_dispatch";
 
 type CommandRow = (
     String,
@@ -119,6 +121,72 @@ pub(super) fn record_command(
     };
     insert_command(conn, &record)?;
     Ok(record)
+}
+
+pub(super) fn submit_command(
+    conn: &mut Connection,
+    fail_after: &mut Option<u8>,
+    request: &CommandRequest,
+) -> Result<CommandRecord, LedgerError> {
+    request.validate()?;
+    let transaction = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(store)?;
+    let existed = get_command(&transaction, &request.idempotency_key)?.is_some();
+    let record = record_command(&transaction, request)?;
+    fail_boundary(fail_after)?;
+    let dispatch = serde_json::to_string(request).map_err(store)?;
+    if existed {
+        let rows = outbox::for_command(&transaction, &record.id)?;
+        if rows.len() != 1 || rows[0].kind != DISPATCH_KIND || rows[0].payload != dispatch {
+            return Err(LedgerError::Store(
+                "public command has incomplete or conflicting outbox truth".into(),
+            ));
+        }
+        let events: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM events
+                 WHERE kind = 'command_submitted' AND body = ?1 AND correlation_id = ?1",
+                params![record.id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(store)?;
+        if events != 1 {
+            return Err(LedgerError::Store(
+                "public command has incomplete or conflicting event truth".into(),
+            ));
+        }
+    } else {
+        outbox::enqueue(&transaction, Some(&record.id), DISPATCH_KIND, &dispatch)?;
+        fail_boundary(fail_after)?;
+        events::insert_event(
+            &transaction,
+            "command_submitted",
+            record.id.as_str(),
+            Some(record.id.as_str()),
+            Some(record.id.as_str()),
+            None,
+        )?;
+    }
+    fail_boundary(fail_after)?;
+    transaction.commit().map_err(store)?;
+    Ok(record)
+}
+
+fn fail_boundary(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {
+    match fail_after {
+        Some(0) => {
+            *fail_after = None;
+            Err(LedgerError::Store(
+                "injected command ingress boundary".into(),
+            ))
+        }
+        Some(remaining) => {
+            *remaining -= 1;
+            Ok(())
+        }
+        None => Ok(()),
+    }
 }
 
 pub(super) fn set_phase(

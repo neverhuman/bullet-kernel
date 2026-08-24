@@ -75,6 +75,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+getrandom = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

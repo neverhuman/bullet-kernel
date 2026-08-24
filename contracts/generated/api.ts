@@ -7,6 +7,34 @@ export type Health = {
   status: string;
 };
 
+export type BootstrapRequest = {
+  bootstrap_token: string;
+};
+
+export type BootstrapResponse = {
+  status: "AUTHENTICATED";
+  csrf_token: string;
+  expires_in_seconds: number;
+};
+
+export type CommandEnvelope = {
+  idempotency_key: string;
+  kind: string;
+  payload: {
+  };
+};
+
+export type CommandStatus = {
+  id: string;
+  status: "PENDING" | "APPLIED" | "VERIFIED" | "FAILED" | "UNKNOWN";
+  kind: string;
+  payload_digest: string;
+  result: JsonValue;
+};
+
+export type JsonValue = string | number | boolean | null | JsonValue[] | {
+};
+
 export type ObservationKind = "value" | "empty" | "unknown" | "contradictory";
 
 export type Mission = {
@@ -110,93 +138,6 @@ export type Problem = {
   correlation_id: string;
   retryable: boolean;
   repair: string;
-};
-
-export type WorkspaceNonce = number[];
-
-export type Attempt = {
-  id: string;
-  variant_id: string;
-  work_package_id: string;
-  fence: number;
-  runner_id: string;
-  runner_epoch: number;
-  workspace_id: string;
-  workspace_nonce: WorkspaceNonce;
-  scope_revision: number;
-  context_revision: number;
-  state: string;
-};
-
-export type AuthorityToken = {
-  organization_id: string;
-  repository_id: string;
-  mission_id: string;
-  acceptance_contract_id: string;
-  plan_revision_id: string;
-  graph_sequence: number;
-  work_package_id: string;
-  selection_group_id: string;
-  variant_id: string;
-  attempt_id: string;
-  attempt_fence: number;
-  runner_id: string;
-  runner_epoch: number;
-  workspace_id: string;
-  workspace_nonce: WorkspaceNonce;
-  scope_revision: number;
-  context_revision: number;
-  config_snapshot_hash: string;
-  policy_snapshot_hash: string;
-  routing_policy_hash: string;
-  credential_profile_id: string | null;
-  credential_generation: number | null;
-};
-
-export type ActiveLease = {
-  variant_id: string;
-  attempt_id: string;
-  fence: number;
-  runner_id: string;
-  runner_epoch: number;
-  workspace_nonce: WorkspaceNonce;
-  heartbeat_at: string;
-  expires_at: string;
-};
-
-export type LeaseAcquireRequest = {
-  work_package_id: string;
-  runner_id: string;
-  runner_epoch: number;
-  idempotency_key: string;
-  ttl_seconds?: number;
-};
-
-export type LeaseAcquireResponse = {
-  attempt: Attempt;
-  authority_token: AuthorityToken;
-  lease: ActiveLease;
-};
-
-export type LeaseHeartbeatRequest = {
-  variant_id: string;
-  attempt_id: string;
-  fence: number;
-  runner_id: string;
-  runner_epoch: number;
-  workspace_nonce: WorkspaceNonce;
-  ttl_seconds?: number;
-};
-
-export type LeaseReleaseRequest = {
-  attempt_id: string;
-  outcome: string;
-  requeue?: boolean;
-};
-
-export type AttemptAdvanceRequest = {
-  attempt_id: string;
-  state: string;
 };
 
 export type ReadyView = {

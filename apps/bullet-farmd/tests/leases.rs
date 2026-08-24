@@ -1,46 +1,30 @@
-//! Lease API tests over a real served socket, including the stale paths,
-//! plus the runner's `HttpLeaseClient` against the same server so the wire
-//! contract is proven from both sides.
+//! The browser API exposes readiness only. Runner lease mutations require a
+//! separate authenticated internal transport and therefore fail closed here.
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::{materialize_plan, Ledger, PlanInput};
-use bullet_domain::{AttemptId, AttemptState, RunnerId, TaskClass, WorkPackageId};
-use bullet_runner_core::{
-    AcquireRequest, HeartbeatCall, HttpLeaseClient, LeaseClient, ReleaseCall,
-};
-use rusqlite::Connection;
-use serde_json::{json, Value};
+use bullet_domain::TaskClass;
+use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{timeout, Duration};
 
-fn seed_graph(db: &Path, seed: &str) -> String {
+fn seed_graph(db: &Path) -> String {
     let mut ledger = SqliteLedger::open(db).expect("open ledger");
     let graph = materialize_plan(
         &mut ledger,
-        seed,
+        "public-ready",
         &PlanInput {
-            title: "lease api".into(),
-            objective: "objective".into(),
+            title: "ready projection".into(),
+            objective: "keep runner mutation authority off the browser API".into(),
             packages: vec![("one".into(), TaskClass::MechanicalCodeEdit)],
         },
         "2026-01-01T00:00:00.000Z",
     )
     .expect("plan");
     graph.packages[0].id.to_string()
-}
-
-fn force_expired(db: &Path, ttl_seconds: i64) {
-    let expires = format!("2000-01-01T00:00:{ttl_seconds:02}.000Z");
-    Connection::open(db)
-        .expect("raw open")
-        .execute(
-            "UPDATE active_leases SET heartbeat_at = ?1, expires_at = ?2",
-            ["2000-01-01T00:00:00.000Z", &expires],
-        )
-        .expect("set exact expired test window");
 }
 
 async fn start(db: &Path) -> SocketAddr {
@@ -53,41 +37,29 @@ async fn start(db: &Path) -> SocketAddr {
     addr
 }
 
-async fn request(addr: SocketAddr, method: &str, path: &str, body: Option<&Value>) -> (u16, Value) {
+async fn request(addr: SocketAddr, method: &str, path: &str) -> (u16, String) {
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let payload = body.map(Value::to_string).unwrap_or_default();
-    let head = format!(
+    let request = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n",
-        payload.len()
+         Content-Length: 2\r\nConnection: close\r\n\r\n{{}}"
     );
-    stream.write_all(head.as_bytes()).await.expect("write head");
-    stream
-        .write_all(payload.as_bytes())
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut bytes = Vec::new();
+    timeout(Duration::from_secs(10), stream.read_to_end(&mut bytes))
         .await
-        .expect("write body");
-    let mut buf = Vec::new();
-    timeout(Duration::from_secs(10), stream.read_to_end(&mut buf))
-        .await
-        .expect("response before timeout")
+        .expect("response timeout")
         .expect("read");
-    let text = String::from_utf8_lossy(&buf).to_string();
-    let status: u16 = text
+    let response = String::from_utf8_lossy(&bytes).to_string();
+    let status = response
         .split_whitespace()
         .nth(1)
-        .and_then(|code| code.parse().ok())
-        .expect("status line");
-    let raw_body = text
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body.to_string())
-        .unwrap_or_default();
-    (status, decode_body(&raw_body))
+        .and_then(|value| value.parse().ok())
+        .expect("status");
+    (status, response)
 }
 
-fn decode_body(body: &str) -> Value {
-    if body.trim().is_empty() {
-        return Value::Null;
-    }
+fn json_body(response: &str) -> Value {
+    let body = response.split_once("\r\n\r\n").expect("body").1;
     if let Ok(value) = serde_json::from_str(body) {
         return value;
     }
@@ -98,275 +70,41 @@ fn decode_body(body: &str) -> Value {
     serde_json::from_str(&unchunked).expect("json body")
 }
 
-fn acquire_body(wp: &str, runner: &RunnerId, key: &str) -> Value {
-    json!({
-        "work_package_id": wp,
-        "runner_id": runner.as_str(),
-        "runner_epoch": 1,
-        "idempotency_key": key,
-        "ttl_seconds": 15,
-    })
-}
-
 #[tokio::test]
-async fn ready_acquire_heartbeat_release_roundtrip() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let db = dir.path().join("ledger.sqlite");
-    let wp = seed_graph(&db, "lease-rt");
-    let addr = start(&db).await;
-
-    let (status, ready) = request(addr, "GET", "/v1/ready", None).await;
+async fn ready_is_a_read_only_watermarked_projection() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let db = directory.path().join("ready.sqlite");
+    let package = seed_graph(&db);
+    let (status, response) = request(start(&db).await, "GET", "/v1/ready").await;
     assert_eq!(status, 200);
-    assert_eq!(ready.as_object().expect("snapshot").len(), 4);
-    assert_eq!(ready["data"]["work_package_id"], wp);
-    assert!(ready["as_of_sequence"].is_u64());
-    chrono::DateTime::parse_from_rfc3339(ready["observed_at"].as_str().expect("observed_at"))
-        .expect("RFC 3339 observation time");
-    assert_eq!(ready["source"], "bullet-kernel/sqlite-ledger");
-
-    let runner = RunnerId::from_seed("rt");
-    let body = acquire_body(&wp, &runner, "lease-rt-1");
-    let (status, grant) = request(addr, "POST", "/v1/leases/acquire", Some(&body)).await;
-    assert_eq!(status, 200, "{grant}");
-    assert_eq!(grant["attempt"]["fence"], 1);
-    assert_eq!(grant["attempt"]["state"], "starting");
-    assert_eq!(grant["authority_token"]["attempt_fence"], 1);
-    assert_eq!(grant["lease"]["runner_id"], runner.as_str());
-
-    // Same key replays the stored grant.
-    let (status, replay) = request(addr, "POST", "/v1/leases/acquire", Some(&body)).await;
-    assert_eq!(status, 200);
-    assert_eq!(
-        replay, grant,
-        "exact replay returns the original grant bytes"
-    );
-
-    // A different key while leased is a typed conflict.
-    let mut second = body.clone();
-    second["idempotency_key"] = json!("lease-rt-2");
-    let (status, problem) = request(addr, "POST", "/v1/leases/acquire", Some(&second)).await;
-    assert_eq!(status, 409);
-    assert_eq!(
-        problem["code"], "GRAPH_CONFLICT",
-        "leased package is no longer ready"
-    );
-
-    let (status, empty) = request(addr, "GET", "/v1/ready", None).await;
-    assert_eq!(status, 200, "leased package leaves a verified empty queue");
-    assert_eq!(empty["data"], Value::Null);
-    assert!(empty["as_of_sequence"].is_u64());
-
-    let heartbeat = json!({
-        "variant_id": grant["lease"]["variant_id"],
-        "attempt_id": grant["lease"]["attempt_id"],
-        "fence": 1,
-        "runner_id": runner.as_str(),
-        "runner_epoch": 1,
-        "workspace_nonce": grant["lease"]["workspace_nonce"],
-        "ttl_seconds": 15,
-    });
-    let (status, _) = request(addr, "POST", "/v1/leases/heartbeat", Some(&heartbeat)).await;
-    assert_eq!(status, 204);
-
-    for state in ["running", "preparing"] {
-        let advance = json!({ "attempt_id": grant["attempt"]["id"], "state": state });
-        let (status, _) = request(addr, "POST", "/v1/attempts/advance", Some(&advance)).await;
-        assert_eq!(status, 204, "{state}");
-    }
-    let release = json!({ "attempt_id": grant["attempt"]["id"], "outcome": "succeeded" });
-    let (status, _) = request(addr, "POST", "/v1/leases/release", Some(&release)).await;
-    assert_eq!(status, 204);
-    // Idempotent replay of the release.
-    let (status, _) = request(addr, "POST", "/v1/leases/release", Some(&release)).await;
-    assert_eq!(status, 204);
-    let (status, empty) = request(addr, "GET", "/v1/ready", None).await;
-    assert_eq!(
-        status, 200,
-        "succeeded without requeue leaves a verified empty queue"
-    );
-    assert_eq!(empty["data"], Value::Null);
-}
-
-#[tokio::test]
-async fn empty_ready_queue_is_an_atomic_null_snapshot() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let addr = start(&dir.path().join("empty.sqlite")).await;
-    let (status, snapshot) = request(addr, "GET", "/v1/ready", None).await;
-    assert_eq!(status, 200);
+    let snapshot = json_body(&response);
     assert_eq!(snapshot.as_object().expect("snapshot").len(), 4);
-    assert_eq!(snapshot["data"], Value::Null);
-    assert_eq!(snapshot["as_of_sequence"], 0);
-    chrono::DateTime::parse_from_rfc3339(snapshot["observed_at"].as_str().expect("observed_at"))
-        .expect("RFC 3339 observation time");
+    assert_eq!(snapshot["data"]["work_package_id"], package);
+    assert!(snapshot["as_of_sequence"].is_u64());
     assert_eq!(snapshot["source"], "bullet-kernel/sqlite-ledger");
 }
 
 #[tokio::test]
-async fn stale_paths_are_typed_conflicts() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let db = dir.path().join("ledger.sqlite");
-    let wp = seed_graph(&db, "lease-stale");
+async fn runner_mutations_are_not_mounted_on_the_public_router() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let db = directory.path().join("closed.sqlite");
+    let package = seed_graph(&db);
     let addr = start(&db).await;
-    let runner = RunnerId::from_seed("stale");
-    let body = acquire_body(&wp, &runner, "lease-stale-1");
-    let (status, grant) = request(addr, "POST", "/v1/leases/acquire", Some(&body)).await;
-    assert_eq!(status, 200);
-
-    // Wrong fence: six-column match fails, zero rows, typed stale.
-    let stale = json!({
-        "variant_id": grant["lease"]["variant_id"],
-        "attempt_id": grant["lease"]["attempt_id"],
-        "fence": 2,
-        "runner_id": runner.as_str(),
-        "runner_epoch": 1,
-        "workspace_nonce": grant["lease"]["workspace_nonce"],
-    });
-    let (status, problem) = request(addr, "POST", "/v1/leases/heartbeat", Some(&stale)).await;
-    assert_eq!(status, 409);
-    assert_eq!(problem["code"], "STALE_AUTHORITY");
-
-    // Expire the lease behind the server's back, then a previously valid
-    // heartbeat matches zero rows.
-    force_expired(&db, 15);
-    let mut side = SqliteLedger::open(&db).expect("second connection");
-    let expired = side.expire_leases().expect("expire");
-    assert_eq!(expired.len(), 1);
-    let valid = json!({
-        "variant_id": grant["lease"]["variant_id"],
-        "attempt_id": grant["lease"]["attempt_id"],
-        "fence": 1,
-        "runner_id": runner.as_str(),
-        "runner_epoch": 1,
-        "workspace_nonce": grant["lease"]["workspace_nonce"],
-    });
-    let (status, problem) = request(addr, "POST", "/v1/leases/heartbeat", Some(&valid)).await;
-    assert_eq!(status, 409);
-    assert_eq!(problem["code"], "STALE_AUTHORITY");
-
-    // Releasing an attempt that never existed is 404; releasing the crashed
-    // attempt into a live state is a 400 invalid transition.
-    let missing = json!({
-        "attempt_id": AttemptId::from_seed("never").as_str(),
-        "outcome": "failed",
-    });
-    let (status, problem) = request(addr, "POST", "/v1/leases/release", Some(&missing)).await;
-    assert_eq!(status, 404);
-    assert_eq!(problem["code"], "NOT_FOUND");
-    let live = json!({ "attempt_id": grant["attempt"]["id"], "outcome": "running" });
-    let (status, problem) = request(addr, "POST", "/v1/leases/release", Some(&live)).await;
-    assert_eq!(status, 400);
-    assert_eq!(problem["code"], "INVALID_TRANSITION");
-}
-
-#[tokio::test]
-async fn invalid_and_unknown_requests_are_problem_details() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let db = dir.path().join("ledger.sqlite");
-    let wp = seed_graph(&db, "lease-bad");
-    let addr = start(&db).await;
-    let bad = json!({
-        "work_package_id": "not-an-id",
-        "runner_id": RunnerId::from_seed("bad").as_str(),
-        "runner_epoch": 1,
-        "idempotency_key": "k",
-    });
-    let (status, problem) = request(addr, "POST", "/v1/leases/acquire", Some(&bad)).await;
-    assert_eq!(status, 400);
-    assert_eq!(problem["code"], "INVALID_ID");
-    for ttl in [0, 16] {
-        let invalid_ttl = json!({
-            "work_package_id": wp,
-            "runner_id": RunnerId::from_seed("bad-ttl").as_str(),
-            "runner_epoch": 1,
-            "idempotency_key": format!("invalid-ttl-{ttl}"),
-            "ttl_seconds": ttl,
-        });
-        let (status, problem) =
-            request(addr, "POST", "/v1/leases/acquire", Some(&invalid_ttl)).await;
-        assert_eq!(status, 400);
-        assert_eq!(problem["code"], "INVALID_LEASE_TTL");
+    for path in [
+        "/v1/leases/acquire",
+        "/v1/leases/heartbeat",
+        "/v1/leases/release",
+        "/v1/attempts/advance",
+    ] {
+        let (status, response) = request(addr, "POST", path).await;
+        assert_eq!(status, 404, "{path}");
+        assert_eq!(json_body(&response)["code"], "NOT_FOUND");
+        assert!(response.contains("application/problem+json"));
     }
-    let valid = acquire_body(
-        &wp,
-        &RunnerId::from_seed("valid-after-invalid"),
-        "valid-after-invalid",
-    );
-    let (status, grant) = request(addr, "POST", "/v1/leases/acquire", Some(&valid)).await;
-    assert_eq!(status, 200, "{grant}");
-    assert_eq!(
-        grant["attempt"]["fence"], 1,
-        "invalid TTL never consumes a fence"
-    );
-    let unknown = json!({
-        "work_package_id": WorkPackageId::from_seed("missing").as_str(),
-        "runner_id": RunnerId::from_seed("bad").as_str(),
-        "runner_epoch": 1,
-        "idempotency_key": "k",
-    });
-    let (status, problem) = request(addr, "POST", "/v1/leases/acquire", Some(&unknown)).await;
-    assert_eq!(status, 404);
-    assert_eq!(problem["code"], "NOT_FOUND");
-    let advance = json!({
-        "attempt_id": AttemptId::from_seed("never").as_str(),
-        "state": "flying",
-    });
-    let (status, problem) = request(addr, "POST", "/v1/attempts/advance", Some(&advance)).await;
-    assert_eq!(status, 400);
-    assert_eq!(problem["code"], "UNKNOWN_STATE");
-}
-
-#[tokio::test]
-async fn http_lease_client_speaks_the_same_contract() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let db = dir.path().join("ledger.sqlite");
-    let wp = seed_graph(&db, "lease-client");
-    let addr = start(&db).await;
-    let client = HttpLeaseClient::new(&format!("http://{addr}")).expect("client");
-
-    let ready = client
-        .next_ready()
-        .await
-        .expect("ready call")
-        .expect("one ready row");
-    assert_eq!(ready.work_package_id, wp);
-
-    let grant = client
-        .acquire(&AcquireRequest {
-            work_package_id: WorkPackageId::parse(&wp).expect("wp id"),
-            runner_id: RunnerId::from_seed("client"),
-            runner_epoch: 1,
-            idempotency_key: "lease-client-1".into(),
-            ttl_seconds: 15,
-        })
-        .await
-        .expect("acquire");
-    assert_eq!(grant.attempt.fence, 1);
-    assert_eq!(grant.authority_token.attempt_fence, 1);
-
-    client
-        .heartbeat(&HeartbeatCall::for_grant(&grant).expect("validated grant"))
-        .await
-        .expect("heartbeat");
-    let mut stale = HeartbeatCall::for_grant(&grant).expect("validated grant");
-    stale.fence = 99;
-    let err = client.heartbeat(&stale).await.expect_err("stale fence");
-    assert!(err.is_stale(), "{err}");
-
-    client
-        .advance(&grant.attempt.id, AttemptState::Running)
-        .await
-        .expect("running");
-    client
-        .advance(&grant.attempt.id, AttemptState::Preparing)
-        .await
-        .expect("preparing");
-    client
-        .release(&ReleaseCall {
-            attempt_id: grant.attempt.id.clone(),
-            outcome: AttemptState::Succeeded,
-            requeue: false,
-        })
-        .await
-        .expect("release");
-    assert!(client.next_ready().await.expect("ready").is_none());
+    let ledger = SqliteLedger::open(&db).expect("reopen");
+    assert!(ledger
+        .ready_rows()
+        .expect("ready")
+        .iter()
+        .any(|row| row.work_package_id.as_str() == package));
 }
