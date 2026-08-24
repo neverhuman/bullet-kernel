@@ -10,5 +10,5 @@ case "$lane" in
   nightly)  bash ops/ci/nightly.sh ;;
   audit)    bash ops/ci/audit.sh ;;
   gates|all) bash ops/ci/required.sh && bash ops/ci/contract.sh ;;
-  *) echo "usage: $0 {required|fast|contract|security|nightly|all}" >&2; exit 2 ;;
+  *) echo "usage: $0 {required|fast|contract|security|audit|nightly|all}" >&2; exit 2 ;;
 esac

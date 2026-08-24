@@ -15,11 +15,7 @@ require_tool() {
 
 run_tests() {
   local profile="${1:-fast}"
-  if command -v cargo-nextest >/dev/null 2>&1 || cargo nextest --version >/dev/null 2>&1; then
-    log "tests via nextest profile=${profile}"
-    cargo nextest run --workspace --profile "${profile}"
-  else
-    log "nextest missing; cargo test --workspace"
-    cargo test --workspace
-  fi
+  require_tool cargo-nextest || return 1
+  log "tests via nextest profile=${profile}"
+  cargo nextest run --locked --workspace --profile "${profile}"
 }

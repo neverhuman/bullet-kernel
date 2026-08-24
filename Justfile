@@ -3,7 +3,7 @@ default:
 
 setup:
     rustup component add rustfmt clippy
-    cargo fetch
+    cargo fetch --locked
 
 fast:
     bash scripts/ci-local.sh fast
@@ -20,7 +20,7 @@ security:
 verify: check
 
 demo:
-    BULLET_DATA_DIR=./target/demo cargo run -p bullet -- demo
+    BULLET_DATA_DIR=./target/demo cargo run --locked -p bullet -- demo
 
 audit:
     bash scripts/ci-local.sh audit

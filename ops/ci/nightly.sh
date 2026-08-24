@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Registered live-adapter lane. BULLET_LIVE_PROVIDERS unset: neutral, nothing registered.
+# Explicit local live-adapter entrypoint; no hosted schedule is registered yet.
+# BULLET_LIVE_PROVIDERS unset returns 78 to distinguish unregistered from success.
 # Set (comma list of claude,codex,cursor,agy): each named CLI must exist and its live smoke
 # test must pass; a missing tool or a refused spawn fails closed instead of skipping.
 set -euo pipefail
@@ -8,7 +9,7 @@ cd "$REPO_ROOT"
 log "nightly lane"
 if [[ -z "${BULLET_LIVE_PROVIDERS:-}" ]]; then
   log "BULLET_LIVE_PROVIDERS unset; no live lane registered"
-  exit 0
+  exit 78
 fi
 status=0
 IFS=',' read -ra providers <<< "$BULLET_LIVE_PROVIDERS"
@@ -23,6 +24,6 @@ for provider in "${providers[@]}"; do
   esac
   require_tool "$binary" || exit 1
   log "live smoke: $provider ($crate)"
-  cargo test -p "$crate" --features live --test live -- --ignored || status=1
+  cargo test --locked -p "$crate" --features live --test live -- --ignored || status=1
 done
 exit "$status"

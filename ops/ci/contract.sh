@@ -5,5 +5,5 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
 log "contract lane: harness tapes + simulators"
 run_tests contract
-cargo test -p bullet-test-simulation -- --nocapture
+cargo test --locked -p bullet-test-simulation -- --nocapture
 log "contract lane passed"
