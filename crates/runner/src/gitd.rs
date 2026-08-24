@@ -225,20 +225,20 @@ impl GitdSession {
             .map_err(|err| RunnerError::Protocol(format!("read_tree result: {err}")))
     }
 
-    /// Apply whole-file changes all-or-nothing. Deletes are not supported by
-    /// the daemon protocol; callers feed them back to the model instead.
+    /// Apply whole-file changes all-or-nothing. Writes keep the exact v1
+    /// wire shape; deletes are forwarded as `{"path", "op": "delete"}` per
+    /// the additive protocol in bullet-git docs/architecture.md.
     ///
     /// # Errors
     ///
-    /// `PROTOCOL_ERROR` for a delete op; typed daemon refusal otherwise.
+    /// Typed daemon refusal — `PATH_ABSENT` when a delete target is not an
+    /// existing regular file — or IO failure.
     pub async fn apply_change(&mut self, changes: &[FileChange]) -> Result<u64, RunnerError> {
         let mut patches = Vec::with_capacity(changes.len());
         for change in changes {
             if change.op == ChangeOp::Delete {
-                return Err(RunnerError::Protocol(format!(
-                    "delete of {} is not supported by bullet-gitd v1",
-                    change.path
-                )));
+                patches.push(json!({ "path": change.path, "op": "delete" }));
+                continue;
             }
             let contents = change.contents.as_deref().unwrap_or_default();
             patches.push(json!({

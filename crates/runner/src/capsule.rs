@@ -34,8 +34,8 @@ impl Capsule {
              The workspace is read-only for you; the kernel applies changes through its \
              own writer.\n\
              Respond with exactly one PatchProposal JSON object matching this schema \
-             (full-file contents per changed path; op \"delete\" is not supported in this \
-             environment):\n{}",
+             (full-file contents per created/modified path; op \"delete\" removes an \
+             existing file and carries \"contents\": null):\n{}",
             self.objective,
             self.base_sha,
             self.scope_line(),
@@ -56,13 +56,15 @@ impl Capsule {
         )
     }
 
-    /// Feedback after a delete op, which the workspace daemon does not accept.
+    /// Feedback after the daemon refused a delete whose target is not an
+    /// existing regular file (typed `PATH_ABSENT`). Nothing was applied.
     #[must_use]
-    pub fn delete_refused_prompt(&self, path: &str) -> String {
+    pub fn path_absent_prompt(&self, detail: &str) -> String {
         format!(
-            "DELETE_UNSUPPORTED: your previous proposal deletes \"{path}\", but delete \
-             operations are not supported in this environment. Nothing was applied.\n\
-             Re-propose a PatchProposal using only create and modify operations.",
+            "PATH_ABSENT: {detail}\n\
+             The whole proposal was refused; nothing was applied and the workspace is \
+             unchanged. Delete targets must be files that exist in the workspace.\n\
+             Re-propose a complete PatchProposal without that delete.",
         )
     }
 
@@ -111,7 +113,10 @@ mod tests {
     fn feedback_prompts_are_typed() {
         let c = capsule();
         assert!(c.scope_denied_prompt("x/y").contains("SCOPE_DENIED"));
-        assert!(c.delete_refused_prompt("z").contains("DELETE_UNSUPPORTED"));
+        let absent = c.path_absent_prompt("no regular file to delete at: z");
+        assert!(absent.contains("PATH_ABSENT"));
+        assert!(absent.contains("z"));
+        assert!(absent.contains("nothing was applied"));
         let report = GateReport {
             command: "test -f PONG.txt".into(),
             exit_code: Some(1),

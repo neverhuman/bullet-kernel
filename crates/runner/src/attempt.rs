@@ -14,8 +14,8 @@ use crate::lease::{AcquireGrant, AcquireRequest, HeartbeatCall, LeaseClient, Rel
 use crate::scope;
 use bullet_domain::{AttemptId, AttemptState};
 use bullet_harness_core::{
-    AgentEventKind, AgentSessionId, ChangeOp, HarnessAdapter, PatchProposal, SessionHandle,
-    StartSession, Turn,
+    AgentEventKind, AgentSessionId, HarnessAdapter, PatchProposal, SessionHandle, StartSession,
+    Turn,
 };
 use futures::StreamExt;
 use serde_json::Value;
@@ -271,15 +271,23 @@ async fn session_loop(
         let proposal = latest_proposal(adapter, session).await?;
         if let Some(refusal) = pre_apply_refusal(capsule, &proposal) {
             journal.record(refusal.stage, &refusal.detail);
-            rounds += 1;
-            if rounds > config.max_repair_rounds {
-                return Err(RunnerError::CapsExhausted { rounds });
-            }
+            spend_repair_round(&mut rounds, config)?;
             prompt = refusal.prompt;
             continue;
         }
         check_freeze(heartbeat)?;
-        let applied = gitd.apply_change(&proposal.changes).await?;
+        let applied = match gitd.apply_change(&proposal.changes).await {
+            Ok(count) => count,
+            Err(err) => {
+                let Some(detail) = err.path_absent_detail().map(String::from) else {
+                    return Err(err);
+                };
+                journal.record("path_absent", &detail);
+                spend_repair_round(&mut rounds, config)?;
+                prompt = capsule.path_absent_prompt(&detail);
+                continue;
+            }
+        };
         journal.record("patch_applied", &format!("{applied} paths"));
         let gate = run_gate(&ws.repo_dir, &config.gate_command, config.gate_timeout).await?;
         journal.record(
@@ -289,12 +297,18 @@ async fn session_loop(
         if gate.passed() && proposal.done {
             return Ok((gate, rounds));
         }
-        rounds += 1;
-        if rounds > config.max_repair_rounds {
-            return Err(RunnerError::CapsExhausted { rounds });
-        }
+        spend_repair_round(&mut rounds, config)?;
         prompt = capsule.gate_feedback_prompt(&gate);
     }
+}
+
+/// Consume one bounded repair round; typed `CAPS_EXHAUSTED` when spent.
+fn spend_repair_round(rounds: &mut u32, config: &AttemptConfig) -> Result<(), RunnerError> {
+    *rounds += 1;
+    if *rounds > config.max_repair_rounds {
+        return Err(RunnerError::CapsExhausted { rounds: *rounds });
+    }
+    Ok(())
 }
 
 struct Refusal {
@@ -303,20 +317,10 @@ struct Refusal {
     prompt: String,
 }
 
-/// Typed refusals the loop feeds back BEFORE any apply: out-of-scope paths
-/// and delete ops the daemon does not accept.
+/// Typed refusal the loop feeds back BEFORE any apply: an out-of-scope
+/// path. Delete entries are scope-checked exactly like writes; a delete of
+/// a missing file is refused by the daemon at apply as `PATH_ABSENT`.
 fn pre_apply_refusal(capsule: &Capsule, proposal: &PatchProposal) -> Option<Refusal> {
-    if let Some(change) = proposal
-        .changes
-        .iter()
-        .find(|change| change.op == ChangeOp::Delete)
-    {
-        return Some(Refusal {
-            stage: "delete_refused",
-            detail: change.path.clone(),
-            prompt: capsule.delete_refused_prompt(&change.path),
-        });
-    }
     if let Err(RunnerError::ScopeDenied { path }) =
         scope::validate_proposal(&capsule.scope_prefixes, proposal)
     {

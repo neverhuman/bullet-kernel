@@ -97,6 +97,16 @@ impl RunnerError {
         matches!(self, Self::StaleAuthority(_))
     }
 
+    /// The daemon detail when this is the repairable `PATH_ABSENT` refusal
+    /// (a delete target that is not an existing regular file).
+    #[must_use]
+    pub fn path_absent_detail(&self) -> Option<&str> {
+        match self {
+            Self::Gitd { code, message, .. } if code == "PATH_ABSENT" => Some(message),
+            _ => None,
+        }
+    }
+
     /// True for the freeze class: stale authority or the self-kill deadline.
     #[must_use]
     pub fn is_frozen(&self) -> bool {
@@ -125,5 +135,21 @@ mod tests {
         assert!(RunnerError::StaleAuthority("x".into()).is_frozen());
         assert!(RunnerError::SelfKill { elapsed_ms: 1 }.is_frozen());
         assert!(!RunnerError::CapsExhausted { rounds: 2 }.is_frozen());
+    }
+
+    #[test]
+    fn path_absent_detail_is_extracted() {
+        let refused = RunnerError::Gitd {
+            method: "apply_change".into(),
+            code: "PATH_ABSENT".into(),
+            message: "no regular file to delete at: z".into(),
+        };
+        assert_eq!(
+            refused.path_absent_detail(),
+            Some("no regular file to delete at: z")
+        );
+        assert!(RunnerError::Protocol("x".into())
+            .path_absent_detail()
+            .is_none());
     }
 }

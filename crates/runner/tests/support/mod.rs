@@ -77,6 +77,18 @@ pub fn seeded_ledger(seed: &str) -> (Arc<Mutex<MemoryLedger>>, WorkPackageId) {
     (Arc::new(Mutex::new(ledger)), package)
 }
 
+/// A complete done=true proposal wrapping the given change entries.
+pub fn proposal_with_changes(intent: &str, changes: Value) -> Value {
+    serde_json::json!({
+        "intent_summary": intent,
+        "changes": changes,
+        "tests_to_run": [],
+        "claims": [],
+        "uncertainties": [],
+        "done": true
+    })
+}
+
 /// A proposal whose path is outside every test scope grant.
 pub fn out_of_scope_proposal() -> Value {
     serde_json::json!({
