@@ -22,13 +22,18 @@ pub use adapter::{
     PlanDecision, QuotaObservation, ResumeSession, SessionCheckpoint, SessionHandle, StartSession,
     SteeringMessage, Turn, TurnHandle,
 };
-pub use argv::{filter_env, ArgvBuilder, InvocationBudget, PreparedInvocation};
+pub use argv::{
+    filter_env, live_admission_granted, ArgvBuilder, InvocationBudget, PreparedInvocation,
+    LIVE_ADMISSION_TOKEN, LIVE_ADMISSION_VAR,
+};
 pub use capability::{Capability, CapabilityMatrix, CapabilityState, PromotionStage};
 pub use error::HarnessError;
 pub use event::{
     AgentEvent, AgentEventKind, AgentEventPayload, ArtifactRef, EventNormalizer, NativeMeta,
 };
-pub use ids::{synthetic_uuid, AgentSessionId, EventId, InvocationId};
+pub use ids::{
+    is_canonical_uuid, stable_uuid, synthetic_uuid, AgentSessionId, EventId, InvocationId,
+};
 pub use probe::{ExpectedProfile, ProbeResult, ProfileIdentity, ProfileRef};
 pub use proposal::{ChangeOp, FileChange, PatchProposal};
 pub use session::SessionState;

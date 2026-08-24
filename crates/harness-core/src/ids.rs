@@ -63,6 +63,48 @@ pub fn synthetic_uuid(seed: &str) -> String {
     )
 }
 
+/// Whether `text` is a canonical lowercase RFC 4122 UUID: 8-4-4-4-12 hex
+/// digits with dashes at positions 8, 13, 18, 23 and no uppercase.
+#[must_use]
+pub fn is_canonical_uuid(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(idx, byte)| match idx {
+        8 | 13 | 18 | 23 => *byte == b'-',
+        _ => byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase(),
+    })
+}
+
+/// Map any caller label to a stable canonical UUID for providers that require
+/// a real UUID session id (claude 2.1.241 rejects non-UUIDs). A label that is
+/// already a canonical UUID passes through unchanged; every other label maps
+/// deterministically to the same v4-shaped UUID on every call, derived from
+/// the BLAKE3 digest of the label with the version nibble and RFC 4122 variant
+/// bits set. Unlike `synthetic_uuid`, this is a pure function of the label.
+#[must_use]
+pub fn stable_uuid(label: &str) -> String {
+    if is_canonical_uuid(label) {
+        return label.to_string();
+    }
+    let digest = blake3::hash(label.as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest.as_bytes()[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let h = hex.as_str();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +130,32 @@ mod tests {
         let id = AgentSessionId::new("abc");
         assert_eq!(id.as_str(), "abc");
         assert_eq!(id.to_string(), "abc");
+    }
+
+    #[test]
+    fn stable_uuid_is_deterministic_canonical_and_passes_uuids_through() {
+        // Deterministic: the same label always yields the same UUID.
+        let first = stable_uuid("plan-claude-2");
+        assert_eq!(first, stable_uuid("plan-claude-2"));
+        // Canonical v4-shaped UUID out of a non-UUID label.
+        assert!(is_canonical_uuid(&first), "{first} must be canonical");
+        assert_eq!(first.len(), 36);
+        assert_eq!(first.as_bytes()[14], b'4', "version nibble");
+        assert!(
+            matches!(first.as_bytes()[19], b'8' | b'9' | b'a' | b'b'),
+            "RFC 4122 variant nibble, got {}",
+            first.as_bytes()[19] as char
+        );
+        // The label that broke the 2026-08-24 live run no longer reaches claude.
+        assert!(!is_canonical_uuid("plan-claude-2"));
+        assert_ne!(stable_uuid("plan-claude-1"), stable_uuid("plan-claude-2"));
+        assert_ne!(stable_uuid("atm_02ded31dd58aba625722a55fd35ac97d"), first);
+        // A real UUID passes through byte-for-byte unchanged (resume safety).
+        let real = "60dace9d-6d37-48c5-b9ce-0e5b703cbe84";
+        assert_eq!(stable_uuid(real), real);
+        // Uppercase is not canonical; it is re-derived rather than passed.
+        let upper = "60DACE9D-6D37-48C5-B9CE-0E5B703CBE84";
+        assert!(!is_canonical_uuid(upper));
+        assert!(is_canonical_uuid(&stable_uuid(upper)));
     }
 }

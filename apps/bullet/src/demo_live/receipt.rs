@@ -201,7 +201,8 @@ fn candidate_failures(candidate: &CandidateOut, failures: &mut Vec<String>) {
 #[must_use]
 pub fn compute_scaffold_failures(receipt: &SyntheticIntegrationReceipt) -> Vec<String> {
     let mut failures = Vec::new();
-    let classification_ok = receipt.classification == "SYNTHETIC_INTEGRATION_SCAFFOLD";
+    let classification_ok = receipt.classification == "SYNTHETIC_INTEGRATION_SCAFFOLD"
+        || receipt.classification == "LIVE_DEMONSTRATION";
     if !classification_ok || receipt.transaction_gate_eligible {
         failures.push("SYNTHETIC_CLASSIFICATION_INVALID".into());
     }
@@ -367,6 +368,16 @@ mod tests {
         let failures = compute_scaffold_failures(&missing);
         assert!(failures.contains(&"CANDIDATE_MISSING".to_string()));
         assert!(failures.contains(&"WRITER_GATE_MISSING".to_string()));
+    }
+
+    #[test]
+    fn live_demonstration_classification_is_accepted_and_still_non_gating() {
+        let mut live = good();
+        live.classification = "LIVE_DEMONSTRATION".into();
+        assert!(compute_scaffold_failures(&live).is_empty());
+        live.transaction_gate_eligible = true;
+        assert!(compute_scaffold_failures(&live)
+            .contains(&"SYNTHETIC_CLASSIFICATION_INVALID".to_string()));
     }
 
     #[test]
