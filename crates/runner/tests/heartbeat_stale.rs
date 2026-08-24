@@ -43,13 +43,20 @@ fn request_for(package: WorkPackageId, key: &str) -> AcquireRequest {
     }
 }
 
-async fn wait_for_attempt(ledger: &SharedLedger, attempt_id: &AttemptId) -> bool {
+async fn wait_for_attempt_state(
+    ledger: &SharedLedger,
+    attempt_id: &AttemptId,
+    expected: AttemptState,
+) -> bool {
     for _ in 0..250 {
-        let present = {
+        let reached = {
             let ledger = ledger.lock().expect("ledger");
-            ledger.get_attempt(attempt_id).expect("read").is_some()
+            ledger
+                .get_attempt(attempt_id)
+                .expect("read")
+                .is_some_and(|attempt| attempt.state == expected)
         };
-        if present {
+        if reached {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -113,8 +120,8 @@ async fn tampered_lease_freezes_checkpoints_and_terminates() {
         })
     };
     assert!(
-        wait_for_attempt(&ledger, &attempt_id).await,
-        "attempt row never appeared"
+        wait_for_attempt_state(&ledger, &attempt_id, AttemptState::Running).await,
+        "attempt never reached Running"
     );
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(expire_all(&ledger), 1, "the live lease was expired");
