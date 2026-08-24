@@ -21,3 +21,9 @@ verify: check
 
 demo:
     BULLET_DATA_DIR=./target/demo cargo run -p bullet -- demo
+
+audit:
+    bash scripts/ci-local.sh audit
+
+nightly:
+    bash scripts/ci-local.sh nightly
