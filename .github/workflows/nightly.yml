@@ -1,6 +1,9 @@
 name: nightly
 
-# Live harnesses only. Missing binaries or credentials skip, never fail merge.
+# Registered live-adapter lane (ops/ci/nightly.sh). Neutral when
+# BULLET_LIVE_PROVIDERS is unset; when set, every named provider CLI must be
+# present and its live smoke must pass. Spawns still pass through the harness
+# admission gate, so an unadmitted request fails closed rather than skipping.
 
 on:
   schedule:
@@ -10,8 +13,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: nightly-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   nightly:
+    name: live-adapter-lane
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -20,7 +28,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
       - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
-      - name: Nightly (skip if unset)
-        run: bash scripts/ci-local.sh nightly
+      - name: Nightly (registered providers only)
+        run: bash ops/ci/nightly.sh
         env:
-          BULLET_LIVE_HARNESS: ${{ secrets.BULLET_LIVE_HARNESS }}
+          BULLET_LIVE_PROVIDERS: ${{ secrets.BULLET_LIVE_PROVIDERS }}

@@ -67,7 +67,7 @@
     },
     "crates/behavior/": {
       "command": "cargo test -p bullet-behavior",
-      "purpose": "prove the §17 planned catalog and non-authoritative detector scaffolds"
+      "purpose": "prove the \u00a717 planned catalog and non-authoritative detector scaffolds"
     },
     "crates/router/": {
       "command": "cargo test -p bullet-router",
@@ -87,7 +87,51 @@
     },
     "crates/projections/": {
       "command": "cargo test -p bullet-projections",
-      "purpose": "prove §25 surfaces fail to unknown, not empty"
+      "purpose": "prove \u00a725 surfaces fail to unknown, not empty"
+    },
+    "README.md": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "documentation; the fast lane proves the commands it names"
+    },
+    "AGENTS.md": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "agent entrypoint; the fast lane proves the commands it names"
+    },
+    "SPLIT.md": {
+      "command": "bash scripts/ci-local.sh required",
+      "purpose": "split-family contract; the required lane is the check it names"
+    },
+    "Justfile": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "command surface; every recipe delegates to scripts/ci-local.sh"
+    },
+    ".gitignore": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "ignore rules; the fast lane proves the tree still builds"
+    },
+    "LICENSE": {
+      "command": "test -s LICENSE",
+      "purpose": "license text; no executable proof"
+    },
+    "agent/": {
+      "command": "bash ops/ci/audit.sh",
+      "purpose": "Jankurai metadata; the audit lane validates it"
+    },
+    ".config/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "nextest profiles used by every lane"
+    },
+    "Cargo.toml": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "workspace manifest"
+    },
+    "Cargo.lock": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "locked dependency graph"
+    },
+    "db/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "SQLite migrations applied by the adapters tests"
     }
   }
 }
