@@ -38,13 +38,11 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Mission"
+                $ref: "#/components/schemas/MissionListSnapshot"
         "500":
           description: store failure
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
   /v1/missions/{id}:
@@ -69,17 +67,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MissionView"
+                $ref: "#/components/schemas/MissionSnapshot"
         "400":
           description: invalid id
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
         "404":
           description: missing
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
   /v1/demo:
@@ -88,12 +86,17 @@ paths:
       responses:
         "200":
           description: receipt or null
+          headers:
+            X-Bullet-As-Of-Sequence:
+              description: Latest durable event sequence covered by this snapshot.
+              required: true
+              schema:
+                type: integer
+                format: uint64
           content:
             application/json:
               schema:
-                oneOf:
-                  - $ref: "#/components/schemas/DemoReceipt"
-                  - type: "null"
+                $ref: "#/components/schemas/DemoSnapshot"
   /v1/demo/run:
     post:
       summary: Run the simulator demonstration
@@ -120,7 +123,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OutboxView"
+                $ref: "#/components/schemas/OutboxSnapshot"
   /v1/events:
     get:
       summary: Server-sent event stream of ledger events
@@ -128,6 +131,8 @@ paths:
         Emits one default SSE message per ledger event with the ledger sequence
         as the SSE id and an EventEnvelope as data. Resume with either `after`
         or `Last-Event-ID`; supplying both is a typed error. Cursors are exclusive.
+        Replay is bounded to 1024 events and unavailable or retained-away cursors
+        return a typed 410 before the event stream is opened.
       parameters:
         - in: query
           name: after
@@ -145,11 +150,17 @@ paths:
           content:
             text/event-stream:
               schema:
-                $ref: "#/components/schemas/Event"
+                $ref: "#/components/schemas/EventEnvelope"
         "400":
           description: malformed or conflicting cursor
           content:
-            application/json:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: exclusive cursor is unavailable; refresh a snapshot
+          content:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
   /v1/leases/acquire:
@@ -171,19 +182,19 @@ paths:
         "400":
           description: invalid request
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
         "404":
           description: unknown work package
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
         "409":
           description: refused (already leased, fence or idempotency conflict)
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
   /v1/leases/heartbeat:
@@ -201,7 +212,7 @@ paths:
         "409":
           description: stale authority (zero matched rows)
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
   /v1/leases/release:
@@ -219,13 +230,13 @@ paths:
         "404":
           description: unknown attempt
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
         "409":
           description: lease held by another attempt
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
   /v1/attempts/advance:
@@ -243,13 +254,13 @@ paths:
         "400":
           description: illegal transition or unknown state label
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
         "404":
           description: unknown attempt
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
   /v1/ready:
@@ -268,11 +279,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ReadyView"
+                $ref: "#/components/schemas/ReadySnapshot"
         "404":
           description: ready queue empty
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
 components:
@@ -332,12 +343,34 @@ components:
             $ref: "#/components/schemas/WorkPackage"
         fence:
           type: [integer, "null"]
+    MissionListSnapshot:
+      type: object
+      additionalProperties: false
+      required: [data, as_of_sequence, observed_at, source]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Mission"
+        as_of_sequence: { type: integer }
+        observed_at: { type: string, format: date-time }
+        source: { type: string, enum: [bullet-kernel/sqlite-ledger] }
+    MissionSnapshot:
+      type: object
+      additionalProperties: false
+      required: [data, as_of_sequence, observed_at, source]
+      properties:
+        data:
+          $ref: "#/components/schemas/MissionView"
+        as_of_sequence: { type: integer }
+        observed_at: { type: string, format: date-time }
+        source: { type: string, enum: [bullet-kernel/sqlite-ledger] }
     DemoReceipt:
       type: object
       required:
         - mission_id
         - plan_hash
-        - fence
+        - fence_first
         - attempt_id
         - fence_second
         - attempt_second_id
@@ -351,7 +384,7 @@ components:
       properties:
         mission_id: { type: string }
         plan_hash: { type: string }
-        fence: { type: integer }
+        fence_first: { type: integer }
         attempt_id: { type: string }
         fence_second: { type: integer }
         attempt_second_id: { type: string }
@@ -362,6 +395,18 @@ components:
         effect_unknown_outcome: { type: string }
         materialize_idempotent: { type: boolean }
         stale_refused: { type: boolean }
+    DemoSnapshot:
+      type: object
+      additionalProperties: false
+      required: [data, as_of_sequence, observed_at, source]
+      properties:
+        data:
+          oneOf:
+            - $ref: "#/components/schemas/DemoReceipt"
+            - type: "null"
+        as_of_sequence: { type: integer }
+        observed_at: { type: string, format: date-time }
+        source: { type: string, enum: [bullet-kernel/sqlite-ledger] }
     OutboxItem:
       type: object
       required: [seq, kind, payload, phase, delivered_at, acked_at]
@@ -382,7 +427,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OutboxItem"
-    Event:
+    OutboxSnapshot:
+      type: object
+      additionalProperties: false
+      required: [data, as_of_sequence, observed_at, source]
+      properties:
+        data:
+          $ref: "#/components/schemas/OutboxView"
+        as_of_sequence: { type: integer }
+        observed_at: { type: string, format: date-time }
+        source: { type: string, enum: [bullet-kernel/sqlite-ledger] }
+    EventEnvelope:
       type: object
       required:
         - id
@@ -398,14 +453,28 @@ components:
         body: { type: string }
     Problem:
       type: object
-      required: [type, title, status, code, correlation_id, retryable]
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+        - code
+        - request_id
+        - correlation_id
+        - retryable
+        - repair
       properties:
         type: { type: string }
         title: { type: string }
         status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
         code: { type: string }
+        request_id: { type: string }
         correlation_id: { type: string }
         retryable: { type: boolean }
+        repair: { type: string }
     WorkspaceNonce:
       type: array
       items:
@@ -568,3 +637,13 @@ components:
         variant_id: { type: string }
         title: { type: string }
         enqueued_at: { type: string }
+    ReadySnapshot:
+      type: object
+      additionalProperties: false
+      required: [data, as_of_sequence, observed_at, source]
+      properties:
+        data:
+          $ref: "#/components/schemas/ReadyView"
+        as_of_sequence: { type: integer }
+        observed_at: { type: string, format: date-time }
+        source: { type: string, enum: [bullet-kernel/sqlite-ledger] }

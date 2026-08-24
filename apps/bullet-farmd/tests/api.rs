@@ -1,5 +1,8 @@
 //! HTTP surface tests against a real served socket and a temp database.
 
+use bullet_adapters::SqliteLedger;
+use bullet_domain::Digest;
+use rusqlite::{params, Connection};
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -92,6 +95,42 @@ fn json_body(body: &str) -> Value {
     serde_json::from_str(&unchunked).expect("json body")
 }
 
+fn snapshot_data(body: &str) -> Value {
+    let snapshot = json_body(body);
+    let object = snapshot.as_object().expect("snapshot object");
+    let mut keys: Vec<_> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["as_of_sequence", "data", "observed_at", "source"],
+        "snapshot has exactly the four public fields"
+    );
+    assert!(snapshot["as_of_sequence"].is_u64());
+    chrono::DateTime::parse_from_rfc3339(snapshot["observed_at"].as_str().expect("observed_at"))
+        .expect("RFC 3339 observation time");
+    assert_eq!(snapshot["source"], "bullet-kernel/sqlite-ledger");
+    snapshot["data"].clone()
+}
+
+fn insert_events(db: &Path, count: u64) {
+    drop(SqliteLedger::open(db).expect("initialize ledger"));
+    let mut connection = Connection::open(db).expect("raw open");
+    let transaction = connection.transaction().expect("transaction");
+    for sequence in 1..=count {
+        let kind = "fixture";
+        let body = sequence.to_string();
+        let id = Digest::of(format!("evt:{sequence}:{kind}:{body}").as_bytes()).to_hex();
+        transaction
+            .execute(
+                "INSERT INTO events (seq, kind, body, at, event_id, sequence)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?1)",
+                params![sequence, kind, body, "2026-01-01T00:00:00.000Z", id],
+            )
+            .expect("fixture event");
+    }
+    transaction.commit().expect("commit fixtures");
+}
+
 #[tokio::test]
 async fn health_missions_and_demo_are_null_safe_on_empty_db() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -101,17 +140,17 @@ async fn health_missions_and_demo_are_null_safe_on_empty_db() {
     assert_eq!(json_body(&body)["status"], "ok");
     let (status, body) = request(addr, "GET", "/v1/missions").await;
     assert_eq!(status, 200);
-    assert_eq!(json_body(&body), Value::Array(vec![]));
+    assert_eq!(snapshot_data(&body), Value::Array(vec![]));
     let (status, body) = request(addr, "GET", "/v1/demo").await;
     assert_eq!(status, 200);
     assert_eq!(
-        json_body(&body),
+        snapshot_data(&body),
         Value::Null,
         "no fabricated receipt before a run"
     );
     let (status, body) = request(addr, "GET", "/v1/outbox").await;
     assert_eq!(status, 200);
-    assert_eq!(json_body(&body)["items"], Value::Array(vec![]));
+    assert_eq!(snapshot_data(&body)["items"], Value::Array(vec![]));
 }
 
 #[tokio::test]
@@ -121,25 +160,25 @@ async fn demo_run_populates_views_with_real_rows() {
     let (status, body) = request(addr, "POST", "/v1/demo/run").await;
     assert_eq!(status, 200);
     let receipt = json_body(&body);
-    assert_eq!(receipt["fence"], 1);
+    assert_eq!(receipt["fence_first"], 1);
     assert_eq!(receipt["fence_second"], 2);
     assert_eq!(receipt["stale_refused"], true);
     assert_eq!(receipt["effect_unknown_outcome"], "unknown");
     let (status, body) = request(addr, "GET", "/v1/demo").await;
     assert_eq!(status, 200);
-    assert_eq!(json_body(&body)["fence_second"], 2);
+    assert_eq!(snapshot_data(&body)["fence_second"], 2);
     let mission_id = receipt["mission_id"]
         .as_str()
         .expect("mission id")
         .to_string();
     let (status, body) = request(addr, "GET", &format!("/v1/missions/{mission_id}")).await;
     assert_eq!(status, 200);
-    let view = json_body(&body);
+    let view = snapshot_data(&body);
     assert_eq!(view["mission"]["id"], receipt["mission_id"]);
     assert_eq!(view["fence"], 2);
     let (status, body) = request(addr, "GET", "/v1/outbox").await;
     assert_eq!(status, 200);
-    let outbox = json_body(&body);
+    let outbox = snapshot_data(&body);
     let items = outbox["items"].as_array().expect("items");
     assert!(items.iter().any(|item| item["kind"] == "dispatch_attempt"));
     assert!(items.iter().any(|item| item["phase"] == "verified"));
@@ -169,22 +208,28 @@ async fn events_sse_streams_the_first_chunk_with_sequence_ids() {
             .expect("read");
         assert!(read > 0, "stream closed before first event");
         collected.push_str(&String::from_utf8_lossy(&chunk[..read]));
-        if collected.contains("data:") {
+        if collected.matches("data:").count() >= 2 {
             break;
         }
     }
     assert!(collected.contains("text/event-stream"));
     assert!(collected.contains("id: 1"), "first frame carries seq 1");
+    assert!(collected.find("id: 1") < collected.find("id: 2"));
     assert!(
         !collected.contains("\nevent:"),
         "protocol uses only default SSE messages"
     );
-    assert!(
-        collected.contains("\"kind\":\"planner_proposal\"")
-            && collected.contains("\"at\":\"20")
-            && collected.contains("\"id\":"),
-        "data is a durable EventEnvelope"
-    );
+    let data = collected
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("default SSE data line");
+    let envelope: Value = serde_json::from_str(data).expect("EventEnvelope JSON");
+    let object = envelope.as_object().expect("envelope object");
+    assert_eq!(object.len(), 5);
+    assert_eq!(envelope["seq"], 1);
+    assert_eq!(envelope["kind"], "planner_proposal");
+    assert!(envelope["at"].as_str().expect("at").starts_with("20"));
+    assert!(envelope["id"].as_str().is_some_and(|id| id.len() == 64));
 }
 
 #[tokio::test]
@@ -202,6 +247,20 @@ async fn event_cursors_are_exclusive_and_last_event_id_resumes_after_the_cursor(
     let malformed = raw_request(addr, "GET", "/v1/events?after=not-a-sequence").await;
     assert!(malformed.starts_with("HTTP/1.1 400"));
     assert!(malformed.contains("INVALID_CURSOR"));
+
+    for path in ["/v1/events?after=1&after=2", "/v1/events?cursor=1"] {
+        let rejected = raw_request(addr, "GET", path).await;
+        assert!(rejected.starts_with("HTTP/1.1 400"), "{path}");
+    }
+    let duplicate_header = raw_request_with_headers(
+        addr,
+        "GET",
+        "/v1/events",
+        "Last-Event-ID: 1\r\nLast-Event-ID: 2\r\n",
+    )
+    .await;
+    assert!(duplicate_header.starts_with("HTTP/1.1 400"));
+    assert!(duplicate_header.contains("CONFLICTING_CURSOR"));
 
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     stream
@@ -257,7 +316,9 @@ async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
         .split_once("\r\n\r\n")
         .map(|(_, body)| body)
         .expect("mission response body");
-    let mission_rows = json_body(mission_body);
+    let mission_snapshot = json_body(mission_body);
+    assert_eq!(mission_snapshot["as_of_sequence"], mission_sequence);
+    let mission_rows = snapshot_data(mission_body);
     let mission_id = mission_rows[0]["id"].as_str().expect("mission id");
     for path in [format!("/v1/missions/{mission_id}"), "/v1/ready".into()] {
         let response = raw_request(addr, "GET", &path).await;
@@ -269,7 +330,90 @@ async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
             mission_sequence,
             "{path} must cover the same durable sequence"
         );
+        let body = response.split_once("\r\n\r\n").expect("body").1;
+        assert_eq!(json_body(body)["as_of_sequence"], mission_sequence);
     }
+}
+
+#[tokio::test]
+async fn missing_durable_stale_refusal_makes_demo_projection_unknown() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("ledger.sqlite");
+    let addr = start(&db).await;
+    assert_eq!(request(addr, "POST", "/v1/demo/run").await.0, 200);
+    Connection::open(&db)
+        .expect("raw open")
+        .execute(
+            "DELETE FROM events WHERE kind = 'demo_stale_authority_refused'",
+            [],
+        )
+        .expect("remove proof");
+    let (status, body) = request(addr, "GET", "/v1/demo").await;
+    assert_eq!(status, 200);
+    assert_eq!(snapshot_data(&body), Value::Null);
+}
+
+#[tokio::test]
+async fn unavailable_and_corrupt_replays_fail_before_sse_200() {
+    for (name, mutation, after, expected) in [
+        (
+            "retained-prefix",
+            "DELETE FROM events WHERE seq = 1",
+            0,
+            410,
+        ),
+        ("internal-gap", "DELETE FROM events WHERE seq = 2", 1, 410),
+        (
+            "corrupt-first",
+            "UPDATE events SET event_id = 'bad' WHERE seq = 1",
+            0,
+            500,
+        ),
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join(format!("{name}.sqlite"));
+        let addr = start(&db).await;
+        assert_eq!(request(addr, "POST", "/v1/demo/run").await.0, 200);
+        Connection::open(&db)
+            .expect("raw open")
+            .execute(mutation, [])
+            .expect("hostile mutation");
+        let response = raw_request(addr, "GET", &format!("/v1/events?after={after}")).await;
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {expected}")),
+            "{name}: {response}"
+        );
+        assert_eq!(
+            response_header(&response, "content-type").as_deref(),
+            Some("application/problem+json")
+        );
+        assert!(!response.contains("text/event-stream"));
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let late_gap = dir.path().join("late-gap.sqlite");
+    insert_events(&late_gap, 100);
+    Connection::open(&late_gap)
+        .expect("raw open")
+        .execute("DELETE FROM events WHERE seq = 70", [])
+        .expect("late gap");
+    let response = raw_request(start(&late_gap).await, "GET", "/v1/events?after=0").await;
+    assert!(response.starts_with("HTTP/1.1 410"));
+    assert!(!response.contains("text/event-stream"));
+
+    let db = dir.path().join("bounded.sqlite");
+    insert_events(&db, 1_025);
+    let response = raw_request(start(&db).await, "GET", "/v1/events?after=0").await;
+    assert!(response.starts_with("HTTP/1.1 410"));
+
+    let future = raw_request(
+        start(&dir.path().join("empty.sqlite")).await,
+        "GET",
+        "/v1/events?after=1",
+    )
+    .await;
+    assert!(future.starts_with("HTTP/1.1 410"));
+    assert!(future.contains("REPLAY_UNAVAILABLE"));
 }
 
 #[tokio::test]
@@ -277,11 +421,31 @@ async fn problem_details_cover_400_404_and_500() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = dir.path().join("ledger.sqlite");
     let addr = start(&db).await;
-    let (status, body) = request(addr, "GET", "/v1/missions/not-an-id").await;
-    assert_eq!(status, 400);
-    let problem = json_body(&body);
+    let invalid = raw_request(addr, "GET", "/v1/missions/not-an-id").await;
+    assert!(invalid.starts_with("HTTP/1.1 400"));
+    assert_eq!(
+        response_header(&invalid, "content-type").as_deref(),
+        Some("application/problem+json")
+    );
+    let problem = json_body(invalid.split_once("\r\n\r\n").expect("body").1);
     assert_eq!(problem["code"], "INVALID_ID");
     assert_eq!(problem["status"], 400);
+    for field in [
+        "type",
+        "title",
+        "detail",
+        "instance",
+        "request_id",
+        "correlation_id",
+        "repair",
+    ] {
+        assert!(
+            problem[field]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "{field}"
+        );
+    }
     let missing = format!("/v1/missions/mis_{}", "0".repeat(32));
     let (status, body) = request(addr, "GET", &missing).await;
     assert_eq!(status, 404);

@@ -2,7 +2,7 @@
 //! are 500s and never leak raw store strings; domain refusals map to stable
 //! reason codes.
 
-use axum::http::StatusCode;
+use axum::http::{header::CONTENT_TYPE, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use bullet_application::LedgerError;
@@ -18,12 +18,20 @@ pub struct Problem {
     pub title: String,
     /// HTTP status.
     pub status: u16,
+    /// Human-readable occurrence detail without internal store text.
+    pub detail: String,
+    /// URI identifying this occurrence.
+    pub instance: String,
     /// Stable machine-readable reason code.
     pub code: String,
+    /// Request id returned to callers and logs.
+    pub request_id: String,
     /// Correlation id for log lookup.
     pub correlation_id: String,
     /// Whether the caller may retry unchanged.
     pub retryable: bool,
+    /// Actionable operator or client recovery guidance.
+    pub repair: String,
 }
 
 /// API failure. Conversion from ledger errors picks the status class.
@@ -36,6 +44,8 @@ pub enum ApiError {
     Conflict(DomainError),
     /// A request-level protocol rule was violated.
     BadRequest(&'static str),
+    /// The requested exclusive event cursor is no longer replayable.
+    ReplayUnavailable(String),
     /// The database schema is not supported by this pre-1.0 binary.
     UnsupportedSchema(String),
     /// The durable store failed. Logged; the detail is not exposed.
@@ -77,6 +87,7 @@ fn title_for(code: &str) -> &'static str {
         "UNKNOWN_STATE" => "Unknown state label",
         "CONFLICTING_CURSOR" => "Conflicting event cursors",
         "INVALID_CURSOR" => "Invalid event cursor",
+        "REPLAY_UNAVAILABLE" => "Event replay unavailable",
         "NOT_FOUND" => "Resource not found",
         "UNSUPPORTED_SCHEMA" => "Unsupported database schema",
         "STORE_FAILURE" => "Ledger store failure",
@@ -91,6 +102,7 @@ impl ApiError {
             Self::Invalid(err) => (StatusCode::BAD_REQUEST, err.reason_code().into(), false),
             Self::Conflict(err) => (StatusCode::CONFLICT, err.reason_code().into(), false),
             Self::BadRequest(code) => (StatusCode::BAD_REQUEST, (*code).into(), false),
+            Self::ReplayUnavailable(_) => (StatusCode::GONE, "REPLAY_UNAVAILABLE".into(), false),
             Self::UnsupportedSchema(_) => (
                 StatusCode::PRECONDITION_FAILED,
                 "UNSUPPORTED_SCHEMA".into(),
@@ -107,15 +119,6 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        if let Self::Internal(detail) = &self {
-            tracing::error!(detail, "ledger store failure");
-        }
-        if let Self::UnsupportedSchema(detail) = &self {
-            tracing::error!(
-                detail,
-                "database requires export and removal before restart"
-            );
-        }
         let (status, code, retryable) = self.status_and_code();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -125,6 +128,41 @@ impl IntoResponse for ApiError {
             "corr_{}",
             &Digest::of(format!("{code}:{nanos}").as_bytes()).to_hex()[..16]
         );
+        let request_id = format!(
+            "req_{}",
+            &Digest::of(format!("request:{code}:{nanos}").as_bytes()).to_hex()[..16]
+        );
+        if let Self::Internal(detail) = &self {
+            tracing::error!(detail, %request_id, %correlation_id, "ledger store failure");
+        }
+        if let Self::UnsupportedSchema(detail) = &self {
+            tracing::error!(
+                detail,
+                %request_id,
+                %correlation_id,
+                "database requires export and removal before restart"
+            );
+        }
+        let detail = match &self {
+            Self::NotFound(resource) => format!("{resource} was not found"),
+            Self::Invalid(_) => "The request violates a validated domain invariant.".into(),
+            Self::Conflict(_) => "The request conflicts with current durable authority.".into(),
+            Self::BadRequest(_) => "Supply exactly one non-negative decimal event cursor.".into(),
+            Self::ReplayUnavailable(detail) => detail.clone(),
+            Self::UnsupportedSchema(_) => {
+                "This database schema is not supported by this pre-1.0 binary.".into()
+            }
+            Self::Internal(_) => "The durable ledger could not produce a trusted result.".into(),
+        };
+        let repair = match &self {
+            Self::ReplayUnavailable(_) => "Fetch a fresh projection snapshot, then reconnect with its as_of_sequence as the exclusive cursor.",
+            Self::UnsupportedSchema(_) => "Export any data you need, remove the unsupported database, and restart to initialize the current schema.",
+            Self::Internal(_) => "Retry once; if the failure persists, use request_id and correlation_id to inspect farmd logs and run bullet-family doctor.",
+            Self::NotFound(_) => "Refresh the owning projection and retry only if the resource appears there.",
+            Self::BadRequest(_) => "Remove duplicate or unknown cursor fields and send either after or Last-Event-ID, not both.",
+            Self::Invalid(_) => "Correct the identified request field before retrying.",
+            Self::Conflict(_) => "Refresh durable authority state before constructing a new request.",
+        };
         let problem = Problem {
             r#type: format!(
                 "https://bullet.farm/problems/{}",
@@ -132,10 +170,19 @@ impl IntoResponse for ApiError {
             ),
             title: title_for(&code).to_string(),
             status: status.as_u16(),
+            detail,
+            instance: format!("urn:bullet:request:{request_id}"),
             code,
+            request_id,
             correlation_id,
             retryable,
+            repair: repair.into(),
         };
-        (status, Json(problem)).into_response()
+        let mut response = (status, Json(problem)).into_response();
+        response.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/problem+json"),
+        );
+        response
     }
 }

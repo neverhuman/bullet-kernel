@@ -156,7 +156,8 @@ pub async fn check_unsupported_methods(adapter: &dyn HarnessAdapter) -> Result<(
 }
 
 /// The builder-level guardrails every adapter relies on: worktree/tmux argv
-/// tokens are denied and SCM credentials never reach a child environment.
+/// tokens are denied and only non-authority locale/display hints may be
+/// inherited by a child environment.
 ///
 /// # Errors
 ///
@@ -181,14 +182,24 @@ pub fn check_argv_guardrails() -> Result<(), String> {
     }
     let kept = filter_env(vec![
         ("HOME".to_string(), "/h".to_string()),
+        ("PATH".to_string(), "/bin".to_string()),
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("TERM".to_string(), "dumb".to_string()),
         ("GH_TOKEN".to_string(), "x".to_string()),
         ("GITHUB_TOKEN".to_string(), "x".to_string()),
         ("SSH_AUTH_SOCK".to_string(), "x".to_string()),
         ("GIT_DIR".to_string(), "x".to_string()),
+        ("AWS_SECRET_ACCESS_KEY".to_string(), "canary".to_string()),
+        ("ANTHROPIC_API_KEY".to_string(), "canary".to_string()),
+        ("OPENAI_API_KEY".to_string(), "canary".to_string()),
+        ("BULLET_CANARY_SECRET".to_string(), "canary".to_string()),
     ]);
     let keys: BTreeSet<&str> = kept.iter().map(|(k, _)| k.as_str()).collect();
-    if keys != BTreeSet::from(["HOME"]) {
+    if keys != BTreeSet::from(["LANG", "TERM"]) {
         return Err(format!("env filter kept {keys:?}"));
+    }
+    if kept.iter().any(|(_, value)| value == "canary") {
+        return Err("env filter retained a canary secret".to_string());
     }
     Ok(())
 }

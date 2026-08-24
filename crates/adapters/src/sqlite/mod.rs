@@ -25,6 +25,33 @@ use rusqlite::Connection;
 use std::path::Path;
 use std::time::Duration;
 
+struct ReadTransaction<'a> {
+    conn: &'a Connection,
+    active: bool,
+}
+
+impl<'a> ReadTransaction<'a> {
+    fn begin(conn: &'a Connection) -> Result<Self, LedgerError> {
+        conn.execute_batch("BEGIN DEFERRED TRANSACTION")
+            .map_err(store)?;
+        Ok(Self { conn, active: true })
+    }
+
+    fn commit(mut self) -> Result<(), LedgerError> {
+        self.conn.execute_batch("COMMIT").map_err(store)?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for ReadTransaction<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+    }
+}
+
 /// SQLite-backed ledger.
 pub struct SqliteLedger {
     conn: Connection,
@@ -73,6 +100,25 @@ impl SqliteLedger {
     /// transaction boundaries. Used by crash-atomicity integration tests.
     pub fn set_lease_acquisition_failpoint(&mut self, allowed: u8) {
         self.lease_acquisition_fail_after = Some(allowed);
+    }
+
+    /// Read projection data and its event watermark from one SQLite snapshot.
+    ///
+    /// A concurrent WAL writer may commit while `read` is running; both the
+    /// returned data and sequence still describe the same pre-commit view.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store or decoding error and rolls the read transaction back.
+    pub fn read_snapshot<T>(
+        &self,
+        read: impl FnOnce(&Self) -> Result<T, LedgerError>,
+    ) -> Result<(T, u64), LedgerError> {
+        let transaction = ReadTransaction::begin(&self.conn)?;
+        let data = read(self)?;
+        let as_of_sequence = self.latest_event_sequence()?;
+        transaction.commit()?;
+        Ok((data, as_of_sequence))
     }
 }
 
@@ -317,5 +363,27 @@ impl Ledger for SqliteLedger {
 
     fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError> {
         effects::unresolved_effects(&self.conn)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_data_and_watermark_share_one_wal_view() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("snapshot.sqlite");
+        let primary = SqliteLedger::open(&path).expect("primary");
+        let mut concurrent = SqliteLedger::open(&path).expect("concurrent");
+        let ((count, last_kind), sequence) = primary
+            .read_snapshot(|ledger| {
+                let before = ledger.list_events()?;
+                concurrent.append_event("concurrent", "committed after snapshot")?;
+                Ok((before.len(), before.last().map(|event| event.kind.clone())))
+            })
+            .expect("snapshot");
+        assert_eq!((count, last_kind, sequence), (0, None, 0));
+        assert_eq!(primary.latest_event_sequence().expect("latest"), 1);
     }
 }

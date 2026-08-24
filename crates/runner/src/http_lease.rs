@@ -8,6 +8,7 @@ use crate::lease::{
 };
 use async_trait::async_trait;
 use bullet_domain::{AttemptId, AttemptState};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 /// HTTP client against the farmd lease API.
@@ -47,6 +48,31 @@ fn problem_error(status: u16, body: &Value) -> RunnerError {
 fn decode<T: serde::de::DeserializeOwned>(value: Value, what: &str) -> Result<T, RunnerError> {
     serde_json::from_value(value)
         .map_err(|err| RunnerError::Protocol(format!("decode {what}: {err}")))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Snapshot<T> {
+    data: T,
+    as_of_sequence: u64,
+    observed_at: String,
+    source: String,
+}
+
+fn decode_snapshot<T: serde::de::DeserializeOwned>(
+    value: Value,
+    what: &str,
+) -> Result<T, RunnerError> {
+    let snapshot: Snapshot<T> = decode(value, what)?;
+    if snapshot.source != "bullet-kernel/sqlite-ledger" {
+        return Err(RunnerError::Protocol(format!(
+            "decode {what}: untrusted snapshot source"
+        )));
+    }
+    chrono::DateTime::parse_from_rfc3339(&snapshot.observed_at)
+        .map_err(|err| RunnerError::Protocol(format!("decode {what}: observed_at: {err}")))?;
+    let _ = snapshot.as_of_sequence;
+    Ok(snapshot.data)
 }
 
 #[async_trait]
@@ -105,9 +131,45 @@ impl LeaseClient for HttpLeaseClient {
     async fn next_ready(&self) -> Result<Option<ReadyView>, RunnerError> {
         let (status, value) = self.http.get("/v1/ready").await?;
         match status {
-            200 => Ok(Some(decode(value, "ready view")?)),
+            200 => Ok(Some(decode_snapshot(value, "ready snapshot")?)),
             404 => Ok(None),
             _ => Err(problem_error(status, &value)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ready_snapshot() -> Value {
+        json!({
+            "data": {
+                "work_package_id": "wp_one",
+                "mission_id": "mis_one",
+                "variant_id": "var_one",
+                "title": "one",
+                "enqueued_at": "2026-01-01T00:00:00.000Z"
+            },
+            "as_of_sequence": 3,
+            "observed_at": "2026-01-01T00:00:01.000Z",
+            "source": "bullet-kernel/sqlite-ledger"
+        })
+    }
+
+    #[test]
+    fn ready_snapshot_requires_exact_runtime_provenance() {
+        decode_snapshot::<ReadyView>(ready_snapshot(), "ready").expect("valid snapshot");
+        for (field, value) in [
+            ("source", json!("attacker/projection")),
+            ("observed_at", json!("not-a-timestamp")),
+        ] {
+            let mut hostile = ready_snapshot();
+            hostile[field] = value;
+            assert!(decode_snapshot::<ReadyView>(hostile, "ready").is_err());
+        }
+        let mut extra = ready_snapshot();
+        extra["optimistic"] = json!(true);
+        assert!(decode_snapshot::<ReadyView>(extra, "ready").is_err());
     }
 }

@@ -97,10 +97,10 @@ fn demo() -> Result<(), String> {
     if !receipt.stale_refused || !receipt.materialize_idempotent {
         return Err("demo receipt failed its own safety checks".into());
     }
-    if receipt.fence_second != receipt.fence + 1 {
+    if receipt.fence_second != receipt.fence_first + 1 {
         return Err(format!(
             "fence progression broken: {} then {}",
-            receipt.fence, receipt.fence_second
+            receipt.fence_first, receipt.fence_second
         ));
     }
     Ok(())

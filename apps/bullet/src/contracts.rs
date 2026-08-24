@@ -100,6 +100,13 @@ fn ts_type(schema: &Value, indent: usize) -> Result<String, String> {
         }
         return Ok(parts.join(" | "));
     }
+    if let Some(options) = schema.get("oneOf").and_then(Value::as_sequence) {
+        let parts = options
+            .iter()
+            .map(|option| ts_type(option, indent))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(parts.join(" | "));
+    }
     match schema.get("type") {
         Some(Value::String(kind)) => named_type(kind, schema, indent),
         Some(Value::Sequence(kinds)) => {
@@ -112,7 +119,7 @@ fn ts_type(schema: &Value, indent: usize) -> Result<String, String> {
             }
             Ok(parts.join(" | "))
         }
-        _ => Err("schema has no $ref, enum, or type".into()),
+        _ => Err("schema has no $ref, enum, oneOf, or type".into()),
     }
 }
 

@@ -3,6 +3,7 @@
 //! environment; honors the `BULLET_PROVIDER_KILL` switch.
 
 use crate::error::HarnessError;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -12,7 +13,15 @@ pub const KILL_SWITCH_VAR: &str = "BULLET_PROVIDER_KILL";
 
 const DENIED_EXACT: [&str; 1] = ["-w"];
 const DENIED_PREFIXES: [&str; 3] = ["--worktree", "--worktree-base", "--tmux"];
-const DENIED_ENV_EXACT: [&str; 3] = ["GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK"];
+const INHERITED_ENV_ALLOWLIST: [&str; 7] = [
+    "COLORTERM",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "NO_COLOR",
+    "TERM",
+    "TZ",
+];
 
 /// The denial rule an argv token violates, when any.
 #[must_use]
@@ -26,16 +35,21 @@ pub fn denied_token(arg: &str) -> Option<&'static str> {
         .copied()
 }
 
-/// Enclave env contract: keep the inherited environment (HOME and the
-/// provider credential dirs live under it) but strip SCM credentials:
-/// `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, and every `GIT_*` variable.
+/// Enclave inheritance contract: copy only non-authority locale/display
+/// hints. Provider homes and credentials must eventually be staged by a
+/// separate signed-admission boundary; they are never inherited here.
+///
+/// Results are key-sorted so the prepared invocation is deterministic for a
+/// normal process environment (where each key is unique).
 #[must_use]
 pub fn filter_env<I>(vars: I) -> Vec<(String, String)>
 where
     I: IntoIterator<Item = (String, String)>,
 {
     vars.into_iter()
-        .filter(|(key, _)| !DENIED_ENV_EXACT.contains(&key.as_str()) && !key.starts_with("GIT_"))
+        .filter(|(key, _)| INHERITED_ENV_ALLOWLIST.contains(&key.as_str()))
+        .collect::<BTreeMap<_, _>>()
+        .into_iter()
         .collect()
 }
 
@@ -251,19 +265,37 @@ mod tests {
     }
 
     #[test]
-    fn env_contract_strips_scm_credentials() {
+    fn env_contract_is_a_positive_allowlist() {
         let vars = vec![
             ("HOME".to_string(), "/home/u".to_string()),
             ("PATH".to_string(), "/usr/bin".to_string()),
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+            ("TERM".to_string(), "xterm".to_string()),
             ("GH_TOKEN".to_string(), "x".to_string()),
             ("GITHUB_TOKEN".to_string(), "x".to_string()),
             ("SSH_AUTH_SOCK".to_string(), "/run/ssh".to_string()),
             ("GIT_CONFIG_GLOBAL".to_string(), "/dev/null".to_string()),
             ("GIT_AUTHOR_NAME".to_string(), "x".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "canary".to_string()),
+            ("ANTHROPIC_API_KEY".to_string(), "canary".to_string()),
+            ("OPENAI_API_KEY".to_string(), "canary".to_string()),
+            ("BULLET_CANARY_SECRET".to_string(), "canary".to_string()),
         ];
         let kept = filter_env(vars);
         let keys: Vec<&str> = kept.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, ["HOME", "PATH"]);
+        assert_eq!(keys, ["LANG", "TERM"]);
+        assert!(kept.iter().all(|(_, value)| value != "canary"));
+    }
+
+    #[test]
+    fn env_contract_has_stable_key_order() {
+        let kept = filter_env(vec![
+            ("TZ".to_string(), "UTC".to_string()),
+            ("LC_ALL".to_string(), "C".to_string()),
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+        ]);
+        let keys: Vec<&str> = kept.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(keys, ["LANG", "LC_ALL", "TZ"]);
     }
 
     #[test]

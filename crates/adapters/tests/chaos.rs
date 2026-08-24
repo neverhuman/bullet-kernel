@@ -42,7 +42,7 @@ fn sqlite_demo_roundtrip_shows_both_fences() {
     let receipt = run_demo(&mut ledger).expect("demo");
     assert!(receipt.stale_refused);
     assert!(receipt.materialize_idempotent);
-    assert_eq!(receipt.fence, 1);
+    assert_eq!(receipt.fence_first, 1);
     assert_eq!(receipt.fence_second, 2);
     assert_eq!(receipt.effect_outcome, "verified");
     assert_eq!(receipt.effect_unknown_outcome, "unknown");

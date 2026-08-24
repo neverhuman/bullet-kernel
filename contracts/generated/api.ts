@@ -34,10 +34,24 @@ export type MissionView = {
   fence: number | null;
 };
 
+export type MissionListSnapshot = {
+  data: Mission[];
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
+};
+
+export type MissionSnapshot = {
+  data: MissionView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
+};
+
 export type DemoReceipt = {
   mission_id: string;
   plan_hash: string;
-  fence: number;
+  fence_first: number;
   attempt_id: string;
   fence_second: number;
   attempt_second_id: string;
@@ -48,6 +62,13 @@ export type DemoReceipt = {
   effect_unknown_outcome: string;
   materialize_idempotent: boolean;
   stale_refused: boolean;
+};
+
+export type DemoSnapshot = {
+  data: DemoReceipt | null;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
 };
 
 export type OutboxItem = {
@@ -63,7 +84,14 @@ export type OutboxView = {
   items: OutboxItem[];
 };
 
-export type Event = {
+export type OutboxSnapshot = {
+  data: OutboxView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
+};
+
+export type EventEnvelope = {
   id: string;
   seq: number;
   at: string;
@@ -75,9 +103,13 @@ export type Problem = {
   type: string;
   title: string;
   status: number;
+  detail: string;
+  instance: string;
   code: string;
+  request_id: string;
   correlation_id: string;
   retryable: boolean;
+  repair: string;
 };
 
 export type WorkspaceNonce = number[];
@@ -173,6 +205,13 @@ export type ReadyView = {
   variant_id: string;
   title: string;
   enqueued_at: string;
+};
+
+export type ReadySnapshot = {
+  data: ReadyView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
 };
 
 export const API_PREFIX = "/v1";

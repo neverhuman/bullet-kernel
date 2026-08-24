@@ -4,7 +4,7 @@
 use crate::graph_delta::{apply_graph_delta, graph_digest, GraphDelta, GraphOp};
 use crate::leases::LeaseService;
 use crate::materializer::{materialize_plan, PlanInput};
-use crate::records::{HeartbeatRequest, StoredGraph};
+use crate::records::StoredGraph;
 use crate::simulators::{ProviderSimulator, ScmSimulator};
 use crate::store::{Ledger, LedgerError};
 use bullet_domain::{
@@ -15,6 +15,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 const SEED: &str = "demo-mission";
+const STALE_REFUSAL_EVENT: &str = "demo_stale_authority_refused";
 
 /// Operator-visible receipt. Pending and verified are distinct; both fences
 /// prove the epoch was never reused.
@@ -25,10 +26,10 @@ pub struct DemoReceipt {
     /// Plan hash re-derived from the recorded materialize command payload.
     pub plan_hash: String,
     /// Fence of the first incarnation.
-    pub fence: u64,
+    pub fence_first: u64,
     /// First (now superseded) attempt.
     pub attempt_id: String,
-    /// Fence of the successor incarnation. Must exceed `fence`.
+    /// Fence of the successor incarnation. Must exceed `fence_first`.
     pub fence_second: u64,
     /// Successor attempt that produced the Candidate.
     pub attempt_second_id: String,
@@ -118,13 +119,29 @@ fn fresh_flow<L: Ledger>(ledger: &mut L, graph: &StoredGraph) -> Result<(), Ledg
         .ok_or_else(|| LedgerError::Store("demo graph has no packages".into()))?;
 
     // Incarnation one: fence 1, heartbeats, then closes as superseded.
-    let (a1, _token1, grant1) = LeaseService::acquire(ledger, graph, 0, "attempt-live", 15)?;
+    let (a1, token1, grant1) = LeaseService::acquire(ledger, graph, 0, "attempt-live", 15)?;
     transition_attempt(ledger, &a1, AttemptState::Running)?;
     ledger.heartbeat(&LeaseService::heartbeat_of(&grant1))?;
     LeaseService::release(ledger, &grant1, AttemptState::Superseded, true)?;
 
     // Incarnation two: fence 2, does the real work.
     let (a2, _token2, grant2) = LeaseService::acquire(ledger, graph, 0, "attempt-successor", 15)?;
+    let heartbeat_refused = match ledger.heartbeat(&LeaseService::heartbeat_of(&grant1)) {
+        Err(LedgerError::Domain(DomainError::StaleAuthority(_))) => true,
+        Err(err) => return Err(err),
+        Ok(()) => false,
+    };
+    let token_refused = match LeaseService::authorize(&token1, &a2) {
+        Err(LedgerError::Domain(DomainError::StaleAuthority(_))) => true,
+        Err(err) => return Err(err),
+        Ok(()) => false,
+    };
+    if !heartbeat_refused || !token_refused {
+        return Err(LedgerError::Store(
+            "superseded demo authority was not refused".into(),
+        ));
+    }
+    ledger.append_event(STALE_REFUSAL_EVENT, a1.id.as_str())?;
     let a2_running = transition_attempt(ledger, &a2, AttemptState::Running)?;
     advance_package(ledger, &mission, &wp0, &[WorkPackageState::Executing])?;
     write_candidate_and_effects(ledger, &a2_running)?;
@@ -273,12 +290,13 @@ fn record_effect<L: Ledger>(
 }
 
 /// Re-derive the demo receipt from ledger rows. Returns `None` while the
-/// demo has not completed. Stale refusals are re-checked live on every call.
+/// demo has not completed. This projection is read-only; stale-refusal truth
+/// must already exist as a durable event written by the live demo flow.
 ///
 /// # Errors
 ///
 /// Returns a ledger or domain error.
-pub fn derive_receipt<L: Ledger>(ledger: &mut L) -> Result<Option<DemoReceipt>, LedgerError> {
+pub fn derive_receipt<L: Ledger>(ledger: &L) -> Result<Option<DemoReceipt>, LedgerError> {
     let mission_id = MissionId::from_seed(SEED);
     let Some(graph) = ledger.get_graph(&mission_id)? else {
         return Ok(None);
@@ -314,25 +332,17 @@ pub fn derive_receipt<L: Ledger>(ledger: &mut L) -> Result<Option<DemoReceipt>, 
     }
     let materialize_idempotent =
         graph.plan.canonical_hash == Digest::of(command.payload.as_bytes());
-    let heartbeat = HeartbeatRequest {
-        variant_id: a1.variant_id.clone(),
-        attempt_id: a1.id.clone(),
-        fence: a1.fence,
-        runner_id: a1.runner_id.clone(),
-        runner_epoch: a1.runner_epoch,
-        workspace_nonce: a1.workspace_nonce,
-        ttl_seconds: 15,
-    };
-    let heartbeat_refused = matches!(
-        ledger.heartbeat(&heartbeat),
-        Err(LedgerError::Domain(DomainError::StaleAuthority(_)))
-    );
-    let stale_token = LeaseService::token_for(&graph, &a1)?;
-    let token_refused = LeaseService::authorize(&stale_token, &a2).is_err();
+    let stale_refused = ledger
+        .list_events()?
+        .iter()
+        .any(|event| event.kind == STALE_REFUSAL_EVENT && event.body == a1.id.as_str());
+    if !stale_refused {
+        return Ok(None);
+    }
     Ok(Some(DemoReceipt {
         mission_id: graph.mission.id.to_string(),
         plan_hash: graph.plan.canonical_hash.to_hex(),
-        fence: a1.fence,
+        fence_first: a1.fence,
         attempt_id: a1.id.to_string(),
         fence_second: a2.fence,
         attempt_second_id: a2.id.to_string(),
@@ -342,7 +352,7 @@ pub fn derive_receipt<L: Ledger>(ledger: &mut L) -> Result<Option<DemoReceipt>, 
         effect_outcome: effect.outcome,
         effect_unknown_outcome: effect_lost.outcome,
         materialize_idempotent,
-        stale_refused: heartbeat_refused && token_refused,
+        stale_refused,
     }))
 }
 
@@ -357,7 +367,7 @@ mod tests {
         let receipt = run_demo(&mut ledger).expect("demo");
         assert!(receipt.materialize_idempotent);
         assert!(receipt.stale_refused);
-        assert_eq!(receipt.fence, 1);
+        assert_eq!(receipt.fence_first, 1);
         assert_eq!(receipt.fence_second, 2);
         assert_ne!(receipt.attempt_id, receipt.attempt_second_id);
         assert_eq!(receipt.stale_attempt_id, receipt.attempt_id);

@@ -117,7 +117,12 @@ async fn ready_acquire_heartbeat_release_roundtrip() {
 
     let (status, ready) = request(addr, "GET", "/v1/ready", None).await;
     assert_eq!(status, 200);
-    assert_eq!(ready["work_package_id"], wp);
+    assert_eq!(ready.as_object().expect("snapshot").len(), 4);
+    assert_eq!(ready["data"]["work_package_id"], wp);
+    assert!(ready["as_of_sequence"].is_u64());
+    chrono::DateTime::parse_from_rfc3339(ready["observed_at"].as_str().expect("observed_at"))
+        .expect("RFC 3339 observation time");
+    assert_eq!(ready["source"], "bullet-kernel/sqlite-ledger");
 
     let runner = RunnerId::from_seed("rt");
     let body = acquire_body(&wp, &runner, "lease-rt-1");

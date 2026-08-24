@@ -10,7 +10,8 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bullet_application::{
-    ActiveLease, HeartbeatRequest, LeaseRequest, LeaseService, Ledger, ReleaseRequest, StoredGraph,
+    ActiveLease, HeartbeatRequest, LeaseRequest, LeaseService, Ledger, LedgerError, ReleaseRequest,
+    StoredGraph,
 };
 use bullet_domain::{
     Attempt, AttemptId, AttemptState, AuthorityToken, Digest, RunnerId, VariantId, WorkPackageId,
@@ -37,7 +38,7 @@ fn ttl_of(requested: Option<i64>) -> i64 {
 fn graph_for_package<L: Ledger>(
     ledger: &L,
     package: &WorkPackageId,
-) -> Result<Option<(StoredGraph, VariantId)>, ApiError> {
+) -> Result<Option<(StoredGraph, VariantId)>, bullet_application::LedgerError> {
     for mission in ledger.list_missions()? {
         let Some(graph) = ledger.get_graph(&mission.id)? else {
             continue;
@@ -192,24 +193,28 @@ struct ReadyViewBody {
 
 async fn next_ready(State(state): State<SharedState>) -> Result<Response, ApiError> {
     let ledger = state.ledger.lock().await;
-    let Some(row) = ledger.ready_rows()?.into_iter().next() else {
+    let (view, as_of_sequence) = ledger.read_snapshot(|ledger| {
+        let Some(row) = ledger.ready_rows()?.into_iter().next() else {
+            return Ok(None);
+        };
+        let (graph, variant_id) = graph_for_package(ledger, &row.work_package_id)?
+            .ok_or_else(|| LedgerError::Store("ready row has no owning graph variant".into()))?;
+        let title = graph
+            .packages
+            .iter()
+            .find(|package| package.id == row.work_package_id)
+            .map(|package| package.title.clone())
+            .ok_or_else(|| LedgerError::Store("ready row package is absent from graph".into()))?;
+        Ok(Some(ReadyViewBody {
+            work_package_id: row.work_package_id.to_string(),
+            mission_id: graph.mission.id.to_string(),
+            variant_id: variant_id.to_string(),
+            title,
+            enqueued_at: row.enqueued_at,
+        }))
+    })?;
+    let Some(view) = view else {
         return Err(ApiError::NotFound("ready queue is empty".into()));
     };
-    let (graph, variant_id) = graph_for_package(&*ledger, &row.work_package_id)?
-        .ok_or_else(|| ApiError::NotFound(format!("graph for {}", row.work_package_id)))?;
-    let title = graph
-        .packages
-        .iter()
-        .find(|package| package.id == row.work_package_id)
-        .map(|package| package.title.clone())
-        .unwrap_or_default();
-    let view = ReadyViewBody {
-        work_package_id: row.work_package_id.to_string(),
-        mission_id: graph.mission.id.to_string(),
-        variant_id: variant_id.to_string(),
-        title,
-        enqueued_at: row.enqueued_at,
-    };
-    let as_of_sequence = ledger.latest_event_sequence()?;
     snapshot_response(view, as_of_sequence)
 }
