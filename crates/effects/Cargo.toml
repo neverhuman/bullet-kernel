@@ -1,6 +1,6 @@
 [package]
 name = "bullet-effects-core"
-description = "Effect broker: EffectIntent/Receipt state machine, OUTCOME_UNKNOWN reconciliation, ForgeEffects port (LocalBareForge, JeryuForge)."
+description = "Effect broker: durable intents and receipts, section-23 state machine, reconcile-before-retry, ForgeEffects port (LocalBareForge, JeryuForge)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,3 +11,13 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+bullet-application.workspace = true
+bullet-domain.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+tempfile.workspace = true

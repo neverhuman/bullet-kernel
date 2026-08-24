@@ -2,15 +2,16 @@
 //! applied in order through a `schema_version` table.
 
 mod commands;
+mod effects;
 mod events;
 mod graph;
 mod leases;
 mod outbox;
 
 use bullet_application::{
-    ActiveLease, CommandRecord, CommandRequest, ExpiredLease, HeartbeatRequest, LeaseGrant,
-    LeaseRequest, Ledger, LedgerError, LedgerEvent, OutboxItem, ReadyRow, ReleaseRequest,
-    StoredGraph,
+    ActiveLease, CommandRecord, CommandRequest, EffectIntentRecord, EffectReceiptRecord,
+    EffectState, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, Ledger, LedgerError,
+    LedgerEvent, OutboxItem, ReadyRow, ReleaseRequest, StoredGraph,
 };
 use bullet_domain::{
     Attempt, AttemptId, Candidate, CandidateId, CommandPhase, Effect, EffectId, Evidence,
@@ -28,6 +29,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0002_authority.sql",
         include_str!("../../../../db/migrations/0002_authority.sql"),
+    ),
+    (
+        "0003_effects.sql",
+        include_str!("../../../../db/migrations/0003_effects.sql"),
     ),
 ];
 
@@ -228,5 +233,50 @@ impl Ledger for SqliteLedger {
 
     fn outbox_mark(&mut self, seq: u64, phase: CommandPhase, now: &str) -> Result<(), LedgerError> {
         outbox::mark(&self.conn, seq, phase, now)
+    }
+
+    fn record_effect_intent(
+        &mut self,
+        intent: &EffectIntentRecord,
+    ) -> Result<(EffectIntentRecord, bool), LedgerError> {
+        effects::record_effect_intent(&mut self.conn, intent)
+    }
+
+    fn get_effect_intent(
+        &self,
+        provider: &str,
+        logical_key: &str,
+    ) -> Result<Option<EffectIntentRecord>, LedgerError> {
+        effects::get_effect_intent(&self.conn, provider, logical_key)
+    }
+
+    fn get_effect_intent_by_id(
+        &self,
+        id: &EffectId,
+    ) -> Result<Option<EffectIntentRecord>, LedgerError> {
+        effects::get_effect_intent_by_id(&self.conn, id)
+    }
+
+    fn transition_effect(
+        &mut self,
+        id: &EffectId,
+        to: EffectState,
+    ) -> Result<EffectIntentRecord, LedgerError> {
+        effects::transition_effect(&mut self.conn, id, to)
+    }
+
+    fn record_effect_receipt(
+        &mut self,
+        receipt: &EffectReceiptRecord,
+    ) -> Result<bool, LedgerError> {
+        effects::record_effect_receipt(&mut self.conn, receipt)
+    }
+
+    fn effect_receipts(&self, intent: &EffectId) -> Result<Vec<EffectReceiptRecord>, LedgerError> {
+        effects::effect_receipts(&self.conn, intent)
+    }
+
+    fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError> {
+        effects::unresolved_effects(&self.conn)
     }
 }

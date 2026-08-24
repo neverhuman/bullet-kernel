@@ -4,6 +4,8 @@
 //! implementations can compare them lexically without owning a clock.
 
 use crate::commands::{CommandRecord, CommandRequest};
+use crate::effect_state::EffectState;
+use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
 use crate::records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReadyRow, ReleaseRequest, StoredGraph,
@@ -247,4 +249,69 @@ pub trait Ledger {
     /// # Errors
     /// Store failure or unknown sequence.
     fn outbox_mark(&mut self, seq: u64, phase: CommandPhase, now: &str) -> Result<(), LedgerError>;
+
+    /// Record an effect intent with state `Proposed`. Unique on
+    /// `(provider, logical_effect_key)`: replaying the same stable identity
+    /// returns the stored row with `false`; a differing identity under the
+    /// same key is a typed `Idempotency` error. Intents whose state is not
+    /// `Proposed` are refused.
+    ///
+    /// # Errors
+    /// Idempotency conflict, refusal, or store failure.
+    fn record_effect_intent(
+        &mut self,
+        intent: &EffectIntentRecord,
+    ) -> Result<(EffectIntentRecord, bool), LedgerError>;
+
+    /// Load an effect intent by its unique `(provider, logical_effect_key)`.
+    ///
+    /// # Errors
+    /// Store failure.
+    fn get_effect_intent(
+        &self,
+        provider: &str,
+        logical_key: &str,
+    ) -> Result<Option<EffectIntentRecord>, LedgerError>;
+
+    /// Load an effect intent by id.
+    ///
+    /// # Errors
+    /// Store failure.
+    fn get_effect_intent_by_id(
+        &self,
+        id: &EffectId,
+    ) -> Result<Option<EffectIntentRecord>, LedgerError>;
+
+    /// Apply one legal effect state edge and return the updated row. The
+    /// `OutcomeUnknown -> Dispatching` edge increments `unknown_retries`.
+    ///
+    /// # Errors
+    /// Typed `InvalidTransition`, unknown id, or store failure.
+    fn transition_effect(
+        &mut self,
+        id: &EffectId,
+        to: EffectState,
+    ) -> Result<EffectIntentRecord, LedgerError>;
+
+    /// Append-only effect receipt insert. Returns `true` when newly
+    /// inserted, `false` for an identical replay; a different body under
+    /// the same id is a typed `Conflict`.
+    ///
+    /// # Errors
+    /// Conflict or store failure.
+    fn record_effect_receipt(&mut self, receipt: &EffectReceiptRecord)
+        -> Result<bool, LedgerError>;
+
+    /// Receipts for one intent, oldest-first.
+    ///
+    /// # Errors
+    /// Store failure.
+    fn effect_receipts(&self, intent: &EffectId) -> Result<Vec<EffectReceiptRecord>, LedgerError>;
+
+    /// Intents that were dispatched (or are mid-dispatch) without a settled
+    /// disposition: `Dispatching`, `ReceiptPending`, `OutcomeUnknown`.
+    ///
+    /// # Errors
+    /// Store failure.
+    fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError>;
 }

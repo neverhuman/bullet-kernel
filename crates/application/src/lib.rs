@@ -2,7 +2,10 @@
 
 pub mod commands;
 pub mod conformance;
+pub mod conformance_effects;
 pub mod demo;
+pub mod effect_state;
+pub mod effects;
 pub mod graph_delta;
 pub mod leases;
 pub mod materializer;
@@ -14,6 +17,8 @@ pub mod store;
 
 pub use commands::{CommandRecord, CommandRequest};
 pub use demo::{derive_receipt, run_demo, DemoReceipt};
+pub use effect_state::EffectState;
+pub use effects::{receipt_id, EffectIntentRecord, EffectReceiptRecord, ReceiptVerdict, ZERO_OID};
 pub use graph_delta::{apply_graph_delta, graph_digest, GraphDelta, GraphOp};
 pub use leases::LeaseService;
 pub use materializer::{materialize_plan, PlanInput};

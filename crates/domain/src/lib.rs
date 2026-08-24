@@ -5,6 +5,7 @@ pub mod behavior;
 pub mod digest;
 pub mod entities;
 pub mod error;
+pub mod gates;
 pub mod ids;
 pub mod observation;
 pub mod states;
@@ -18,6 +19,7 @@ pub use entities::{
     WorkPackage,
 };
 pub use error::DomainError;
+pub use gates::{EvidenceTier, GateOutcome, REASON_ZERO_TESTS};
 pub use ids::*;
 pub use observation::Observation;
 pub use states::{AttemptState, CommandPhase, MissionState, WorkPackageState};

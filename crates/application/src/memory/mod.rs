@@ -2,8 +2,11 @@
 //! with the SQLite adapter is enforced by the shared conformance suite.
 
 mod authority;
+mod effects;
 
 use crate::commands::{CommandRecord, CommandRequest};
+use crate::effect_state::EffectState;
+use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
 use crate::records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReadyRow, ReleaseRequest, StoredGraph,
@@ -29,6 +32,9 @@ pub struct MemoryLedger {
     fences: BTreeMap<String, u64>,
     ready: BTreeMap<String, String>,
     outbox: Vec<OutboxItem>,
+    effect_intents: BTreeMap<String, EffectIntentRecord>,
+    effect_keys: BTreeMap<String, String>,
+    effect_receipts: Vec<EffectReceiptRecord>,
     fail_after_writes: Option<u32>,
 }
 
@@ -323,5 +329,50 @@ impl Ledger for MemoryLedger {
             CommandPhase::Pending => {}
         }
         Ok(())
+    }
+
+    fn record_effect_intent(
+        &mut self,
+        intent: &EffectIntentRecord,
+    ) -> Result<(EffectIntentRecord, bool), LedgerError> {
+        self.record_effect_intent_impl(intent)
+    }
+
+    fn get_effect_intent(
+        &self,
+        provider: &str,
+        logical_key: &str,
+    ) -> Result<Option<EffectIntentRecord>, LedgerError> {
+        self.get_effect_intent_impl(provider, logical_key)
+    }
+
+    fn get_effect_intent_by_id(
+        &self,
+        id: &EffectId,
+    ) -> Result<Option<EffectIntentRecord>, LedgerError> {
+        Ok(self.effect_intents.get(id.as_str()).cloned())
+    }
+
+    fn transition_effect(
+        &mut self,
+        id: &EffectId,
+        to: EffectState,
+    ) -> Result<EffectIntentRecord, LedgerError> {
+        self.transition_effect_impl(id, to)
+    }
+
+    fn record_effect_receipt(
+        &mut self,
+        receipt: &EffectReceiptRecord,
+    ) -> Result<bool, LedgerError> {
+        self.record_effect_receipt_impl(receipt)
+    }
+
+    fn effect_receipts(&self, intent: &EffectId) -> Result<Vec<EffectReceiptRecord>, LedgerError> {
+        self.effect_receipts_impl(intent)
+    }
+
+    fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError> {
+        self.unresolved_effects_impl()
     }
 }

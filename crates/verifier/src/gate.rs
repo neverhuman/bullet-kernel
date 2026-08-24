@@ -1,73 +1,190 @@
-//! Spec §22.3 gate outcomes. Only PASS satisfies readiness.
+//! Gate execution inside the clean clone: bounded, typed, and honest about
+//! gates that executed zero tests.
 
-/// Typed gate result. A free string is never a gate outcome.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GateOutcome {
-    /// Acceptable. The only value that satisfies readiness.
-    Pass,
-    /// Deterministic failure of the subject.
-    Fail,
-    /// Non-deterministic failure. Not PASS.
-    Flaky,
-    /// Runner or infrastructure fault. Not PASS.
-    InfraError,
-    /// Operator or policy cancelled the gate.
-    Cancelled,
-    /// Gate did not finish in budget. Not PASS.
-    TimedOut,
-    /// Gate was never started.
-    NotRun,
-    /// Gate cannot run in this environment.
-    Unsupported,
-    /// Probe did not establish a result.
-    Unknown,
-    /// A successor subject superseded this run.
-    Superseded,
-    /// Input closure or Candidate changed after the run.
-    Invalidated,
+use bullet_domain::{GateOutcome, REASON_ZERO_TESTS};
+use std::path::Path;
+use std::process::Stdio;
+use tokio::io::AsyncReadExt;
+use tokio::time::{timeout, Duration};
+
+/// Reason code when the gate ran out of budget.
+pub const REASON_GATE_TIMEOUT: &str = "GATE_TIMEOUT";
+/// Reason code when the gate exited nonzero.
+pub const REASON_GATE_NONZERO_EXIT: &str = "GATE_NONZERO_EXIT";
+/// Reason code when the shell could not find the gate command.
+pub const REASON_GATE_COMMAND_NOT_FOUND: &str = "GATE_COMMAND_NOT_FOUND";
+/// Reason code when the gate process could not be spawned.
+pub const REASON_GATE_SPAWN_FAILED: &str = "GATE_SPAWN_FAILED";
+/// Reason code when the gate died on a signal.
+pub const REASON_GATE_SIGNALED: &str = "GATE_SIGNALED";
+
+/// Typed result of one gate run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GateRun {
+    /// Typed outcome.
+    pub outcome: GateOutcome,
+    /// Stable reason code refining the outcome.
+    pub reason: Option<String>,
+    /// Detail for operators; never parsed.
+    pub detail: Option<String>,
+    /// Exit code when the gate produced one.
+    pub exit_code: Option<i32>,
 }
 
-impl GateOutcome {
-    /// Stable wire name.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pass => "PASS",
-            Self::Fail => "FAIL",
-            Self::Flaky => "FLAKY",
-            Self::InfraError => "INFRA_ERROR",
-            Self::Cancelled => "CANCELLED",
-            Self::TimedOut => "TIMED_OUT",
-            Self::NotRun => "NOT_RUN",
-            Self::Unsupported => "UNSUPPORTED",
-            Self::Unknown => "UNKNOWN",
-            Self::Superseded => "SUPERSEDED",
-            Self::Invalidated => "INVALIDATED",
+/// Whether the gate command is `cargo test`-shaped (including nextest), so
+/// a zero-test run must read `NOT_RUN`, never `PASS`.
+#[must_use]
+pub fn cargo_test_shaped(command: &str) -> bool {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let has_cargo = tokens
+        .iter()
+        .any(|token| token.rsplit('/').next() == Some("cargo"));
+    let has_test = tokens
+        .iter()
+        .any(|token| *token == "test" || *token == "nextest");
+    has_cargo && has_test
+}
+
+/// Total tests executed according to `test result:` summary lines. `None`
+/// when the output carries no summary at all.
+#[must_use]
+pub fn executed_test_count(stdout: &str) -> Option<u64> {
+    let mut total: Option<u64> = None;
+    for line in stdout.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("test result:") else {
+            continue;
+        };
+        let mut line_total = 0u64;
+        for suffix in [" passed", " failed"] {
+            for chunk in rest.split(';') {
+                if let Some(number) = chunk.strip_suffix(suffix) {
+                    if let Ok(value) = number
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or("")
+                        .parse::<u64>()
+                    {
+                        line_total += value;
+                    }
+                }
+            }
+        }
+        total = Some(total.unwrap_or(0) + line_total);
+    }
+    total
+}
+
+fn command_for(clone_dir: &Path, gate_command: &str) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c").arg(gate_command).current_dir(clone_dir);
+    // Credential and repository-redirection variables never reach the gate.
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy().to_string();
+        if name.starts_with("GIT_")
+            || name == "GH_TOKEN"
+            || name == "GITHUB_TOKEN"
+            || name == "SSH_AUTH_SOCK"
+        {
+            cmd.env_remove(&name);
         }
     }
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd
+}
 
-    /// Parse a wire name. Unknown spellings stay unknown, never PASS.
-    #[must_use]
-    pub fn parse(name: &str) -> Self {
-        match name {
-            "PASS" => Self::Pass,
-            "FAIL" => Self::Fail,
-            "FLAKY" => Self::Flaky,
-            "INFRA_ERROR" => Self::InfraError,
-            "CANCELLED" => Self::Cancelled,
-            "TIMED_OUT" => Self::TimedOut,
-            "NOT_RUN" => Self::NotRun,
-            "UNSUPPORTED" => Self::Unsupported,
-            "SUPERSEDED" => Self::Superseded,
-            "INVALIDATED" => Self::Invalidated,
-            _ => Self::Unknown,
-        }
+fn classify(status: std::process::ExitStatus, gate_command: &str, stdout: &str) -> GateRun {
+    let Some(code) = status.code() else {
+        return GateRun {
+            outcome: GateOutcome::InfraError,
+            reason: Some(REASON_GATE_SIGNALED.into()),
+            detail: Some(format!("gate terminated by signal: {status}")),
+            exit_code: None,
+        };
+    };
+    if code == 127 {
+        return GateRun {
+            outcome: GateOutcome::InfraError,
+            reason: Some(REASON_GATE_COMMAND_NOT_FOUND.into()),
+            detail: Some("shell reported exit 127 (command not found)".into()),
+            exit_code: Some(code),
+        };
     }
+    if code != 0 {
+        return GateRun {
+            outcome: GateOutcome::Fail,
+            reason: Some(REASON_GATE_NONZERO_EXIT.into()),
+            detail: None,
+            exit_code: Some(code),
+        };
+    }
+    if cargo_test_shaped(gate_command) && executed_test_count(stdout) == Some(0) {
+        return GateRun {
+            outcome: GateOutcome::NotRun,
+            reason: Some(REASON_ZERO_TESTS.into()),
+            detail: Some("gate exited 0 but executed zero tests".into()),
+            exit_code: Some(code),
+        };
+    }
+    GateRun {
+        outcome: GateOutcome::Pass,
+        reason: None,
+        detail: None,
+        exit_code: Some(code),
+    }
+}
 
-    /// Only an acceptable PASS satisfies readiness.
-    #[must_use]
-    pub fn satisfies_readiness(self) -> bool {
-        matches!(self, Self::Pass)
+/// Run the gate with a hard budget. Timeout is `TIMED_OUT`, spawn failure
+/// is `INFRA_ERROR`; both are outcomes, never fabricated `PASS`.
+pub async fn run_gate(clone_dir: &Path, gate_command: &str, timeout_secs: u64) -> GateRun {
+    let mut child = match command_for(clone_dir, gate_command).spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            return GateRun {
+                outcome: GateOutcome::InfraError,
+                reason: Some(REASON_GATE_SPAWN_FAILED.into()),
+                detail: Some(err.to_string()),
+                exit_code: None,
+            }
+        }
+    };
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let reader = tokio::spawn(async move {
+        let mut out = String::new();
+        let mut err = String::new();
+        if let Some(pipe) = stdout_pipe.as_mut() {
+            let _ = pipe.read_to_string(&mut out).await;
+        }
+        if let Some(pipe) = stderr_pipe.as_mut() {
+            let _ = pipe.read_to_string(&mut err).await;
+        }
+        (out, err)
+    });
+    match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
+        Err(_elapsed) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            reader.abort();
+            GateRun {
+                outcome: GateOutcome::TimedOut,
+                reason: Some(REASON_GATE_TIMEOUT.into()),
+                detail: Some(format!("gate exceeded {timeout_secs}s budget")),
+                exit_code: None,
+            }
+        }
+        Ok(Err(err)) => GateRun {
+            outcome: GateOutcome::InfraError,
+            reason: Some(REASON_GATE_SPAWN_FAILED.into()),
+            detail: Some(err.to_string()),
+            exit_code: None,
+        },
+        Ok(Ok(status)) => {
+            let (stdout, _stderr) = reader.await.unwrap_or_default();
+            classify(status, gate_command, &stdout)
+        }
     }
 }
 
@@ -76,27 +193,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_pass_is_ready() {
-        for outcome in [
-            GateOutcome::Fail,
-            GateOutcome::Flaky,
-            GateOutcome::InfraError,
-            GateOutcome::Cancelled,
-            GateOutcome::TimedOut,
-            GateOutcome::NotRun,
-            GateOutcome::Unsupported,
-            GateOutcome::Unknown,
-            GateOutcome::Superseded,
-            GateOutcome::Invalidated,
-        ] {
-            assert!(!outcome.satisfies_readiness(), "{}", outcome.as_str());
-        }
-        assert!(GateOutcome::Pass.satisfies_readiness());
+    fn cargo_shapes_are_detected() {
+        assert!(cargo_test_shaped("cargo test"));
+        assert!(cargo_test_shaped("/home/x/.cargo/bin/cargo test --lib"));
+        assert!(cargo_test_shaped("cargo nextest run"));
+        assert!(!cargo_test_shaped("cargo build"));
+        assert!(!cargo_test_shaped("pytest test"));
     }
 
     #[test]
-    fn garbage_string_is_unknown_not_pass() {
-        assert_eq!(GateOutcome::parse("pass"), GateOutcome::Unknown);
-        assert_eq!(GateOutcome::parse("PASS"), GateOutcome::Pass);
+    fn summary_lines_are_summed() {
+        let out = "running 0 tests\n\
+                   test result: ok. 0 passed; 0 failed; 0 ignored\n\
+                   test result: ok. 0 passed; 0 failed; 0 ignored\n";
+        assert_eq!(executed_test_count(out), Some(0));
+        let some = "test result: ok. 3 passed; 1 failed; 0 ignored\n";
+        assert_eq!(executed_test_count(some), Some(4));
+        assert_eq!(executed_test_count("no summary here"), None);
     }
 }
