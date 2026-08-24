@@ -3,10 +3,137 @@
 use crate::commands::CommandRequest;
 use crate::records::StoredGraph;
 use crate::store::{Ledger, LedgerError};
-use bullet_domain::{
-    CommandPhase, Digest, DomainError, MissionId, VariantId, WorkPackageId, WorkPackageState,
-};
+use bullet_domain::{Digest, DomainError, MissionId, VariantId, WorkPackageId, WorkPackageState};
 use serde::{Deserialize, Serialize};
+
+/// Durable result stored with an applied or refused graph-delta command.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GraphDeltaCommandResult {
+    /// The graph transition and its audit event committed.
+    Applied {
+        /// Exact graph immediately after this delta.
+        graph: Box<StoredGraph>,
+    },
+    /// The request was validly admitted but its graph transition was refused.
+    Failed {
+        /// Exact typed failure returned on replay.
+        error: GraphDeltaFailure,
+    },
+}
+
+/// Serializable form of every current ledger/domain error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GraphDeltaFailure {
+    /// Durable store or logical lookup failure.
+    Store { message: String },
+    /// Invalid identifier.
+    InvalidId { message: String },
+    /// Invalid state transition.
+    InvalidTransition { from: String, to: String },
+    /// Stale authority.
+    StaleAuthority { message: String },
+    /// Fence invariant failure.
+    Fence { message: String },
+    /// Idempotency conflict.
+    Idempotency { message: String },
+    /// Encoding failure.
+    Encoding { message: String },
+    /// Graph conflict.
+    Conflict { message: String },
+    /// Unknown persisted state.
+    UnknownState { message: String },
+}
+
+impl GraphDeltaFailure {
+    /// Preserve an error for durable replay.
+    #[must_use]
+    pub fn from_error(error: &LedgerError) -> Self {
+        match error {
+            LedgerError::Store(message) => Self::Store {
+                message: message.clone(),
+            },
+            LedgerError::Domain(error) => match error {
+                DomainError::InvalidId(message) => Self::InvalidId {
+                    message: message.clone(),
+                },
+                DomainError::InvalidTransition { from, to } => Self::InvalidTransition {
+                    from: from.clone(),
+                    to: to.clone(),
+                },
+                DomainError::StaleAuthority(message) => Self::StaleAuthority {
+                    message: message.clone(),
+                },
+                DomainError::Fence(message) => Self::Fence {
+                    message: message.clone(),
+                },
+                DomainError::Idempotency(message) => Self::Idempotency {
+                    message: message.clone(),
+                },
+                DomainError::Encoding(message) => Self::Encoding {
+                    message: message.clone(),
+                },
+                DomainError::Conflict(message) => Self::Conflict {
+                    message: message.clone(),
+                },
+                DomainError::UnknownState(message) => Self::UnknownState {
+                    message: message.clone(),
+                },
+            },
+        }
+    }
+
+    /// Recreate the exact typed error for an idempotent replay.
+    #[must_use]
+    pub fn into_error(self) -> LedgerError {
+        match self {
+            Self::Store { message } => LedgerError::Store(message),
+            Self::InvalidId { message } => DomainError::InvalidId(message).into(),
+            Self::InvalidTransition { from, to } => {
+                DomainError::InvalidTransition { from, to }.into()
+            }
+            Self::StaleAuthority { message } => DomainError::StaleAuthority(message).into(),
+            Self::Fence { message } => DomainError::Fence(message).into(),
+            Self::Idempotency { message } => DomainError::Idempotency(message).into(),
+            Self::Encoding { message } => DomainError::Encoding(message).into(),
+            Self::Conflict { message } => DomainError::Conflict(message).into(),
+            Self::UnknownState { message } => DomainError::UnknownState(message).into(),
+        }
+    }
+}
+
+impl GraphDeltaCommandResult {
+    /// Serialize an applied receipt.
+    ///
+    /// # Errors
+    /// Encoding failure.
+    pub fn applied(graph: &StoredGraph) -> Result<String, LedgerError> {
+        serde_json::to_string(&Self::Applied {
+            graph: Box::new(graph.clone()),
+        })
+        .map_err(|error| LedgerError::Store(error.to_string()))
+    }
+
+    /// Serialize a failed receipt.
+    ///
+    /// # Errors
+    /// Encoding failure.
+    pub fn failed(error: &LedgerError) -> Result<String, LedgerError> {
+        serde_json::to_string(&Self::Failed {
+            error: GraphDeltaFailure::from_error(error),
+        })
+        .map_err(|error| LedgerError::Store(error.to_string()))
+    }
+
+    /// Decode a stored result, failing closed on corrupt data.
+    ///
+    /// # Errors
+    /// Invalid stored JSON.
+    pub fn decode(value: &str) -> Result<Self, LedgerError> {
+        serde_json::from_str(value).map_err(|error| LedgerError::Store(error.to_string()))
+    }
+}
 
 /// One graph mutation. Applied all-or-nothing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,24 +209,28 @@ pub fn apply_graph_delta<L: Ledger>(
 ) -> Result<StoredGraph, LedgerError> {
     let key = format!("delta:{}", delta.digest()?.to_hex());
     let request = CommandRequest::new(&key, "apply_graph_delta", delta)?;
-    ledger.record_command(&request)?;
-    let graph = ledger
-        .get_graph(mission)?
-        .ok_or_else(|| LedgerError::Store("graph missing".into()))?;
-    if already_applied(&graph, delta) {
-        ledger.set_command_phase(&key, CommandPhase::Applied, None)?;
-        return Ok(graph);
+    ledger.apply_graph_delta_command(&request, mission, delta)
+}
+
+/// Evaluate a delta against one transactionally loaded graph snapshot.
+/// Ledger adapters call this inside their transaction boundary.
+///
+/// # Errors
+/// A stale parent, missing subject, illegal transition, or fence violation.
+pub fn evaluate_graph_delta(
+    graph: &StoredGraph,
+    delta: &GraphDelta,
+) -> Result<StoredGraph, LedgerError> {
+    if already_applied(graph, delta) {
+        return Ok(graph.clone());
     }
-    if graph_digest(&graph) != delta.parent {
+    if graph_digest(graph) != delta.parent {
         return Err(DomainError::Conflict("parent digest mismatch".into()).into());
     }
-    let mut next = graph;
+    let mut next = graph.clone();
     for op in &delta.ops {
         apply_op(&mut next, op)?;
     }
-    ledger.put_graph(&next)?;
-    ledger.append_event("graph_delta", &delta.digest()?.to_hex())?;
-    ledger.set_command_phase(&key, CommandPhase::Applied, None)?;
     Ok(next)
 }
 
@@ -157,51 +288,4 @@ fn already_applied(graph: &StoredGraph, delta: &GraphDelta) -> bool {
             .iter()
             .any(|variant| variant.id == *variant_id && variant.fence_counter == *to),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::materializer::{materialize_plan, PlanInput};
-    use crate::memory::MemoryLedger;
-    use bullet_domain::TaskClass;
-
-    #[test]
-    fn delta_is_atomic_and_idempotent() {
-        let mut ledger = MemoryLedger::new();
-        let graph = materialize_plan(
-            &mut ledger,
-            "delta-seed",
-            &PlanInput {
-                title: "d".into(),
-                objective: "o".into(),
-                packages: vec![("p".into(), TaskClass::BoundedBugFix)],
-            },
-            "2026-01-01T00:00:00.000Z",
-        )
-        .expect("plan");
-        let pkg = graph.packages[0].clone();
-        let delta = GraphDelta {
-            parent: graph_digest(&graph),
-            ops: vec![GraphOp::SetPackageState {
-                id: pkg.id.clone(),
-                from: WorkPackageState::Ready,
-                to: WorkPackageState::Leased,
-            }],
-        };
-        let first = apply_graph_delta(&mut ledger, &graph.mission.id, &delta).expect("apply");
-        assert_eq!(first.packages[0].state, WorkPackageState::Leased);
-        let second = apply_graph_delta(&mut ledger, &graph.mission.id, &delta).expect("replay");
-        assert_eq!(second.packages[0].state, WorkPackageState::Leased);
-        let stale = GraphDelta {
-            parent: graph_digest(&graph),
-            ops: vec![GraphOp::SetPackageState {
-                id: pkg.id,
-                from: WorkPackageState::Ready,
-                to: WorkPackageState::Rejected,
-            }],
-        };
-        let err = apply_graph_delta(&mut ledger, &graph.mission.id, &stale).expect_err("conflict");
-        assert!(matches!(err, LedgerError::Domain(DomainError::Conflict(_))));
-    }
 }

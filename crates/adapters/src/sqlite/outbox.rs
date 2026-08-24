@@ -74,7 +74,7 @@ pub(super) fn mark(
                 params![phase.as_str(), now, seq],
             )
             .map_err(store)?,
-        CommandPhase::Verified | CommandPhase::Unknown => conn
+        CommandPhase::Verified | CommandPhase::Failed | CommandPhase::Unknown => conn
             .execute(
                 "UPDATE outbox SET phase = ?1, acked_at = ?2 WHERE seq = ?3",
                 params![phase.as_str(), now, seq],

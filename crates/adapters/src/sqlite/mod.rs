@@ -10,8 +10,8 @@ mod outbox;
 
 use bullet_application::{
     ActiveLease, CommandRecord, CommandRequest, EffectIntentRecord, EffectReceiptRecord,
-    EffectState, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, Ledger, LedgerError,
-    LedgerEvent, OutboxItem, ReadyRow, ReleaseRequest, StoredGraph,
+    EffectState, ExpiredLease, GraphDelta, HeartbeatRequest, LeaseGrant, LeaseRequest, Ledger,
+    LedgerError, LedgerEvent, OutboxItem, ReadyRow, ReleaseRequest, StoredGraph,
 };
 use bullet_domain::{
     Attempt, AttemptId, Candidate, CandidateId, CommandPhase, Effect, EffectId, Evidence,
@@ -43,6 +43,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
 /// SQLite-backed ledger.
 pub struct SqliteLedger {
     conn: Connection,
+    graph_delta_fail_after: Option<u8>,
 }
 
 impl SqliteLedger {
@@ -59,7 +60,16 @@ impl SqliteLedger {
         conn.busy_timeout(Duration::from_millis(5_000))
             .map_err(store)?;
         migrate(&mut conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            graph_delta_fail_after: None,
+        })
+    }
+
+    /// Inject a one-shot graph-delta failure after `allowed` successful
+    /// transaction boundaries. Used by crash-atomicity integration tests.
+    pub fn set_graph_delta_failpoint(&mut self, allowed: u8) {
+        self.graph_delta_fail_after = Some(allowed);
     }
 }
 
@@ -137,6 +147,21 @@ impl Ledger for SqliteLedger {
 
     fn get_graph(&self, mission: &MissionId) -> Result<Option<StoredGraph>, LedgerError> {
         graph::get_graph(&self.conn, mission)
+    }
+
+    fn apply_graph_delta_command(
+        &mut self,
+        request: &CommandRequest,
+        mission: &MissionId,
+        delta: &GraphDelta,
+    ) -> Result<StoredGraph, LedgerError> {
+        graph::apply_graph_delta(
+            &mut self.conn,
+            &mut self.graph_delta_fail_after,
+            request,
+            mission,
+            delta,
+        )
     }
 
     fn list_missions(&self) -> Result<Vec<Mission>, LedgerError> {

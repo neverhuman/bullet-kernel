@@ -7,6 +7,7 @@ mod effects;
 use crate::commands::{CommandRecord, CommandRequest};
 use crate::effect_state::EffectState;
 use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
+use crate::graph_delta::{evaluate_graph_delta, GraphDelta, GraphDeltaCommandResult};
 use crate::records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReadyRow, ReleaseRequest, StoredGraph,
@@ -19,7 +20,7 @@ use bullet_domain::{
 use std::collections::BTreeMap;
 
 /// Memory ledger.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct MemoryLedger {
     commands: BTreeMap<String, CommandRecord>,
     graphs: BTreeMap<String, StoredGraph>,
@@ -151,6 +152,97 @@ impl Ledger for MemoryLedger {
 
     fn get_graph(&self, mission: &MissionId) -> Result<Option<StoredGraph>, LedgerError> {
         Ok(self.graphs.get(&mission.to_string()).cloned())
+    }
+
+    fn apply_graph_delta_command(
+        &mut self,
+        request: &CommandRequest,
+        mission: &MissionId,
+        delta: &GraphDelta,
+    ) -> Result<StoredGraph, LedgerError> {
+        let before = self.clone();
+        let transaction = (|| -> Result<Result<StoredGraph, LedgerError>, LedgerError> {
+            let record = self.record_command(request)?;
+            match record.phase {
+                CommandPhase::Applied | CommandPhase::Verified => {
+                    let response = record.response.ok_or_else(|| {
+                        LedgerError::Store("applied delta command has no stored result".into())
+                    })?;
+                    return match GraphDeltaCommandResult::decode(&response)? {
+                        GraphDeltaCommandResult::Applied { graph }
+                            if graph.mission.id == *mission =>
+                        {
+                            Ok(Ok(*graph))
+                        }
+                        GraphDeltaCommandResult::Applied { .. } => Err(LedgerError::Store(
+                            "applied delta result belongs to another mission".into(),
+                        )),
+                        GraphDeltaCommandResult::Failed { .. } => Err(LedgerError::Store(
+                            "applied delta command stores a failed result".into(),
+                        )),
+                    };
+                }
+                CommandPhase::Failed => {
+                    let response = record.response.ok_or_else(|| {
+                        LedgerError::Store("failed delta command has no stored result".into())
+                    })?;
+                    return match GraphDeltaCommandResult::decode(&response)? {
+                        GraphDeltaCommandResult::Failed { error } => Ok(Err(error.into_error())),
+                        GraphDeltaCommandResult::Applied { .. } => Err(LedgerError::Store(
+                            "failed delta command stores an applied result".into(),
+                        )),
+                    };
+                }
+                CommandPhase::Pending | CommandPhase::Unknown => {}
+            }
+
+            let graph = self
+                .get_graph(mission)?
+                .ok_or_else(|| LedgerError::Store("graph missing".into()));
+            let next = match graph.and_then(|graph| evaluate_graph_delta(&graph, delta)) {
+                Ok(next) => next,
+                Err(error) => {
+                    let response = GraphDeltaCommandResult::failed(&error)?;
+                    self.tick()?;
+                    let command = self
+                        .commands
+                        .get_mut(&request.idempotency_key)
+                        .ok_or_else(|| LedgerError::Store("delta command missing".into()))?;
+                    command.phase = CommandPhase::Failed;
+                    command.response = Some(response);
+                    self.tick()?;
+                    return Ok(Err(error));
+                }
+            };
+
+            let response = GraphDeltaCommandResult::applied(&next)?;
+            let event_body = delta.digest()?.to_hex();
+            self.tick()?;
+            self.graphs.insert(mission.to_string(), next.clone());
+            self.tick()?;
+            self.push_event("graph_delta", &event_body, None, None, None);
+            self.tick()?;
+            let command = self
+                .commands
+                .get_mut(&request.idempotency_key)
+                .ok_or_else(|| LedgerError::Store("delta command missing".into()))?;
+            command.phase = CommandPhase::Applied;
+            command.response = Some(response);
+            self.tick()?;
+            Ok(Ok(next))
+        })();
+
+        let outcome = match transaction {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let failpoint = self.fail_after_writes;
+                *self = before;
+                self.fail_after_writes = failpoint;
+                return Err(error);
+            }
+        };
+        self.tick()?;
+        outcome
     }
 
     fn list_missions(&self) -> Result<Vec<Mission>, LedgerError> {
@@ -327,7 +419,7 @@ impl Ledger for MemoryLedger {
         item.phase = phase;
         match phase {
             CommandPhase::Applied => item.delivered_at = Some(now.to_string()),
-            CommandPhase::Verified | CommandPhase::Unknown => {
+            CommandPhase::Verified | CommandPhase::Failed | CommandPhase::Unknown => {
                 item.acked_at = Some(now.to_string());
             }
             CommandPhase::Pending => {}

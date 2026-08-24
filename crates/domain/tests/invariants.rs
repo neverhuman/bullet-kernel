@@ -161,6 +161,7 @@ fn state_labels_parse_round_trip_and_fail_closed() {
     for phase in [
         CommandPhase::Pending,
         CommandPhase::Applied,
+        CommandPhase::Failed,
         CommandPhase::Verified,
         CommandPhase::Unknown,
     ] {

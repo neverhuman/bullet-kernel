@@ -107,6 +107,8 @@ pub enum CommandPhase {
     Pending,
     /// Durable local transition applied.
     Applied,
+    /// Command was durably refused; the stored response explains why.
+    Failed,
     /// External postcondition observed.
     Verified,
     /// Probe did not establish the effect.
@@ -120,6 +122,7 @@ impl CommandPhase {
         match self {
             Self::Pending => "pending",
             Self::Applied => "applied",
+            Self::Failed => "failed",
             Self::Verified => "verified",
             Self::Unknown => "unknown",
         }
@@ -134,6 +137,7 @@ impl CommandPhase {
         match name {
             "pending" => Ok(Self::Pending),
             "applied" => Ok(Self::Applied),
+            "failed" => Ok(Self::Failed),
             "verified" => Ok(Self::Verified),
             "unknown" => Ok(Self::Unknown),
             other => Err(DomainError::UnknownState(format!("command phase {other}"))),

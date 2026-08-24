@@ -6,6 +6,7 @@
 use crate::commands::{CommandRecord, CommandRequest};
 use crate::effect_state::EffectState;
 use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
+use crate::graph_delta::GraphDelta;
 use crate::records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReadyRow, ReleaseRequest, StoredGraph,
@@ -88,6 +89,19 @@ pub trait Ledger {
     /// # Errors
     /// Store failure.
     fn get_graph(&self, mission: &MissionId) -> Result<Option<StoredGraph>, LedgerError>;
+
+    /// Admit and apply one graph delta in a single transaction. Command row,
+    /// graph body, audit event, and applied/failed result commit together.
+    /// Identical replay never applies the delta or appends its event twice.
+    ///
+    /// # Errors
+    /// Typed graph/idempotency failure or durable store failure.
+    fn apply_graph_delta_command(
+        &mut self,
+        request: &CommandRequest,
+        mission: &MissionId,
+        delta: &GraphDelta,
+    ) -> Result<StoredGraph, LedgerError>;
 
     /// List missions.
     ///

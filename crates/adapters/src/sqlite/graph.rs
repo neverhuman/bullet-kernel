@@ -1,11 +1,14 @@
 //! Graph snapshots, typed attempts, and append-only candidate/evidence/
 //! effect rows.
 
-use super::{events, from_json, json, store};
-use bullet_application::{LedgerError, StoredGraph};
+use super::{commands, events, from_json, json, store};
+use bullet_application::{
+    graph_delta::{evaluate_graph_delta, GraphDeltaCommandResult},
+    CommandRequest, GraphDelta, LedgerError, StoredGraph,
+};
 use bullet_domain::{
-    Attempt, AttemptId, AttemptState, DomainError, Mission, MissionId, RunnerId, VariantId,
-    WorkPackageId, WorkPackageState, WorkspaceId,
+    Attempt, AttemptId, AttemptState, CommandPhase, DomainError, Mission, MissionId, RunnerId,
+    VariantId, WorkPackageId, WorkPackageState, WorkspaceId,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
@@ -86,6 +89,101 @@ pub(super) fn put_graph(conn: &Connection, graph: &StoredGraph) -> Result<(), Le
         )));
     }
     Ok(())
+}
+
+fn delta_step(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {
+    match fail_after {
+        Some(0) => {
+            *fail_after = None;
+            Err(LedgerError::Store("injected graph delta failpoint".into()))
+        }
+        Some(remaining) => {
+            *remaining -= 1;
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+pub(super) fn apply_graph_delta(
+    conn: &mut Connection,
+    fail_after: &mut Option<u8>,
+    request: &CommandRequest,
+    mission: &MissionId,
+    delta: &GraphDelta,
+) -> Result<StoredGraph, LedgerError> {
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(store)?;
+    delta_step(fail_after)?;
+    let record = commands::record_command(&tx, request)?;
+    match record.phase {
+        CommandPhase::Applied | CommandPhase::Verified => {
+            let response = record.response.ok_or_else(|| {
+                LedgerError::Store("applied delta command has no stored result".into())
+            })?;
+            return match GraphDeltaCommandResult::decode(&response)? {
+                GraphDeltaCommandResult::Applied { graph } if graph.mission.id == *mission => {
+                    Ok(*graph)
+                }
+                GraphDeltaCommandResult::Applied { .. } => Err(LedgerError::Store(
+                    "applied delta result belongs to another mission".into(),
+                )),
+                GraphDeltaCommandResult::Failed { .. } => Err(LedgerError::Store(
+                    "applied delta command stores a failed result".into(),
+                )),
+            };
+        }
+        CommandPhase::Failed => {
+            let response = record.response.ok_or_else(|| {
+                LedgerError::Store("failed delta command has no stored result".into())
+            })?;
+            return match GraphDeltaCommandResult::decode(&response)? {
+                GraphDeltaCommandResult::Failed { error } => Err(error.into_error()),
+                GraphDeltaCommandResult::Applied { .. } => Err(LedgerError::Store(
+                    "failed delta command stores an applied result".into(),
+                )),
+            };
+        }
+        CommandPhase::Pending | CommandPhase::Unknown => {}
+    }
+
+    let graph = get_graph(&tx, mission)?.ok_or_else(|| LedgerError::Store("graph missing".into()));
+    let next = match graph.and_then(|graph| evaluate_graph_delta(&graph, delta)) {
+        Ok(next) => next,
+        Err(error) => {
+            let response = GraphDeltaCommandResult::failed(&error)?;
+            delta_step(fail_after)?;
+            commands::set_phase(
+                &tx,
+                &request.idempotency_key,
+                CommandPhase::Failed,
+                Some(&response),
+            )?;
+            delta_step(fail_after)?;
+            tx.commit().map_err(store)?;
+            delta_step(fail_after)?;
+            return Err(error);
+        }
+    };
+
+    let response = GraphDeltaCommandResult::applied(&next)?;
+    let event_body = delta.digest()?.to_hex();
+    delta_step(fail_after)?;
+    put_graph(&tx, &next)?;
+    delta_step(fail_after)?;
+    events::insert_event(&tx, "graph_delta", &event_body, None, None, None)?;
+    delta_step(fail_after)?;
+    commands::set_phase(
+        &tx,
+        &request.idempotency_key,
+        CommandPhase::Applied,
+        Some(&response),
+    )?;
+    delta_step(fail_after)?;
+    tx.commit().map_err(store)?;
+    delta_step(fail_after)?;
+    Ok(next)
 }
 
 pub(super) fn get_graph(
