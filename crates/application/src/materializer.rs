@@ -4,11 +4,11 @@ use crate::commands::CommandRequest;
 use crate::records::StoredGraph;
 use crate::store::{Ledger, LedgerError};
 use bullet_domain::{
-    CommandPhase, Digest, Mission, MissionId, MissionState, OrganizationId, PlanRevision,
-    PlanRevisionId, RepositoryId, SelectionGroupId, TaskClass, Variant, VariantId, WorkPackage,
-    WorkPackageId, WorkPackageState,
+    Digest, Mission, MissionId, MissionState, OrganizationId, PlanRevision, PlanRevisionId,
+    RepositoryId, SelectionGroupId, TaskClass, Variant, VariantId, WorkPackage, WorkPackageId,
+    WorkPackageState,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Input for one plan revision.
 #[derive(Clone, Debug)]
@@ -35,6 +35,67 @@ struct CanonicalPlan<'a> {
 struct CanonicalPackage<'a> {
     title: &'a str,
     task_class: TaskClass,
+}
+
+/// Exact durable result of an atomic Mission materialization command.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MaterializeCommandResult {
+    /// Command, graph rows, and audit event committed together.
+    Applied {
+        /// Initial graph created by this command.
+        graph: Box<StoredGraph>,
+    },
+}
+
+impl MaterializeCommandResult {
+    /// Encode the exact initial graph for durable replay.
+    ///
+    /// # Errors
+    /// Store failure when serialization fails.
+    pub fn applied(graph: &StoredGraph) -> Result<String, LedgerError> {
+        serde_json::to_string(&Self::Applied {
+            graph: Box::new(graph.clone()),
+        })
+        .map_err(|error| LedgerError::Store(error.to_string()))
+    }
+
+    /// Strictly decode a stored result. The byte-for-byte canonical roundtrip
+    /// rejects ignored nested fields, alternate encodings, and corruption.
+    ///
+    /// # Errors
+    /// Store failure for malformed or non-canonical persisted data.
+    pub fn decode(value: &str) -> Result<Self, LedgerError> {
+        let decoded: Self =
+            serde_json::from_str(value).map_err(|error| LedgerError::Store(error.to_string()))?;
+        let canonical = serde_json::to_string(&decoded)
+            .map_err(|error| LedgerError::Store(error.to_string()))?;
+        if canonical != value {
+            return Err(LedgerError::Store(
+                "materialization result is not canonical".into(),
+            ));
+        }
+        Ok(decoded)
+    }
+
+    /// Return the stored graph only when it exactly matches the deterministic
+    /// graph for this command request.
+    ///
+    /// # Errors
+    /// Store failure when persisted result identity or content differs.
+    pub fn graph_for(self, expected: &StoredGraph) -> Result<StoredGraph, LedgerError> {
+        let Self::Applied { graph } = self;
+        let stored =
+            serde_json::to_string(&graph).map_err(|error| LedgerError::Store(error.to_string()))?;
+        let expected = serde_json::to_string(expected)
+            .map_err(|error| LedgerError::Store(error.to_string()))?;
+        if stored != expected {
+            return Err(LedgerError::Store(
+                "materialization result does not match command graph".into(),
+            ));
+        }
+        Ok(*graph)
+    }
 }
 
 fn canonical<'a>(seed: &'a str, input: &'a PlanInput) -> CanonicalPlan<'a> {
@@ -68,33 +129,8 @@ pub fn materialize_plan<L: Ledger>(
     let plan_body = canonical(seed, input);
     let key = format!("materialize:{seed}");
     let request = CommandRequest::new(&key, "materialize_plan", &plan_body)?;
-    let record = ledger.record_command(&request)?;
-
-    let mission_id = MissionId::from_seed(seed);
-    if let Some(existing) = ledger.get_graph(&mission_id)? {
-        if record.phase == CommandPhase::Pending {
-            ledger.set_command_phase(
-                &key,
-                CommandPhase::Verified,
-                Some(existing.mission.id.as_str()),
-            )?;
-        }
-        return Ok(existing);
-    }
-
     let graph = build_graph(seed, input, Digest::of(request.payload.as_bytes()));
-    ledger.materialize_graph(&graph, now)?;
-    ledger.set_command_phase(&key, CommandPhase::Applied, Some(mission_id.as_str()))?;
-
-    if ledger.get_graph(&mission_id)?.is_some() {
-        ledger.set_command_phase(&key, CommandPhase::Verified, None)?;
-    } else {
-        ledger.set_command_phase(&key, CommandPhase::Unknown, None)?;
-        return Err(LedgerError::Store(
-            "materialized graph failed read-back".into(),
-        ));
-    }
-    Ok(graph)
+    ledger.materialize_plan_command(&request, &graph, now)
 }
 
 fn build_graph(seed: &str, input: &PlanInput, canonical_hash: Digest) -> StoredGraph {
@@ -189,27 +225,5 @@ mod tests {
             err,
             LedgerError::Domain(DomainError::Idempotency(_))
         ));
-    }
-
-    #[test]
-    fn materialization_is_atomic_under_failpoint() {
-        let mut ledger = MemoryLedger::new();
-        // First write (record_command) succeeds; second (materialize_graph) fails.
-        ledger.set_failpoint(1);
-        let err = materialize_plan(&mut ledger, "atomic", &plan(), "2026-01-01T00:00:00.000Z")
-            .expect_err("failpoint");
-        assert!(matches!(err, LedgerError::Store(_)));
-        let mission = MissionId::from_seed("atomic");
-        assert!(ledger.get_graph(&mission).expect("read").is_none());
-        assert!(ledger.ready_rows().expect("ready").is_empty());
-        assert!(ledger.list_events().expect("events").is_empty());
-        // Replay after the crash succeeds and is idempotent.
-        let first = materialize_plan(&mut ledger, "atomic", &plan(), "2026-01-01T00:00:01.000Z")
-            .expect("replay");
-        let second = materialize_plan(&mut ledger, "atomic", &plan(), "2026-01-01T00:00:02.000Z")
-            .expect("idempotent");
-        assert_eq!(first.mission.id, second.mission.id);
-        assert_eq!(first.plan.canonical_hash, second.plan.canonical_hash);
-        assert_eq!(ledger.ready_rows().expect("ready").len(), 1);
     }
 }

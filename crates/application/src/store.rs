@@ -70,6 +70,20 @@ pub trait Ledger {
     /// Store failure.
     fn get_command(&self, key: &str) -> Result<Option<CommandRecord>, LedgerError>;
 
+    /// Admit and materialize one Mission plan in a single transaction. The
+    /// command row, graph, fence counters, ready rows, audit event, and exact
+    /// applied result commit together. Identical replay returns the stored
+    /// initial graph without appending or changing current graph state.
+    ///
+    /// # Errors
+    /// Typed idempotency/conflict error or durable store failure.
+    fn materialize_plan_command(
+        &mut self,
+        request: &CommandRequest,
+        graph: &StoredGraph,
+        now: &str,
+    ) -> Result<StoredGraph, LedgerError>;
+
     /// Persist a fresh graph atomically: graph body, one fence counter per
     /// variant, one ready row per `Ready` package, and a
     /// `graph_materialized` event — all in one transaction.

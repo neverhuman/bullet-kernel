@@ -6,6 +6,7 @@ mod effects;
 mod events;
 mod graph;
 mod leases;
+mod materialization;
 mod outbox;
 
 use bullet_application::{
@@ -43,6 +44,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
 /// SQLite-backed ledger.
 pub struct SqliteLedger {
     conn: Connection,
+    materialization_fail_after: Option<u8>,
     graph_delta_fail_after: Option<u8>,
 }
 
@@ -62,8 +64,15 @@ impl SqliteLedger {
         migrate(&mut conn)?;
         Ok(Self {
             conn,
+            materialization_fail_after: None,
             graph_delta_fail_after: None,
         })
+    }
+
+    /// Inject a one-shot materialization failure after `allowed` successful
+    /// transaction boundaries. Used by crash-atomicity integration tests.
+    pub fn set_materialization_failpoint(&mut self, allowed: u8) {
+        self.materialization_fail_after = Some(allowed);
     }
 
     /// Inject a one-shot graph-delta failure after `allowed` successful
@@ -135,6 +144,21 @@ impl Ledger for SqliteLedger {
 
     fn get_command(&self, key: &str) -> Result<Option<CommandRecord>, LedgerError> {
         commands::get_command(&self.conn, key)
+    }
+
+    fn materialize_plan_command(
+        &mut self,
+        request: &CommandRequest,
+        graph: &StoredGraph,
+        now: &str,
+    ) -> Result<StoredGraph, LedgerError> {
+        materialization::materialize_plan_command(
+            &mut self.conn,
+            &mut self.materialization_fail_after,
+            request,
+            graph,
+            now,
+        )
     }
 
     fn materialize_graph(&mut self, graph: &StoredGraph, now: &str) -> Result<(), LedgerError> {

@@ -3,6 +3,7 @@
 
 mod authority;
 mod effects;
+mod materialization;
 
 use crate::commands::{CommandRecord, CommandRequest};
 use crate::effect_state::EffectState;
@@ -132,6 +133,15 @@ impl Ledger for MemoryLedger {
 
     fn get_command(&self, key: &str) -> Result<Option<CommandRecord>, LedgerError> {
         Ok(self.commands.get(key).cloned())
+    }
+
+    fn materialize_plan_command(
+        &mut self,
+        request: &CommandRequest,
+        graph: &StoredGraph,
+        now: &str,
+    ) -> Result<StoredGraph, LedgerError> {
+        self.materialize_plan_command_impl(request, graph, now)
     }
 
     fn materialize_graph(&mut self, graph: &StoredGraph, now: &str) -> Result<(), LedgerError> {
