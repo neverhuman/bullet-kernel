@@ -188,7 +188,8 @@ pub(super) fn heartbeat(conn: &Connection, req: &HeartbeatRequest) -> Result<(),
         .execute(
             "UPDATE active_leases SET heartbeat_at = ?1, expires_at = ?2
              WHERE variant_id = ?3 AND attempt_id = ?4 AND fence = ?5
-               AND runner_id = ?6 AND runner_epoch = ?7 AND workspace_nonce = ?8",
+               AND runner_id = ?6 AND runner_epoch = ?7 AND workspace_nonce = ?8
+               AND expires_at > ?1",
             params![
                 req.now,
                 req.expires_at,
@@ -268,7 +269,7 @@ pub(super) fn expire_leases(
     let expired = {
         let mut stmt = tx
             .prepare(&format!(
-                "SELECT {LEASE_COLUMNS} FROM active_leases WHERE expires_at < ?1 ORDER BY variant_id"
+                "SELECT {LEASE_COLUMNS} FROM active_leases WHERE expires_at <= ?1 ORDER BY variant_id"
             ))
             .map_err(store)?;
         let rows = stmt.query_map(params![now], read_lease).map_err(store)?;

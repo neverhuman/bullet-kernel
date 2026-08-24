@@ -213,6 +213,7 @@ impl MemoryLedger {
                 && lease.runner_id == req.runner_id
                 && lease.runner_epoch == req.runner_epoch
                 && lease.workspace_nonce == req.workspace_nonce
+                && lease.expires_at > req.now
             {
                 lease.heartbeat_at = req.now.clone();
                 lease.expires_at = req.expires_at.clone();
@@ -234,7 +235,7 @@ impl MemoryLedger {
         let expired: Vec<ActiveLease> = self
             .leases
             .values()
-            .filter(|lease| lease.expires_at.as_str() < now)
+            .filter(|lease| lease.expires_at.as_str() <= now)
             .cloned()
             .collect();
         let mut out = Vec::new();

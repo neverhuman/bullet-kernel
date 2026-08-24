@@ -7,6 +7,7 @@ pub mod entities;
 pub mod error;
 pub mod gates;
 pub mod ids;
+pub mod mutation_guard;
 pub mod observation;
 pub mod schema_bundle;
 pub mod states;
@@ -22,6 +23,7 @@ pub use entities::{
 pub use error::DomainError;
 pub use gates::{EvidenceTier, GateOutcome, REASON_ZERO_TESTS};
 pub use ids::*;
+pub use mutation_guard::{MutationContext, MutationGuard, MutationRefusal};
 pub use observation::Observation;
 pub use states::{AttemptState, CommandPhase, MissionState, WorkPackageState};
 pub use taxonomy::{ModelTier, TaskClass, TaskClassification};
