@@ -58,12 +58,14 @@ pub struct CandidateOut {
 pub struct GateOut {
     /// `PASS` only on a clean zero exit.
     pub writer_outcome: String,
-    /// Gate exit code.
-    pub exit_code: Option<i32>,
+    /// Ordered IDs resolved by the writer's fixed registry.
+    pub gate_ids: Vec<String>,
+    /// Exact fixed argv resolved for each gate ID.
+    pub argv: Vec<Vec<String>>,
+    /// Gate exit codes in the same order.
+    pub exit_codes: Vec<Option<i32>>,
     /// Repair rounds consumed.
     pub repair_rounds: u32,
-    /// Gate command line.
-    pub command: String,
 }
 
 /// Independent verifier evidence summary (E2).
@@ -296,14 +298,20 @@ mod tests {
             }),
             gate: Some(GateOut {
                 writer_outcome: "PASS".into(),
-                exit_code: Some(0),
+                gate_ids: vec!["repo.gate.v1".into()],
+                argv: vec![vec![
+                    "/usr/bin/grep".into(),
+                    "-qx".into(),
+                    "PONG".into(),
+                    "PONG.txt".into(),
+                ]],
+                exit_codes: vec![Some(0)],
                 repair_rounds: 0,
-                command: "sh ./gate.sh".into(),
             }),
             evidence: Some(EvidenceOut {
                 verifier_outcome: "PASS".into(),
                 tier: "E2".into(),
-                gate: "sh ./gate.sh".into(),
+                gate: "/usr/bin/grep -qx PONG PONG.txt".into(),
                 produced_by: "bullet-verifier".into(),
             }),
             effect: EffectOut {

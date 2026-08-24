@@ -46,9 +46,9 @@ struct Args {
     /// Mission objective for the prompt capsule.
     #[arg(long)]
     objective: String,
-    /// Deterministic gate command.
-    #[arg(long)]
-    gate: String,
+    /// Admitted fixed gate ID (repeatable, resolved by the sealed registry).
+    #[arg(long = "gate-id", required = true)]
+    gate_ids: Vec<String>,
     /// Granted scope prefix (repeatable).
     #[arg(long = "scope", required = true)]
     scope: Vec<String>,
@@ -111,7 +111,8 @@ fn outcome_json(outcome: &AttemptOutcome) -> serde_json::Value {
         "attempt_id": outcome.attempt_id.as_str(),
         "fence": outcome.fence,
         "repair_rounds": outcome.repair_rounds,
-        "gate_passed": outcome.gate.passed(),
+        "gate_passed": outcome.gates.iter().all(|gate| gate.passed()),
+        "gates": outcome.gates,
         "candidate": outcome.candidate,
     })
 }
@@ -201,7 +202,7 @@ async fn execute(
         args.workspace_root,
         args.objective,
         args.scope,
-        args.gate,
+        args.gate_ids,
     );
     let clock = Arc::new(MonotonicClock::new());
     let result = run_attempt(client, adapter, journal.clone(), clock, &request, &config).await;

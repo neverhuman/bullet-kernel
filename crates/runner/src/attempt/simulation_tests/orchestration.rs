@@ -47,7 +47,7 @@ fn config(origin: PathBuf, base_sha: String, farm_root: PathBuf) -> AttemptConfi
         farm_root,
         "test-only orchestration".into(),
         vec!["PONG.txt".into()],
-        "test -f PONG.txt".into(),
+        vec![crate::REPOSITORY_GATE_ID.into()],
     );
     config.heartbeat = HeartbeatConfig {
         interval: Duration::from_millis(10),

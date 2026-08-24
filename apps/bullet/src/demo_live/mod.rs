@@ -262,7 +262,7 @@ async fn verify_candidate(
         base_sha: candidate.base_commit.clone(),
         head_sha: candidate.head_commit.clone(),
         tree_sha: candidate.tree_hash.clone(),
-        gate_command: fixture.gate_command.clone(),
+        gate_command: fixture.verifier_gate_command.clone(),
         timeout_secs: 120,
         author_attempt_id: phase.outcome.attempt_id.to_string(),
     };

@@ -5,6 +5,12 @@
 use crate::error::HarnessError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
+
+/// Maximum gates one proposal may name.
+pub const MAX_GATE_IDS: usize = 16;
+/// Maximum UTF-8 bytes in one gate identifier.
+pub const MAX_GATE_ID_BYTES: usize = 64;
 
 /// Whole-file change operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,8 +60,8 @@ pub struct PatchProposal {
     pub intent_summary: String,
     /// Whole-file changes.
     pub changes: Vec<FileChange>,
-    /// Deterministic gate commands to run.
-    pub tests_to_run: Vec<String>,
+    /// Ordered policy-admitted gate identifiers. Never commands or argv.
+    pub gate_ids: Vec<String>,
     /// Provider assertions.
     pub claims: Vec<String>,
     /// Provider uncertainties.
@@ -126,6 +132,7 @@ impl PatchProposal {
     ///
     /// `PROPOSAL_PARSE_FAILED` on unsafe paths or op/contents disagreement.
     pub fn validate(&self) -> Result<(), HarnessError> {
+        validate_gate_ids(&self.gate_ids)?;
         for change in &self.changes {
             let path = change.path.as_str();
             if path.is_empty()
@@ -155,6 +162,46 @@ impl PatchProposal {
     }
 }
 
+/// Validate the bounded lexical shape and uniqueness of gate identifiers.
+/// Registry admission remains a Runner policy decision.
+///
+/// # Errors
+///
+/// `PROPOSAL_PARSE_FAILED` for empty, oversized, duplicate, or command-shaped
+/// identifiers.
+pub fn validate_gate_ids(gate_ids: &[String]) -> Result<(), HarnessError> {
+    if gate_ids.is_empty() || gate_ids.len() > MAX_GATE_IDS {
+        return Err(HarnessError::ProposalParse {
+            reason: format!("gate_ids must contain 1..={MAX_GATE_IDS} entries"),
+        });
+    }
+    let mut seen = BTreeSet::new();
+    for gate_id in gate_ids {
+        let admitted_shape = !gate_id.is_empty()
+            && gate_id.len() <= MAX_GATE_ID_BYTES
+            && gate_id.as_bytes()[0].is_ascii_lowercase()
+            && gate_id.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b'-')
+            });
+        if !admitted_shape {
+            return Err(HarnessError::ProposalParse {
+                reason: format!(
+                    "gate_id must match [a-z][a-z0-9._-]{{0,{}}}: {gate_id:?}",
+                    MAX_GATE_ID_BYTES - 1
+                ),
+            });
+        }
+        if !seen.insert(gate_id.as_str()) {
+            return Err(HarnessError::ProposalParse {
+                reason: format!("duplicate gate_id: {gate_id}"),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The hand-written JSON Schema this struct must agree with.
 #[must_use]
 pub fn schema_source() -> &'static str {
@@ -174,7 +221,6 @@ fn fenced_block<'a>(text: &'a str, fence: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
 
     fn sample() -> PatchProposal {
         PatchProposal {
@@ -184,7 +230,7 @@ mod tests {
                 op: ChangeOp::Create,
                 contents: Some("PONG\n".into()),
             }],
-            tests_to_run: vec!["cat PONG.txt".into()],
+            gate_ids: vec!["repo.gate.v1".into()],
             claims: vec!["file exists".into()],
             uncertainties: vec![],
             done: true,
@@ -210,7 +256,7 @@ mod tests {
         let struct_fields: BTreeSet<String> = [
             "intent_summary",
             "changes",
-            "tests_to_run",
+            "gate_ids",
             "claims",
             "uncertainties",
             "done",
@@ -227,6 +273,11 @@ mod tests {
             .collect();
         assert_eq!(props, struct_fields);
         assert_eq!(schema["additionalProperties"], Value::Bool(false));
+        let gates = &schema["properties"]["gate_ids"];
+        assert_eq!(gates["minItems"], 1);
+        assert_eq!(gates["maxItems"], MAX_GATE_IDS);
+        assert_eq!(gates["uniqueItems"], Value::Bool(true));
+        assert_eq!(gates["items"]["maxLength"], MAX_GATE_ID_BYTES);
 
         let item = &schema["properties"]["changes"]["items"];
         let item_required: BTreeSet<String> = item["required"]
@@ -276,6 +327,29 @@ mod tests {
         let mut v = serde_json::to_value(sample()).unwrap();
         v["extra"] = Value::Bool(true);
         assert!(PatchProposal::from_value(&v).is_err());
+    }
+
+    #[test]
+    fn gate_ids_are_bounded_unique_and_never_command_text() {
+        for invalid in [
+            vec![],
+            vec!["repo.gate.v1".into(), "repo.gate.v1".into()],
+            vec!["repo.gate.v1; touch PWNED".into()],
+            vec!["/bin/true".into()],
+            vec!["A".repeat(MAX_GATE_ID_BYTES + 1)],
+            (0..=MAX_GATE_IDS)
+                .map(|index| format!("gate.{index}"))
+                .collect(),
+        ] {
+            let mut proposal = sample();
+            proposal.gate_ids = invalid;
+            assert!(proposal.validate().is_err());
+        }
+
+        let mut legacy = serde_json::to_value(sample()).unwrap();
+        legacy["tests_to_run"] = serde_json::json!(["touch PWNED"]);
+        legacy.as_object_mut().unwrap().remove("gate_ids");
+        assert!(PatchProposal::from_value(&legacy).is_err());
     }
 
     #[test]

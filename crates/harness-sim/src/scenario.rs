@@ -112,7 +112,7 @@ pub fn sample_proposal() -> serde_json::Value {
         "changes": [
             { "path": "PONG.txt", "op": "create", "contents": "PONG\n" }
         ],
-        "tests_to_run": ["test -f PONG.txt"],
+        "gate_ids": ["repo.gate.v1"],
         "claims": ["PONG.txt exists after apply"],
         "uncertainties": [],
         "done": true

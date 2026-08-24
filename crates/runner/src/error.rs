@@ -53,9 +53,15 @@ pub enum RunnerError {
     /// The gate command could not be executed at all.
     #[error("gate `{command}` failed to run: {reason}")]
     Gate {
-        /// Gate command line.
+        /// Registry-owned gate identifier.
         command: String,
         /// OS failure text.
+        reason: String,
+    },
+    /// Gate selection was malformed, unknown, or differed from policy.
+    #[error("gate selection refused: {reason}")]
+    GateSelection {
+        /// Fail-closed policy detail.
         reason: String,
     },
     /// The bounded repair loop is spent without a passing candidate.
@@ -93,6 +99,7 @@ impl RunnerError {
             Self::Harness(err) => err.reason_code(),
             Self::Lease { .. } => "LEASE_REFUSED",
             Self::Gate { .. } => "GATE_FAILED",
+            Self::GateSelection { .. } => "GATE_SELECTION_REFUSED",
             Self::CapsExhausted { .. } => "CAPS_EXHAUSTED",
             Self::NoProposal(_) => "NO_PROPOSAL",
             Self::Io { .. } => "IO_FAILED",
@@ -151,6 +158,10 @@ mod tests {
             }
             .reason_code(),
             "AUTHORITY_CONTRACT_UNAVAILABLE"
+        );
+        assert_eq!(
+            RunnerError::GateSelection { reason: "x".into() }.reason_code(),
+            "GATE_SELECTION_REFUSED"
         );
     }
 

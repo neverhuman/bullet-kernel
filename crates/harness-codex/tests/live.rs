@@ -70,7 +70,8 @@ async fn live_smoke_codex() {
                 prompt:
                     "Respond with a PatchProposal that creates the file PONG.txt with contents \
                          PONG. Set intent_summary, one change (path PONG.txt, op create, contents \
-                         'PONG\\n'), tests_to_run, claims, uncertainties, and done=true."
+                         'PONG\\n'), gate_ids exactly [\"repo.gate.v1\"], claims, uncertainties, \
+                         and done=true."
                         .to_string(),
             },
         )

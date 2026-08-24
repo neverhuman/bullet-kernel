@@ -30,7 +30,7 @@ async fn refused_attempt(
         root,
         "must not run".into(),
         vec!["PONG.txt".into()],
-        "exit 99".into(),
+        vec![bullet_runner_core::REPOSITORY_GATE_ID.into()],
     );
     let error = run_attempt(
         Arc::new(DirectLeaseClient::new(ledger)),

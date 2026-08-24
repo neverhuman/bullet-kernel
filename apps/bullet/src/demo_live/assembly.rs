@@ -96,16 +96,18 @@ impl Assembly {
             patch_digest: outcome.candidate.patch_hash.clone(),
             actual_scope: outcome.candidate.actual_scope.clone(),
         });
+        let all_passed =
+            !outcome.gates.is_empty() && outcome.gates.iter().all(|gate| gate.passed());
         self.gate = Some(receipt::GateOut {
-            writer_outcome: if outcome.gate.passed() {
-                "PASS"
-            } else {
-                "FAIL"
-            }
-            .to_string(),
-            exit_code: outcome.gate.exit_code,
+            writer_outcome: if all_passed { "PASS" } else { "FAIL" }.to_string(),
+            gate_ids: outcome
+                .gates
+                .iter()
+                .map(|gate| gate.gate_id.clone())
+                .collect(),
+            argv: outcome.gates.iter().map(|gate| gate.argv.clone()).collect(),
+            exit_codes: outcome.gates.iter().map(|gate| gate.exit_code).collect(),
             repair_rounds: outcome.repair_rounds,
-            command: outcome.gate.command.clone(),
         });
         self.provider_usage.push(UsageRow {
             provider: "sim".to_string(),

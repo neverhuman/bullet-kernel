@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn stream_with_json_result_yields_proposal() {
-        let result = r#"{\"intent_summary\":\"x\",\"changes\":[{\"path\":\"PONG.txt\",\"op\":\"create\",\"contents\":\"PONG\"}],\"tests_to_run\":[],\"claims\":[],\"uncertainties\":[],\"done\":true}"#;
+        let result = r#"{\"intent_summary\":\"x\",\"changes\":[{\"path\":\"PONG.txt\",\"op\":\"create\",\"contents\":\"PONG\"}],\"gate_ids\":[\"repo.gate.v1\"],\"claims\":[],\"uncertainties\":[],\"done\":true}"#;
         let lines = [
             r#"{"type":"system","subtype":"init","chatId":"chat-7","model":"m"}"#.to_string(),
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"emitting json"}]}}"#.to_string(),

@@ -53,7 +53,7 @@ async fn production_authority_refusal_is_typed_and_repository_inert() {
         workspace_root.clone(),
         "must not run".into(),
         vec!["PONG.txt".into()],
-        "exit 99".into(),
+        vec![bullet_runner_core::REPOSITORY_GATE_ID.into()],
     );
 
     let error = run_attempt(

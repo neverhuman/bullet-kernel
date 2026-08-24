@@ -10,7 +10,7 @@ mod workspace;
 use crate::capsule::Capsule;
 use crate::clock::Clock;
 use crate::error::RunnerError;
-use crate::gate::{run_gate, GateReport};
+use crate::gate::{run_gate, GateRegistry, GateReport};
 use crate::gitd::{CandidateReceipt, GitdSession, WorkspaceInfo};
 use crate::heartbeat::{start_heartbeat, HeartbeatConfig, HeartbeatHandle};
 use crate::journal::JournalSink;
@@ -41,8 +41,8 @@ pub struct AttemptConfig {
     pub objective: String,
     /// Granted change-intent path prefixes.
     pub scope_prefixes: Vec<String>,
-    /// Deterministic gate command.
-    pub gate_command: String,
+    /// Ordered gate identifiers admitted by policy for this Attempt.
+    pub admitted_gate_ids: Vec<String>,
     /// Bounded repair rounds after the initial turn (ADR 0001: 2).
     pub max_repair_rounds: u32,
     /// Wall-clock bound for one gate run.
@@ -62,7 +62,7 @@ impl AttemptConfig {
         workspace_root: PathBuf,
         objective: String,
         scope_prefixes: Vec<String>,
-        gate_command: String,
+        admitted_gate_ids: Vec<String>,
     ) -> Self {
         Self {
             source_repo,
@@ -70,7 +70,7 @@ impl AttemptConfig {
             workspace_root,
             objective,
             scope_prefixes,
-            gate_command,
+            admitted_gate_ids,
             max_repair_rounds: 2,
             gate_timeout: Duration::from_secs(120),
             turn_timeout: Duration::from_secs(600),
@@ -83,7 +83,7 @@ impl AttemptConfig {
             objective: self.objective.clone(),
             scope_prefixes: self.scope_prefixes.clone(),
             base_sha: self.base_sha.clone(),
-            gate_command: self.gate_command.clone(),
+            admitted_gate_ids: self.admitted_gate_ids.clone(),
         }
     }
 }
@@ -99,8 +99,8 @@ pub struct AttemptOutcome {
     pub candidate: CandidateReceipt,
     /// Repair rounds consumed.
     pub repair_rounds: u32,
-    /// The passing gate report.
-    pub gate: GateReport,
+    /// Passing reports for every admitted gate, in policy order.
+    pub gates: Vec<GateReport>,
 }
 
 fn check_freeze(heartbeat: &HeartbeatHandle) -> Result<(), RunnerError> {
@@ -140,6 +140,7 @@ pub async fn run_attempt(
     request: &AcquireRequest,
     config: &AttemptConfig,
 ) -> Result<AttemptOutcome, RunnerError> {
+    GateRegistry::v1().validate_selection(&config.admitted_gate_ids)?;
     let grant = client.acquire(request).await?;
     journal.record(
         "lease_acquired",
@@ -265,7 +266,7 @@ async fn drive_and_finish(
     session: &SessionHandle,
 ) -> Result<AttemptOutcome, RunnerError> {
     let capsule = config.capsule();
-    let (gate, rounds) = session_loop(
+    let (gates, rounds) = session_loop(
         adapter, gitd, ws, &capsule, config, journal, heartbeat, session,
     )
     .await?;
@@ -290,7 +291,7 @@ async fn drive_and_finish(
         fence: grant.attempt.fence,
         candidate,
         repair_rounds: rounds,
-        gate,
+        gates,
     })
 }
 
@@ -304,7 +305,7 @@ async fn session_loop(
     journal: &dyn JournalSink,
     heartbeat: &HeartbeatHandle,
     session: &SessionHandle,
-) -> Result<(GateReport, u32), RunnerError> {
+) -> Result<(Vec<GateReport>, u32), RunnerError> {
     let mut prompt = capsule.initial_prompt();
     let mut rounds: u32 = 0;
     loop {
@@ -345,16 +346,33 @@ async fn session_loop(
             }
         };
         journal.record("patch_applied", &format!("{applied} paths"));
-        let gate = run_gate(&ws.repo_dir, &config.gate_command, config.gate_timeout).await?;
-        journal.record(
-            "gate_result",
-            &format!("exit {:?} timed_out {}", gate.exit_code, gate.timed_out),
-        );
-        if gate.passed() && proposal.done {
-            return Ok((gate, rounds));
+        let mut gates = Vec::with_capacity(config.admitted_gate_ids.len());
+        for gate_id in &config.admitted_gate_ids {
+            let report = run_gate(&ws.repo_dir, gate_id, config.gate_timeout).await?;
+            journal.record(
+                "gate_result",
+                &format!(
+                    "gate {} exit {:?} timed_out {}",
+                    report.gate_id, report.exit_code, report.timed_out
+                ),
+            );
+            let passed = report.passed();
+            gates.push(report);
+            if !passed {
+                break;
+            }
+        }
+        if gates.len() == config.admitted_gate_ids.len()
+            && gates.iter().all(GateReport::passed)
+            && proposal.done
+        {
+            return Ok((gates, rounds));
         }
         spend_repair_round(&mut rounds, config)?;
-        prompt = capsule.gate_feedback_prompt(&gate);
+        let report = gates
+            .last()
+            .ok_or_else(|| RunnerError::Protocol("admitted gate set produced no report".into()))?;
+        prompt = capsule.gate_feedback_prompt(report);
     }
 }
 
@@ -373,9 +391,10 @@ struct Refusal {
     prompt: String,
 }
 
-/// Typed refusal the loop feeds back BEFORE any apply: an out-of-scope
-/// path. Delete entries are scope-checked exactly like writes; a delete of
-/// a missing file is refused by the daemon at apply as `PATH_ABSENT`.
+/// Typed refusal the loop feeds back BEFORE any apply: an out-of-scope path
+/// or a provider gate selection that differs from policy admission. Delete
+/// entries are scope-checked exactly like writes; a delete of a missing file
+/// is refused by the daemon at apply as `PATH_ABSENT`.
 fn pre_apply_refusal(capsule: &Capsule, proposal: &PatchProposal) -> Option<Refusal> {
     if let Err(RunnerError::ScopeDenied { path }) =
         scope::validate_proposal(&capsule.scope_prefixes, proposal)
@@ -384,6 +403,15 @@ fn pre_apply_refusal(capsule: &Capsule, proposal: &PatchProposal) -> Option<Refu
             stage: "scope_denied",
             detail: path.clone(),
             prompt: capsule.scope_denied_prompt(&path),
+        });
+    }
+    if let Err(error) =
+        GateRegistry::v1().require_exact(&capsule.admitted_gate_ids, &proposal.gate_ids)
+    {
+        return Some(Refusal {
+            stage: "gate_selection_refused",
+            detail: error.to_string(),
+            prompt: capsule.gate_selection_prompt(&error.to_string()),
         });
     }
     None

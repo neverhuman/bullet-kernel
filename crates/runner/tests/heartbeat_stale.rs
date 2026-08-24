@@ -34,7 +34,7 @@ async fn unavailable_authority_stops_before_running_and_heartbeat() {
         dir.path().join("farm"),
         "must not run".into(),
         vec!["PONG.txt".into()],
-        "exit 99".into(),
+        vec![bullet_runner_core::REPOSITORY_GATE_ID.into()],
     );
     config.heartbeat = HeartbeatConfig {
         interval: Duration::from_millis(1),

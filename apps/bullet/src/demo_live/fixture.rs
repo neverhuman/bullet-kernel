@@ -3,15 +3,16 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use bullet_runner_core::REPOSITORY_GATE_ID;
+
 /// The demonstration objective (spec s33.13 first mandatory scenario).
 pub const OBJECTIVE: &str = "Create PONG.txt containing exactly PONG";
-/// Gate used when a target repository carries no gate script.
-pub const DEFAULT_GATE: &str = "test -f PONG.txt && grep -qx PONG PONG.txt";
+/// Verifier-controlled command matching the writer registry's repository gate.
+pub const VERIFIER_GATE_COMMAND: &str = "/usr/bin/grep -qx PONG PONG.txt";
 
 const README: &str =
     "# synthetic integration fixture\n\nObjective: Create PONG.txt containing exactly \
-PONG.\nThe deterministic gate is `sh ./gate.sh`.\n";
-const GATE_SH: &str = "#!/bin/sh\ntest -f PONG.txt && grep -qx PONG PONG.txt\n";
+PONG.\nThe writer gate is the sealed `repo.gate.v1` registry entry.\n";
 
 /// A prepared origin repository.
 #[derive(Clone, Debug)]
@@ -20,8 +21,10 @@ pub struct Fixture {
     pub origin: PathBuf,
     /// Exact base commit.
     pub base_sha: String,
-    /// Deterministic gate command (run via `sh -c` inside the clone).
-    pub gate_command: String,
+    /// Writer gates admitted before provider dispatch.
+    pub writer_gate_ids: Vec<String>,
+    /// Independent verifier command; never sourced from a proposal.
+    pub verifier_gate_command: String,
 }
 
 fn git(repo: &Path, home: &Path, args: &[&str]) -> Result<String, String> {
@@ -49,11 +52,10 @@ fn create_origin(root: &Path) -> Result<(PathBuf, String), String> {
     }
     std::fs::create_dir_all(&repo).map_err(|err| format!("create fixture dir: {err}"))?;
     std::fs::write(repo.join("README.md"), README).map_err(|err| format!("write README: {err}"))?;
-    std::fs::write(repo.join("gate.sh"), GATE_SH).map_err(|err| format!("write gate.sh: {err}"))?;
     git(&repo, root, &["init", "-q", "-b", "main"])?;
     git(&repo, root, &["config", "user.email", "farm@bullet.local"])?;
     git(&repo, root, &["config", "user.name", "Bullet Farm"])?;
-    git(&repo, root, &["add", "README.md", "gate.sh"])?;
+    git(&repo, root, &["add", "README.md"])?;
     git(
         &repo,
         root,
@@ -67,15 +69,11 @@ fn create_origin(root: &Path) -> Result<(PathBuf, String), String> {
 pub fn prepare(data_dir: &Path, target: Option<PathBuf>) -> Result<Fixture, String> {
     if let Some(target) = target {
         let sha = git(&target, &target, &["rev-parse", "HEAD"])?;
-        let gate_command = if target.join("gate.sh").is_file() {
-            "sh ./gate.sh".to_string()
-        } else {
-            DEFAULT_GATE.to_string()
-        };
         return Ok(Fixture {
             origin: target,
             base_sha: sha,
-            gate_command,
+            writer_gate_ids: vec![REPOSITORY_GATE_ID.into()],
+            verifier_gate_command: VERIFIER_GATE_COMMAND.into(),
         });
     }
     let root = data_dir.join("fixture");
@@ -84,7 +82,8 @@ pub fn prepare(data_dir: &Path, target: Option<PathBuf>) -> Result<Fixture, Stri
     Ok(Fixture {
         origin,
         base_sha,
-        gate_command: "sh ./gate.sh".to_string(),
+        writer_gate_ids: vec![REPOSITORY_GATE_ID.into()],
+        verifier_gate_command: VERIFIER_GATE_COMMAND.into(),
     })
 }
 
@@ -97,8 +96,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let first = prepare(dir.path(), None).expect("fixture");
         assert_eq!(first.base_sha.len(), 40);
-        assert!(first.origin.join("gate.sh").is_file());
         let second = prepare(dir.path(), None).expect("replay");
         assert_eq!(first.base_sha, second.base_sha);
+        assert_eq!(first.writer_gate_ids, [REPOSITORY_GATE_ID]);
     }
 }

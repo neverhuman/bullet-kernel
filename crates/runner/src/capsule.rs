@@ -1,4 +1,4 @@
-//! The prompt capsule: objective, scope, base SHA, gate command, and the
+//! The prompt capsule: objective, scope, base SHA, admitted gates, and the
 //! `PatchProposal` schema, plus structured feedback prompts for refusals and
 //! gate results. Prompts are data; the deterministic gate decides.
 
@@ -13,8 +13,8 @@ pub struct Capsule {
     pub scope_prefixes: Vec<String>,
     /// Exact base commit of the private clone.
     pub base_sha: String,
-    /// Deterministic gate command the kernel runs after each apply.
-    pub gate_command: String,
+    /// Ordered gate identifiers admitted by policy.
+    pub admitted_gate_ids: Vec<String>,
 }
 
 impl Capsule {
@@ -30,7 +30,7 @@ impl Capsule {
              Objective: {}\n\
              Base commit: {}\n\
              Writable scope (path prefixes; anything else is refused before apply): {}\n\
-             Gate command the kernel will run after applying your proposal: {}\n\
+             Admitted gate IDs (echo this exact ordered list in gate_ids): {:?}\n\
              The workspace is read-only for you; the kernel applies changes through its \
              own writer.\n\
              Respond with exactly one PatchProposal JSON object matching this schema \
@@ -39,8 +39,19 @@ impl Capsule {
             self.objective,
             self.base_sha,
             self.scope_line(),
-            self.gate_command,
+            self.admitted_gate_ids,
             bullet_harness_core::proposal::schema_source(),
+        )
+    }
+
+    /// Feedback after a gate selection refusal. Nothing was applied.
+    #[must_use]
+    pub fn gate_selection_prompt(&self, detail: &str) -> String {
+        format!(
+            "GATE_SELECTION_REFUSED: {detail}\n\
+             Nothing was applied; gate IDs are policy references, never commands.\n\
+             Re-propose with exactly these admitted gate_ids in order: {:?}",
+            self.admitted_gate_ids,
         )
     }
 
@@ -72,12 +83,17 @@ impl Capsule {
     #[must_use]
     pub fn gate_feedback_prompt(&self, report: &GateReport) -> String {
         format!(
-            "GATE_RESULT: command `{}` did not pass.\n\
+            "GATE_RESULT: gate `{}` with fixed argv {:?} did not pass.\n\
              exit_code: {:?}\ntimed_out: {}\nstdout:\n{}\nstderr:\n{}\n\
              Your patch was applied, then the gate ran in the workspace. Fix the failure \
              and respond with a complete new PatchProposal (full file contents; the next \
              apply replaces whole files).",
-            report.command, report.exit_code, report.timed_out, report.stdout, report.stderr,
+            report.gate_id,
+            report.argv,
+            report.exit_code,
+            report.timed_out,
+            report.stdout,
+            report.stderr,
         )
     }
 }
@@ -91,7 +107,7 @@ mod tests {
             objective: "create PONG.txt".into(),
             scope_prefixes: vec!["PONG.txt".into()],
             base_sha: "a".repeat(40),
-            gate_command: "test -f PONG.txt".into(),
+            admitted_gate_ids: vec![crate::gate::REPOSITORY_GATE_ID.into()],
         }
     }
 
@@ -101,7 +117,7 @@ mod tests {
         for needle in [
             "create PONG.txt",
             &"a".repeat(40),
-            "test -f PONG.txt",
+            crate::gate::REPOSITORY_GATE_ID,
             "PatchProposal",
             "intent_summary",
         ] {
@@ -118,7 +134,13 @@ mod tests {
         assert!(absent.contains("z"));
         assert!(absent.contains("nothing was applied"));
         let report = GateReport {
-            command: "test -f PONG.txt".into(),
+            gate_id: crate::gate::REPOSITORY_GATE_ID.into(),
+            argv: vec![
+                "/usr/bin/grep".into(),
+                "-qx".into(),
+                "PONG".into(),
+                "PONG.txt".into(),
+            ],
             exit_code: Some(1),
             timed_out: false,
             stdout: String::new(),
@@ -127,5 +149,8 @@ mod tests {
         let prompt = c.gate_feedback_prompt(&report);
         assert!(prompt.contains("GATE_RESULT"));
         assert!(prompt.contains("missing"));
+        let selection = c.gate_selection_prompt("unknown gate");
+        assert!(selection.contains("GATE_SELECTION_REFUSED"));
+        assert!(selection.contains(crate::gate::REPOSITORY_GATE_ID));
     }
 }

@@ -5,7 +5,7 @@
   "description": "The only structured output the kernel accepts from a provider turn. Full-file contents per changed path so application is deterministic and order-independent.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["intent_summary", "changes", "tests_to_run", "claims", "uncertainties", "done"],
+  "required": ["intent_summary", "changes", "gate_ids", "claims", "uncertainties", "done"],
   "properties": {
     "intent_summary": {
       "type": "string",
@@ -34,10 +34,18 @@
         }
       }
     },
-    "tests_to_run": {
+    "gate_ids": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Deterministic commands the kernel should run as the gate."
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z][a-z0-9._-]*$"
+      },
+      "description": "Ordered gate identifiers admitted by policy. They are never commands or argv."
     },
     "claims": {
       "type": "array",

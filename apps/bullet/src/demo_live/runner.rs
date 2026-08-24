@@ -66,7 +66,7 @@ pub async fn run_phase(
         workspace_root.clone(),
         OBJECTIVE.to_string(),
         vec!["PONG.txt".into()],
-        fixture.gate_command.clone(),
+        fixture.writer_gate_ids.clone(),
     );
     config.turn_timeout = Duration::from_secs(240);
     config.gate_timeout = Duration::from_secs(60);

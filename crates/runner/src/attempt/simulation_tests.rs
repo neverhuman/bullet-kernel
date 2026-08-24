@@ -7,7 +7,7 @@ mod harness;
 mod orchestration;
 
 use super::*;
-use crate::{DirectLeaseClient, MemoryJournal, MonotonicClock};
+use crate::{DirectLeaseClient, MemoryJournal, MonotonicClock, REPOSITORY_GATE_ID};
 use bullet_application::{materialize_plan, MemoryLedger, PlanInput};
 use bullet_domain::{Digest, RunnerId, TaskClass, WorkPackageId};
 use bullet_harness_core::{ChangeOp, FileChange};
@@ -207,14 +207,55 @@ impl WorkspaceSession for SimWorkspace {
 }
 
 fn proposal(changes: Value) -> Value {
+    proposal_with_gates(changes, serde_json::json!([REPOSITORY_GATE_ID]))
+}
+
+fn proposal_with_gates(changes: Value, gate_ids: Value) -> Value {
     serde_json::json!({
         "intent_summary": "test-only runner simulation",
         "changes": changes,
-        "tests_to_run": [],
+        "gate_ids": gate_ids,
         "claims": [],
         "uncertainties": [],
         "done": true
     })
+}
+
+#[tokio::test]
+async fn unadmitted_provider_gate_is_refused_before_apply() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let adapter = Arc::new(ScriptedSim::new());
+    adapter.override_proposal(
+        0,
+        proposal_with_gates(
+            serde_json::json!([
+                { "path": "PWNED", "op": "create", "contents": "wrong gate applied\n" }
+            ]),
+            serde_json::json!(["attacker.gate.v1"]),
+        ),
+    );
+    adapter.override_proposal(
+        1,
+        proposal(serde_json::json!([
+            { "path": "PONG.txt", "op": "create", "contents": "PONG\n" }
+        ])),
+    );
+    let (outcome, journal, repo) = run_simulated(
+        dir.path(),
+        "gate-selection-repair",
+        adapter.clone(),
+        vec!["PONG.txt".into(), "PWNED".into()],
+        vec![REPOSITORY_GATE_ID.into()],
+    )
+    .await;
+
+    assert_eq!(outcome.repair_rounds, 1);
+    assert!(!repo.join("PWNED").exists());
+    assert!(repo.join("PONG.txt").is_file());
+    assert!(adapter.prompts()[1].contains("GATE_SELECTION_REFUSED"));
+    assert!(journal
+        .stages()
+        .contains(&"gate_selection_refused".to_string()));
 }
 
 fn seeded_ledger(seed: &str) -> (Arc<Mutex<MemoryLedger>>, WorkPackageId) {
@@ -266,7 +307,7 @@ async fn run_simulated(
     seed: &str,
     adapter: Arc<ScriptedSim>,
     scope: Vec<String>,
-    gate: &str,
+    gate_ids: Vec<String>,
 ) -> (AttemptOutcome, Arc<MemoryJournal>, PathBuf) {
     let (origin, base) = build_origin(root);
     let (ledger, package) = seeded_ledger(seed);
@@ -285,7 +326,7 @@ async fn run_simulated(
         root.join("farm"),
         "test-only objective".into(),
         scope,
-        gate.into(),
+        gate_ids,
     );
     let grant = client.acquire(&request).await.expect("test lease");
     journal.record("lease_acquired", "TEST_ONLY_SIMULATOR");
@@ -336,7 +377,7 @@ async fn scope_refusal_repairs_only_in_test_simulator() {
         "scope-repair",
         adapter.clone(),
         vec!["PONG.txt".into()],
-        "test -f PONG.txt",
+        vec![REPOSITORY_GATE_ID.into()],
     )
     .await;
     assert_eq!(outcome.repair_rounds, 1);
@@ -368,7 +409,7 @@ async fn missing_delete_repairs_only_in_test_simulator() {
         "path-repair",
         adapter.clone(),
         vec!["PONG.txt".into(), "MISSING.txt".into()],
-        "test -f PONG.txt",
+        vec![REPOSITORY_GATE_ID.into()],
     )
     .await;
     assert_eq!(outcome.repair_rounds, 1);
@@ -384,13 +425,14 @@ async fn gate_delete_repairs_only_in_test_simulator() {
     adapter.override_proposal(
         0,
         proposal(serde_json::json!([
-            { "path": "PONG.txt", "op": "create", "contents": "PONG\n" },
+            { "path": "PONG.txt", "op": "create", "contents": "WRONG\n" },
             { "path": "OLD.txt", "op": "create", "contents": "old\n" }
         ])),
     );
     adapter.override_proposal(
         1,
         proposal(serde_json::json!([
+            { "path": "PONG.txt", "op": "modify", "contents": "PONG\n" },
             { "path": "OLD.txt", "op": "delete", "contents": null }
         ])),
     );
@@ -399,7 +441,7 @@ async fn gate_delete_repairs_only_in_test_simulator() {
         "delete-repair",
         adapter,
         vec!["PONG.txt".into(), "OLD.txt".into()],
-        "test -f PONG.txt && test ! -f OLD.txt",
+        vec![REPOSITORY_GATE_ID.into()],
     )
     .await;
     assert_eq!(outcome.repair_rounds, 1);

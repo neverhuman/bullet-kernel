@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn happy_stream_maps_to_envelopes() {
-        let proposal = r#"{\"intent_summary\":\"x\",\"changes\":[{\"path\":\"PONG.txt\",\"op\":\"create\",\"contents\":\"PONG\"}],\"tests_to_run\":[],\"claims\":[],\"uncertainties\":[],\"done\":true}"#;
+        let proposal = r#"{\"intent_summary\":\"x\",\"changes\":[{\"path\":\"PONG.txt\",\"op\":\"create\",\"contents\":\"PONG\"}],\"gate_ids\":[\"repo.gate.v1\"],\"claims\":[],\"uncertainties\":[],\"done\":true}"#;
         let lines = [
             r#"{"type":"system","subtype":"init","session_id":"abc-123","model":"claude-x","tools":[]}"#,
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}"#,

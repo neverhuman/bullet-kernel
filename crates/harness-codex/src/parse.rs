@@ -222,7 +222,7 @@ mod tests {
         EventNormalizer::new(AgentSessionId::new("ses-codex-test"), "codex")
     }
 
-    const LAST: &str = r#"{"intent_summary":"x","changes":[{"path":"PONG.txt","op":"create","contents":"PONG"}],"tests_to_run":[],"claims":[],"uncertainties":[],"done":true}"#;
+    const LAST: &str = r#"{"intent_summary":"x","changes":[{"path":"PONG.txt","op":"create","contents":"PONG"}],"gate_ids":["repo.gate.v1"],"claims":[],"uncertainties":[],"done":true}"#;
 
     #[test]
     fn thread_events_and_last_message_map() {

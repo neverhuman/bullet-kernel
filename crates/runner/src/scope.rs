@@ -95,7 +95,7 @@ mod tests {
                 op: bullet_harness_core::ChangeOp::Create,
                 contents: Some("k".into()),
             }],
-            tests_to_run: vec![],
+            gate_ids: vec![crate::gate::REPOSITORY_GATE_ID.into()],
             claims: vec![],
             uncertainties: vec![],
             done: true,

@@ -83,7 +83,7 @@ pub fn proposal_with_changes(intent: &str, changes: Value) -> Value {
     serde_json::json!({
         "intent_summary": intent,
         "changes": changes,
-        "tests_to_run": [],
+        "gate_ids": ["repo.gate.v1"],
         "claims": [],
         "uncertainties": [],
         "done": true
@@ -97,7 +97,7 @@ pub fn out_of_scope_proposal() -> Value {
         "changes": [
             { "path": "secrets/key.txt", "op": "create", "contents": "nope\n" }
         ],
-        "tests_to_run": [],
+        "gate_ids": ["repo.gate.v1"],
         "claims": [],
         "uncertainties": [],
         "done": true
