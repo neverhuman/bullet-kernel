@@ -21,7 +21,7 @@ fn acquire(path: &std::path::Path, seed: &str) -> ActiveLeaseSubject {
     )
     .expect("materialize");
     let (attempt, _token, _grant) =
-        LeaseService::acquire(&mut ledger, &graph, 0, seed, now, 60).expect("acquire");
+        LeaseService::acquire(&mut ledger, &graph, 0, seed, 15).expect("acquire");
     ActiveLeaseSubject::from_attempt(&attempt)
 }
 

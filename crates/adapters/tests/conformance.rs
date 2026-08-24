@@ -50,7 +50,7 @@ fn two_connections_racing_one_variant_grant_exactly_once() {
         handles.push(thread::spawn(move || {
             let mut ledger = SqliteLedger::open(&path).expect("open");
             barrier.wait();
-            LeaseService::acquire(&mut ledger, &graph, 0, seed, t(1), 60)
+            LeaseService::acquire(&mut ledger, &graph, 0, seed, 15)
                 .map(|(attempt, _token, _grant)| attempt.fence)
                 .map_err(|err| err.to_string())
         }));

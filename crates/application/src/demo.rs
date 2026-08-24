@@ -11,7 +11,7 @@ use bullet_domain::{
     Attempt, AttemptId, AttemptState, Candidate, CandidateId, CommandPhase, Digest, DomainError,
     Effect, EffectId, Evidence, EvidenceId, MissionId, TaskClass, WorkPackageId, WorkPackageState,
 };
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 const SEED: &str = "demo-mission";
@@ -118,20 +118,18 @@ fn fresh_flow<L: Ledger>(ledger: &mut L, graph: &StoredGraph) -> Result<(), Ledg
         .ok_or_else(|| LedgerError::Store("demo graph has no packages".into()))?;
 
     // Incarnation one: fence 1, heartbeats, then closes as superseded.
-    let (a1, _token1, grant1) =
-        LeaseService::acquire(ledger, graph, 0, "attempt-live", Utc::now(), 60)?;
+    let (a1, _token1, grant1) = LeaseService::acquire(ledger, graph, 0, "attempt-live", 15)?;
     transition_attempt(ledger, &a1, AttemptState::Running)?;
-    ledger.heartbeat(&LeaseService::heartbeat_of(&grant1, Utc::now(), 60))?;
-    LeaseService::release(ledger, &grant1, AttemptState::Superseded, true, Utc::now())?;
+    ledger.heartbeat(&LeaseService::heartbeat_of(&grant1))?;
+    LeaseService::release(ledger, &grant1, AttemptState::Superseded, true)?;
 
     // Incarnation two: fence 2, does the real work.
-    let (a2, _token2, grant2) =
-        LeaseService::acquire(ledger, graph, 0, "attempt-successor", Utc::now(), 60)?;
+    let (a2, _token2, grant2) = LeaseService::acquire(ledger, graph, 0, "attempt-successor", 15)?;
     let a2_running = transition_attempt(ledger, &a2, AttemptState::Running)?;
     advance_package(ledger, &mission, &wp0, &[WorkPackageState::Executing])?;
     write_candidate_and_effects(ledger, &a2_running)?;
     transition_attempt(ledger, &a2_running, AttemptState::Preparing)?;
-    LeaseService::release(ledger, &grant2, AttemptState::Succeeded, false, Utc::now())?;
+    LeaseService::release(ledger, &grant2, AttemptState::Succeeded, false)?;
     advance_package(
         ledger,
         &mission,
@@ -316,7 +314,6 @@ pub fn derive_receipt<L: Ledger>(ledger: &mut L) -> Result<Option<DemoReceipt>, 
     }
     let materialize_idempotent =
         graph.plan.canonical_hash == Digest::of(command.payload.as_bytes());
-    let now = Utc::now();
     let heartbeat = HeartbeatRequest {
         variant_id: a1.variant_id.clone(),
         attempt_id: a1.id.clone(),
@@ -324,8 +321,7 @@ pub fn derive_receipt<L: Ledger>(ledger: &mut L) -> Result<Option<DemoReceipt>, 
         runner_id: a1.runner_id.clone(),
         runner_epoch: a1.runner_epoch,
         workspace_nonce: a1.workspace_nonce,
-        now: LeaseService::rfc3339(now),
-        expires_at: LeaseService::rfc3339(now + Duration::seconds(60)),
+        ttl_seconds: 15,
     };
     let heartbeat_refused = matches!(
         ledger.heartbeat(&heartbeat),

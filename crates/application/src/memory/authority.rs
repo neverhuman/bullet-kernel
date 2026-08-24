@@ -13,7 +13,6 @@ use bullet_domain::{
     Attempt, AttemptId, AttemptState, CommandId, CommandPhase, Digest, DomainError, WorkPackageId,
     WorkPackageState,
 };
-use chrono::{SecondsFormat, Utc};
 
 impl MemoryLedger {
     pub(super) fn check_active_lease_impl(
@@ -30,12 +29,7 @@ impl MemoryLedger {
             .attempts
             .get(lease.attempt_id.as_str())
             .ok_or_else(|| LedgerError::Store("active lease has no Attempt".into()))?;
-        check_active_lease_snapshot(
-            lease,
-            attempt,
-            subject,
-            &Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-        )
+        check_active_lease_snapshot(lease, attempt, subject, &self.simulation_time())
     }
 
     pub(super) fn push_event(
@@ -50,7 +44,7 @@ impl MemoryLedger {
         let event_id = Digest::of(format!("evt:{seq}:{kind}:{body}").as_bytes()).to_hex();
         self.events.push(LedgerEvent {
             seq,
-            at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            at: self.simulation_time(),
             kind: kind.to_string(),
             body: body.to_string(),
             event_id: Some(event_id),
@@ -97,7 +91,6 @@ impl MemoryLedger {
         &mut self,
         req: &LeaseRequest,
     ) -> Result<LeaseGrant, LedgerError> {
-        self.tick()?;
         let stable = req.stable_payload()?;
         if let Some(existing) = self.commands.get(&req.idempotency_key) {
             if existing.payload != stable {
@@ -110,6 +103,9 @@ impl MemoryLedger {
             return serde_json::from_str(response)
                 .map_err(|err| LedgerError::Store(err.to_string()));
         }
+        self.tick()?;
+        let ttl_seconds = req.validated_ttl()?;
+        let (now, expires_at) = self.lease_window(ttl_seconds)?;
         let graph = self
             .graphs
             .get(&req.mission_id.to_string())
@@ -176,8 +172,9 @@ impl MemoryLedger {
             runner_id: req.runner_id.clone(),
             runner_epoch: req.runner_epoch,
             workspace_nonce: req.workspace_nonce,
-            heartbeat_at: req.now.clone(),
-            expires_at: req.expires_at.clone(),
+            heartbeat_at: now,
+            expires_at,
+            ttl_seconds,
         };
         let mut next_graph = graph;
         next_graph.packages[pidx].state = next_graph.packages[pidx]
@@ -229,17 +226,21 @@ impl MemoryLedger {
     }
 
     pub(super) fn heartbeat_impl(&mut self, req: &HeartbeatRequest) -> Result<(), LedgerError> {
+        let ttl_seconds = req.validated_ttl()?;
         self.tick()?;
+        let (now, expires_at) = self.lease_window(ttl_seconds)?;
         if let Some(lease) = self.leases.get_mut(&req.variant_id.to_string()) {
             if lease.attempt_id == req.attempt_id
                 && lease.fence == req.fence
                 && lease.runner_id == req.runner_id
                 && lease.runner_epoch == req.runner_epoch
                 && lease.workspace_nonce == req.workspace_nonce
-                && lease.expires_at > req.now
+                && lease.ttl_seconds == ttl_seconds
+                && lease.heartbeat_at <= now
+                && now < lease.expires_at
             {
-                lease.heartbeat_at = req.now.clone();
-                lease.expires_at = req.expires_at.clone();
+                lease.heartbeat_at = now;
+                lease.expires_at = expires_at;
                 return Ok(());
             }
         }
@@ -250,15 +251,13 @@ impl MemoryLedger {
         .into())
     }
 
-    pub(super) fn expire_leases_impl(
-        &mut self,
-        now: &str,
-    ) -> Result<Vec<ExpiredLease>, LedgerError> {
+    pub(super) fn expire_leases_impl(&mut self) -> Result<Vec<ExpiredLease>, LedgerError> {
         self.tick()?;
+        let now = self.simulation_time();
         let expired: Vec<ActiveLease> = self
             .leases
             .values()
-            .filter(|lease| lease.expires_at.as_str() <= now)
+            .filter(|lease| lease.expires_at.as_str() <= now.as_str())
             .cloned()
             .collect();
         let mut out = Vec::new();
@@ -278,7 +277,7 @@ impl MemoryLedger {
                 stored.state = next_state;
             }
             self.leases.remove(&lease.variant_id.to_string());
-            self.requeue_package(&attempt.work_package_id, now)?;
+            self.requeue_package(&attempt.work_package_id, &now)?;
             self.push_event(
                 "lease_expired",
                 lease.attempt_id.as_str(),
@@ -306,6 +305,7 @@ impl MemoryLedger {
             .into());
         }
         let vkey = req.variant_id.to_string();
+        let now = self.simulation_time();
         match self.leases.get(&vkey).cloned() {
             Some(lease) if lease.attempt_id == req.attempt_id => {
                 let attempt = self
@@ -319,7 +319,7 @@ impl MemoryLedger {
                 }
                 self.leases.remove(&vkey);
                 if req.requeue {
-                    self.requeue_package(&attempt.work_package_id, &req.now)?;
+                    self.requeue_package(&attempt.work_package_id, &now)?;
                 }
                 self.push_event(
                     "lease_released",

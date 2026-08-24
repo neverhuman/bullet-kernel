@@ -60,7 +60,7 @@ pub fn deliver_local(
     let mut forge = open_forge(data_dir)?;
     let now = || LeaseService::rfc3339(Utc::now());
     let (attempt, token, grant) =
-        LeaseService::acquire(store, graph, 1, "demo-synthetic-delivery", Utc::now(), 120)
+        LeaseService::acquire(store, graph, 1, "demo-synthetic-delivery", 15)
             .map_err(|err| format!("DELIVERY_LEASE:{}: {err}", err.reason_code()))?;
     let attempt = advance(store, &attempt, AttemptState::Running)?;
     let ref_name = format!("refs/heads/bullet/candidate/{candidate_id}");
@@ -90,7 +90,7 @@ pub fn deliver_local(
     let read_back = forge.read_ref(&ref_name).map_err(eff("EFFECT_READ_BACK"))?;
     let attempt = advance(store, &attempt, AttemptState::Preparing)?;
     let _ = attempt;
-    LeaseService::release(store, &grant, AttemptState::Succeeded, false, Utc::now())
+    LeaseService::release(store, &grant, AttemptState::Succeeded, false)
         .map_err(|err| format!("DELIVERY_RELEASE:{}: {err}", err.reason_code()))?;
     Ok(LocalEffectOut {
         ref_name,

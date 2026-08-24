@@ -34,10 +34,9 @@ fn acquire<L: Ledger>(
     graph: &StoredGraph,
     index: usize,
     seed: &str,
-    at: DateTime<Utc>,
     ttl: i64,
 ) -> Result<(Attempt, LeaseGrant), String> {
-    LeaseService::acquire(ledger, graph, index, seed, at, ttl)
+    LeaseService::acquire(ledger, graph, index, seed, ttl)
         .map(|(attempt, _token, grant)| (attempt, grant))
         .map_err(|err| format!("acquire {seed}: {err}"))
 }
@@ -54,7 +53,6 @@ pub fn check_all<L: Ledger, F: FnMut() -> L>(mut make: F) -> Result<(), String> 
     active_lease_authority(&mut make())?;
     idempotent_replay(&mut make())?;
     command_conflict(&mut make())?;
-    expire_then_reacquire(&mut make())?;
     writer_linkage(&mut make())?;
     outbox_progression(&mut make())?;
     append_only_rows(&mut make())?;
@@ -64,8 +62,7 @@ pub fn check_all<L: Ledger, F: FnMut() -> L>(mut make: F) -> Result<(), String> 
 
 fn active_lease_authority<L: Ledger>(ledger: &mut L) -> Result<(), String> {
     let graph = setup(ledger, "conf-auth", 1)?;
-    let now = Utc::now();
-    let (attempt, grant) = acquire(ledger, &graph, 0, "auth-a", now, 60)?;
+    let (attempt, grant) = acquire(ledger, &graph, 0, "auth-a", 15)?;
     let subject = ActiveLeaseSubject::from_attempt(&attempt);
     ledger
         .check_active_lease(&subject)
@@ -113,7 +110,7 @@ fn active_lease_authority<L: Ledger>(ledger: &mut L) -> Result<(), String> {
         }
     }
 
-    LeaseService::release(ledger, &grant, AttemptState::Cancelled, true, now)
+    LeaseService::release(ledger, &grant, AttemptState::Cancelled, true)
         .map_err(|err| format!("active_lease_authority release: {err}"))?;
     match ledger.check_active_lease(&subject) {
         Err(err) if err.reason_code() == "STALE_AUTHORITY" => {}
@@ -123,7 +120,7 @@ fn active_lease_authority<L: Ledger>(ledger: &mut L) -> Result<(), String> {
             ));
         }
     }
-    let (successor, _grant) = acquire(ledger, &graph, 0, "auth-b", now, 60)?;
+    let (successor, _grant) = acquire(ledger, &graph, 0, "auth-b", 15)?;
     if successor.fence != attempt.fence + 1 {
         return Err("active_lease_authority: successor did not advance fence".into());
     }
@@ -131,24 +128,16 @@ fn active_lease_authority<L: Ledger>(ledger: &mut L) -> Result<(), String> {
         .check_active_lease(&ActiveLeaseSubject::from_attempt(&successor))
         .map_err(|err| format!("active_lease_authority successor: {err}"))?;
 
-    let expired_graph = setup(ledger, "conf-auth-expired", 1)?;
-    let old = Utc::now() - Duration::seconds(120);
-    let (expired, _grant) = acquire(ledger, &expired_graph, 0, "auth-expired", old, 60)?;
-    match ledger.check_active_lease(&ActiveLeaseSubject::from_attempt(&expired)) {
-        Err(err) if err.reason_code() == "STALE_AUTHORITY" => Ok(()),
-        other => Err(format!(
-            "active_lease_authority: expired subject gave {other:?}"
-        )),
-    }
+    Ok(())
 }
 
 fn single_writer<L: Ledger>(ledger: &mut L) -> Result<(), String> {
     let graph = setup(ledger, "conf-sw", 1)?;
-    let (a1, _g1) = acquire(ledger, &graph, 0, "sw-a", t(0), 60)?;
+    let (a1, _g1) = acquire(ledger, &graph, 0, "sw-a", 15)?;
     if a1.fence != 1 {
         return Err(format!("single_writer: first fence {} != 1", a1.fence));
     }
-    if acquire(ledger, &graph, 0, "sw-b", t(1), 60).is_ok() {
+    if acquire(ledger, &graph, 0, "sw-b", 15).is_ok() {
         return Err("single_writer: second concurrent acquire succeeded".into());
     }
     let active = ledger
@@ -164,11 +153,10 @@ fn single_writer<L: Ledger>(ledger: &mut L) -> Result<(), String> {
 fn fence_never_reused<L: Ledger>(ledger: &mut L) -> Result<(), String> {
     let graph = setup(ledger, "conf-fn", 1)?;
     let mut fences = Vec::new();
-    for (idx, seed) in ["fn-1", "fn-2", "fn-3"].iter().enumerate() {
-        let at = t(10 * (idx as i64 + 1));
-        let (attempt, grant) = acquire(ledger, &graph, 0, seed, at, 60)?;
+    for seed in ["fn-1", "fn-2", "fn-3"] {
+        let (attempt, grant) = acquire(ledger, &graph, 0, seed, 15)?;
         fences.push(attempt.fence);
-        LeaseService::release(ledger, &grant, AttemptState::Cancelled, true, at)
+        LeaseService::release(ledger, &grant, AttemptState::Cancelled, true)
             .map_err(|err| format!("fence_never_reused release {seed}: {err}"))?;
     }
     if fences != vec![1, 2, 3] {
@@ -179,11 +167,11 @@ fn fence_never_reused<L: Ledger>(ledger: &mut L) -> Result<(), String> {
 
 fn heartbeat_semantics<L: Ledger>(ledger: &mut L) -> Result<(), String> {
     let graph = setup(ledger, "conf-hb", 1)?;
-    let (_a, grant) = acquire(ledger, &graph, 0, "hb-a", t(0), 60)?;
+    let (_a, grant) = acquire(ledger, &graph, 0, "hb-a", 15)?;
     ledger
-        .heartbeat(&LeaseService::heartbeat_of(&grant, t(10), 60))
+        .heartbeat(&LeaseService::heartbeat_of(&grant))
         .map_err(|err| format!("heartbeat_semantics live: {err}"))?;
-    let mut wrong = LeaseService::heartbeat_of(&grant, t(20), 60);
+    let mut wrong = LeaseService::heartbeat_of(&grant);
     wrong.workspace_nonce = [0; 32];
     match ledger.heartbeat(&wrong) {
         Err(err) if err.reason_code() == "STALE_AUTHORITY" => {}
@@ -193,9 +181,9 @@ fn heartbeat_semantics<L: Ledger>(ledger: &mut L) -> Result<(), String> {
             ))
         }
     }
-    LeaseService::release(ledger, &grant, AttemptState::Cancelled, true, t(30))
+    LeaseService::release(ledger, &grant, AttemptState::Cancelled, true)
         .map_err(|err| format!("heartbeat_semantics release: {err}"))?;
-    match ledger.heartbeat(&LeaseService::heartbeat_of(&grant, t(40), 60)) {
+    match ledger.heartbeat(&LeaseService::heartbeat_of(&grant)) {
         Err(err) if err.reason_code() == "STALE_AUTHORITY" => Ok(()),
         other => Err(format!(
             "heartbeat_semantics: released lease heartbeat gave {other:?}"
@@ -205,17 +193,19 @@ fn heartbeat_semantics<L: Ledger>(ledger: &mut L) -> Result<(), String> {
 
 fn idempotent_replay<L: Ledger>(ledger: &mut L) -> Result<(), String> {
     let graph = setup(ledger, "conf-ir", 1)?;
-    let first = LeaseService::request_for(&graph, 0, "ir-a", t(0), 60)
+    let first = LeaseService::request_for(&graph, 0, "ir-a", 15)
         .map_err(|err| format!("idempotent_replay: {err}"))?;
     let g1 = ledger
         .acquire_lease(&first)
         .map_err(|err| format!("idempotent_replay first: {err}"))?;
-    let retry = LeaseService::request_for(&graph, 0, "ir-a", t(30), 60)
+    let retry = LeaseService::request_for(&graph, 0, "ir-a", 15)
         .map_err(|err| format!("idempotent_replay: {err}"))?;
     let g2 = ledger
         .acquire_lease(&retry)
         .map_err(|err| format!("idempotent_replay retry: {err}"))?;
-    if g1.attempt.id != g2.attempt.id || g1.attempt.fence != g2.attempt.fence {
+    if serde_json::to_vec(&g1).map_err(|err| err.to_string())?
+        != serde_json::to_vec(&g2).map_err(|err| err.to_string())?
+    {
         return Err("idempotent_replay: replay returned a different grant".into());
     }
     let lease = ledger
@@ -241,57 +231,32 @@ fn command_conflict<L: Ledger>(ledger: &mut L) -> Result<(), String> {
         Err(err) if err.reason_code() == "IDEMPOTENCY_CONFLICT" => {}
         other => return Err(format!("command_conflict: got {other:?}")),
     }
-    let (_a1, _g1) = acquire(ledger, &graph, 0, "cc-a", t(0), 60)?;
-    let mut forged = LeaseService::request_for(&graph, 0, "cc-a", t(10), 60)
+    let (_a1, _g1) = acquire(ledger, &graph, 0, "cc-a", 15)?;
+    let mut forged = LeaseService::request_for(&graph, 0, "cc-a", 15)
         .map_err(|err| format!("command_conflict: {err}"))?;
     forged.runner_epoch = 99;
     match ledger.acquire_lease(&forged) {
+        Err(err) if err.reason_code() == "IDEMPOTENCY_CONFLICT" => {}
+        other => {
+            return Err(format!(
+                "command_conflict: same key different authority gave {other:?}"
+            ))
+        }
+    }
+    let mut changed_ttl = LeaseService::request_for(&graph, 0, "cc-a", 14)
+        .map_err(|err| format!("command_conflict: {err}"))?;
+    changed_ttl.runner_epoch = 1;
+    match ledger.acquire_lease(&changed_ttl) {
         Err(err) if err.reason_code() == "IDEMPOTENCY_CONFLICT" => Ok(()),
         other => Err(format!(
-            "command_conflict: same key different authority gave {other:?}"
+            "command_conflict: same key different TTL gave {other:?}"
         )),
     }
 }
 
-fn expire_then_reacquire<L: Ledger>(ledger: &mut L) -> Result<(), String> {
-    let graph = setup(ledger, "conf-ex", 1)?;
-    let (a1, _g1) = acquire(ledger, &graph, 0, "ex-a", t(0), 5)?;
-    let expired = ledger
-        .expire_leases(&ts(10))
-        .map_err(|err| format!("expire_then_reacquire: {err}"))?;
-    if expired.len() != 1 || expired[0].attempt_id != a1.id {
-        return Err(format!("expire_then_reacquire: expired {expired:?}"));
-    }
-    let stored = ledger
-        .get_attempt(&a1.id)
-        .map_err(|err| format!("expire_then_reacquire: {err}"))?
-        .ok_or("expire_then_reacquire: attempt vanished")?;
-    if stored.state != AttemptState::Crashed {
-        return Err(format!(
-            "expire_then_reacquire: attempt is {:?}, not crashed",
-            stored.state
-        ));
-    }
-    if ledger
-        .get_lease(&graph.variants[0].id)
-        .map_err(|err| format!("expire_then_reacquire: {err}"))?
-        .is_some()
-    {
-        return Err("expire_then_reacquire: lease row survived expiry".into());
-    }
-    let (a2, _g2) = acquire(ledger, &graph, 0, "ex-b", t(20), 60)?;
-    if a2.fence != a1.fence + 1 {
-        return Err(format!(
-            "expire_then_reacquire: fence {} after crash of fence {}",
-            a2.fence, a1.fence
-        ));
-    }
-    Ok(())
-}
-
 fn writer_linkage<L: Ledger>(ledger: &mut L) -> Result<(), String> {
     let graph = setup(ledger, "conf-wl", 2)?;
-    let (a1, _g1) = acquire(ledger, &graph, 0, "wl-a", t(0), 60)?;
+    let (a1, _g1) = acquire(ledger, &graph, 0, "wl-a", 15)?;
     if ledger
         .active_attempt(&graph.packages[1].id)
         .map_err(|err| format!("writer_linkage: {err}"))?
@@ -299,7 +264,7 @@ fn writer_linkage<L: Ledger>(ledger: &mut L) -> Result<(), String> {
     {
         return Err("writer_linkage: writer on package A reported active on package B".into());
     }
-    let (a2, _g2) = acquire(ledger, &graph, 1, "wl-b", t(1), 60)?;
+    let (a2, _g2) = acquire(ledger, &graph, 1, "wl-b", 15)?;
     let on_a = ledger
         .active_attempt(&graph.packages[0].id)
         .map_err(|err| format!("writer_linkage: {err}"))?
@@ -316,7 +281,7 @@ fn writer_linkage<L: Ledger>(ledger: &mut L) -> Result<(), String> {
 
 fn outbox_progression<L: Ledger>(ledger: &mut L) -> Result<(), String> {
     let graph = setup(ledger, "conf-ob", 1)?;
-    let (_a, _g) = acquire(ledger, &graph, 0, "ob-a", t(0), 60)?;
+    let (_a, _g) = acquire(ledger, &graph, 0, "ob-a", 15)?;
     let pending = ledger
         .outbox_pending()
         .map_err(|err| format!("outbox_progression: {err}"))?;
@@ -399,13 +364,12 @@ fn append_only_rows<L: Ledger>(ledger: &mut L) -> Result<(), String> {
 
 fn release_by_non_holder<L: Ledger>(ledger: &mut L) -> Result<(), String> {
     let graph = setup(ledger, "conf-rl", 1)?;
-    let (_a1, g1) = acquire(ledger, &graph, 0, "rl-a", t(0), 60)?;
+    let (_a1, g1) = acquire(ledger, &graph, 0, "rl-a", 15)?;
     let forged = ReleaseRequest {
         variant_id: g1.lease.variant_id.clone(),
         attempt_id: AttemptId::from_seed("rl-forged"),
         final_state: AttemptState::Cancelled,
         requeue: true,
-        now: ts(1),
     };
     match ledger.release_lease(&forged) {
         Err(err) if err.reason_code() == "STALE_AUTHORITY" => {}

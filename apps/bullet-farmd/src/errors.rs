@@ -71,6 +71,7 @@ fn title_for(code: &str) -> &'static str {
         "IDEMPOTENCY_CONFLICT" => "Idempotency conflict",
         "GRAPH_CONFLICT" => "Graph conflict",
         "INVALID_ID" => "Invalid identifier",
+        "INVALID_LEASE_TTL" => "Invalid lease lifetime",
         "INVALID_TRANSITION" => "Invalid state transition",
         "ENCODING_FAILURE" => "Canonical encoding failed",
         "UNKNOWN_STATE" => "Unknown state label",

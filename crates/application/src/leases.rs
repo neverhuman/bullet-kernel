@@ -2,12 +2,14 @@
 //! single-transaction acquisition (spec section 26.3), never through checks
 //! followed by separate writes.
 
-use crate::records::{HeartbeatRequest, LeaseGrant, LeaseRequest, ReleaseRequest, StoredGraph};
+use crate::records::{
+    validate_lease_ttl, HeartbeatRequest, LeaseGrant, LeaseRequest, ReleaseRequest, StoredGraph,
+};
 use crate::store::{Ledger, LedgerError};
 use bullet_domain::{
     Attempt, AttemptState, AuthorityToken, Digest, DomainError, RunnerId, WorkspaceId,
 };
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 
 /// Lease and fence operations.
 pub struct LeaseService;
@@ -28,7 +30,6 @@ impl LeaseService {
         graph: &StoredGraph,
         variant_index: usize,
         seed: &str,
-        now: DateTime<Utc>,
         ttl_seconds: i64,
     ) -> Result<LeaseRequest, LedgerError> {
         let variant = graph
@@ -46,8 +47,7 @@ impl LeaseService {
             workspace_nonce: *Digest::of(seed.as_bytes()).as_bytes(),
             scope_revision: 1,
             context_revision: 1,
-            now: Self::rfc3339(now),
-            expires_at: Self::rfc3339(now + Duration::seconds(ttl_seconds)),
+            ttl_seconds,
         })
     }
 
@@ -62,10 +62,9 @@ impl LeaseService {
         graph: &StoredGraph,
         variant_index: usize,
         seed: &str,
-        now: DateTime<Utc>,
         ttl_seconds: i64,
     ) -> Result<(Attempt, AuthorityToken, LeaseGrant), LedgerError> {
-        let request = Self::request_for(graph, variant_index, seed, now, ttl_seconds)?;
+        let request = Self::request_for(graph, variant_index, seed, ttl_seconds)?;
         let grant = ledger.acquire_lease(&request)?;
         let token = Self::token_for(graph, &grant.attempt)?;
         Ok((grant.attempt.clone(), token, grant))
@@ -113,11 +112,7 @@ impl LeaseService {
 
     /// Heartbeat request carrying the six identity columns of one grant.
     #[must_use]
-    pub fn heartbeat_of(
-        grant: &LeaseGrant,
-        now: DateTime<Utc>,
-        ttl_seconds: i64,
-    ) -> HeartbeatRequest {
+    pub fn heartbeat_of(grant: &LeaseGrant) -> HeartbeatRequest {
         HeartbeatRequest {
             variant_id: grant.lease.variant_id.clone(),
             attempt_id: grant.lease.attempt_id.clone(),
@@ -125,9 +120,17 @@ impl LeaseService {
             runner_id: grant.lease.runner_id.clone(),
             runner_epoch: grant.lease.runner_epoch,
             workspace_nonce: grant.lease.workspace_nonce,
-            now: Self::rfc3339(now),
-            expires_at: Self::rfc3339(now + Duration::seconds(ttl_seconds)),
+            ttl_seconds: grant.lease.ttl_seconds,
         }
+    }
+
+    /// Validate one caller-provided TTL without granting authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns `INVALID_LEASE_TTL` outside the frozen Phase-1 range 1..=15 seconds.
+    pub fn validate_ttl(ttl_seconds: i64) -> Result<i64, LedgerError> {
+        validate_lease_ttl(ttl_seconds).map_err(Into::into)
     }
 
     /// Close one grant's lease.
@@ -140,14 +143,12 @@ impl LeaseService {
         grant: &LeaseGrant,
         final_state: AttemptState,
         requeue: bool,
-        now: DateTime<Utc>,
     ) -> Result<(), LedgerError> {
         ledger.release_lease(&ReleaseRequest {
             variant_id: grant.lease.variant_id.clone(),
             attempt_id: grant.lease.attempt_id.clone(),
             final_state,
             requeue,
-            now: Self::rfc3339(now),
         })
     }
 

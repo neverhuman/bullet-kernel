@@ -52,9 +52,9 @@ fn ts(offset: i64) -> String {
 }
 
 struct LeaseReplay {
+    path: PathBuf,
     ledger: SqliteLedger,
     graph: StoredGraph,
-    now: i64,
     first_grant: Option<LeaseGrant>,
     first_token: Option<AuthorityToken>,
     second_attempt: Option<Attempt>,
@@ -77,9 +77,9 @@ impl LeaseReplay {
         )
         .expect("materialize");
         Self {
+            path: path.to_path_buf(),
             ledger,
             graph,
-            now: 0,
             first_grant: None,
             first_token: None,
             second_attempt: None,
@@ -92,12 +92,20 @@ impl LeaseReplay {
         match step.action.as_str() {
             "acquire" => self.acquire(&step.runner),
             "tick" => {
-                self.now += 1;
+                rusqlite::Connection::open(&self.path)
+                    .expect("raw trace connection")
+                    .execute(
+                        "UPDATE active_leases
+                         SET heartbeat_at = '2000-01-01T00:00:00.000Z',
+                             expires_at = '2000-01-01T00:00:01.000Z'",
+                        [],
+                    )
+                    .expect("advance exact test window");
                 "time_advanced"
             }
             "heartbeat" => self.expired_heartbeat(),
             "reclaim" => {
-                assert_eq!(self.ledger.expire_leases(&ts(self.now)).unwrap().len(), 1);
+                assert_eq!(self.ledger.expire_leases().unwrap().len(), 1);
                 "accepted"
             }
             "apply_stale" => self.apply_stale(),
@@ -131,8 +139,7 @@ impl LeaseReplay {
 
     fn acquire(&mut self, runner: &str) -> &'static str {
         let (attempt, token, grant) =
-            LeaseService::acquire(&mut self.ledger, &self.graph, 0, runner, t(self.now), 1)
-                .expect("acquire");
+            LeaseService::acquire(&mut self.ledger, &self.graph, 0, runner, 1).expect("acquire");
         if runner == "r1" {
             self.first_grant = Some(grant);
             self.first_token = Some(token);
@@ -152,8 +159,7 @@ impl LeaseReplay {
     }
 
     fn expired_heartbeat(&mut self) -> &'static str {
-        let request =
-            LeaseService::heartbeat_of(self.first_grant.as_ref().unwrap(), t(self.now), 1);
+        let request = LeaseService::heartbeat_of(self.first_grant.as_ref().unwrap());
         assert_eq!(
             self.ledger.heartbeat(&request).unwrap_err().reason_code(),
             "STALE_AUTHORITY"

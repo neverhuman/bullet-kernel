@@ -2,7 +2,6 @@ use bullet_application::{
     materialize_plan, LeaseService, Ledger, MemoryLedger, PlanInput, StoredGraph,
 };
 use bullet_domain::{CommandPhase, DomainError, MissionId, TaskClass};
-use chrono::{DateTime, Duration};
 
 const AT: &str = "2026-01-01T00:00:00.000Z";
 
@@ -54,8 +53,7 @@ fn every_memory_failure_boundary_is_exactly_old_or_complete_next() {
         assert_eq!(graph_json(&replay), before_replay);
         assert_eq!(ledger.list_events().expect("events"), events_before);
 
-        let now = DateTime::UNIX_EPOCH + Duration::seconds(1_795_000_000);
-        let (attempt, _, _) = LeaseService::acquire(&mut ledger, &recovered, 0, &seed, now, 60)
+        let (attempt, _, _) = LeaseService::acquire(&mut ledger, &recovered, 0, &seed, 15)
             .expect("first lease after recovery");
         assert_eq!(attempt.fence, 1, "failpoint {fail_after} leaked a fence");
     }

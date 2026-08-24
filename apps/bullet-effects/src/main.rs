@@ -67,9 +67,8 @@ fn leased_authority(ledger: &mut MemoryLedger) -> AuthorityToken {
         &now,
     )
     .unwrap_or_else(|err| fail("materialize", &err.to_string()));
-    let (_attempt, token, _grant) =
-        LeaseService::acquire(ledger, &graph, 0, "effects-demo-a1", Utc::now(), 300)
-            .unwrap_or_else(|err| fail("acquire lease", &err.to_string()));
+    let (_attempt, token, _grant) = LeaseService::acquire(ledger, &graph, 0, "effects-demo-a1", 15)
+        .unwrap_or_else(|err| fail("acquire lease", &err.to_string()));
     token
 }
 

@@ -2,7 +2,7 @@
 //! heartbeat (26.4), expiry reclaim, release, and the push-maintained ready
 //! queue (26.5).
 
-use super::{commands, events, from_json, graph, json, store};
+use super::{commands, events, from_json, graph, json, lease_time, store};
 use bullet_application::{
     check_active_lease_snapshot, ActiveLease, ActiveLeaseSubject, CommandRecord, ExpiredLease,
     HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerError, ReadyRow, ReleaseRequest,
@@ -31,6 +31,8 @@ pub(super) fn acquire_lease(
             .ok_or_else(|| LedgerError::Store("lease command has no stored result".into()))?;
         return from_json(&response);
     }
+    let ttl_seconds = req.validated_ttl()?;
+    let (now, expires_at) = lease_time::database_window(&tx, ttl_seconds)?;
     // 2. Load the graph; find variant and package.
     let stored = graph::get_graph(&tx, &req.mission_id)?
         .ok_or_else(|| LedgerError::Store("graph missing".into()))?;
@@ -117,8 +119,8 @@ pub(super) fn acquire_lease(
     // 7. Insert the lease.
     tx.execute(
         "INSERT INTO active_leases (variant_id, attempt_id, fence, runner_id, runner_epoch,
-                                    workspace_nonce, heartbeat_at, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                                    workspace_nonce, heartbeat_at, expires_at, ttl_seconds)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             req.variant_id.to_string(),
             attempt.id.to_string(),
@@ -126,8 +128,9 @@ pub(super) fn acquire_lease(
             req.runner_id.to_string(),
             i64::try_from(req.runner_epoch).map_err(store)?,
             req.workspace_nonce.to_vec(),
-            req.now,
-            req.expires_at,
+            now,
+            expires_at,
+            ttl_seconds,
         ],
     )
     .map_err(store)?;
@@ -152,8 +155,9 @@ pub(super) fn acquire_lease(
         runner_id: req.runner_id.clone(),
         runner_epoch: req.runner_epoch,
         workspace_nonce: req.workspace_nonce,
-        heartbeat_at: req.now.clone(),
-        expires_at: req.expires_at.clone(),
+        heartbeat_at: now,
+        expires_at,
+        ttl_seconds,
     };
     let grant = LeaseGrant { attempt, lease };
     let grant_json = json(&grant)?;
@@ -183,22 +187,46 @@ pub(super) fn acquire_lease(
     Ok(grant)
 }
 
-pub(super) fn heartbeat(conn: &Connection, req: &HeartbeatRequest) -> Result<(), LedgerError> {
-    let changed = conn
+pub(super) fn heartbeat(conn: &mut Connection, req: &HeartbeatRequest) -> Result<(), LedgerError> {
+    let ttl_seconds = req.validated_ttl()?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(store)?;
+    let (now, expires_at) = lease_time::database_window(&tx, ttl_seconds)?;
+    let current = get_lease(&tx, &req.variant_id)?;
+    let live = current.as_ref().is_some_and(|lease| {
+        lease.attempt_id == req.attempt_id
+            && lease.fence == req.fence
+            && lease.runner_id == req.runner_id
+            && lease.runner_epoch == req.runner_epoch
+            && lease.workspace_nonce == req.workspace_nonce
+            && lease.ttl_seconds == ttl_seconds
+            && lease.heartbeat_at <= now
+            && now < lease.expires_at
+    });
+    if !live {
+        return Err(DomainError::StaleAuthority(format!(
+            "heartbeat matched zero live lease rows for {}",
+            req.attempt_id
+        ))
+        .into());
+    }
+    let changed = tx
         .execute(
             "UPDATE active_leases SET heartbeat_at = ?1, expires_at = ?2
              WHERE variant_id = ?3 AND attempt_id = ?4 AND fence = ?5
                AND runner_id = ?6 AND runner_epoch = ?7 AND workspace_nonce = ?8
-               AND expires_at > ?1",
+               AND ttl_seconds = ?9 AND heartbeat_at <= ?1 AND ?1 < expires_at",
             params![
-                req.now,
-                req.expires_at,
+                now,
+                expires_at,
                 req.variant_id.to_string(),
                 req.attempt_id.to_string(),
                 i64::try_from(req.fence).map_err(store)?,
                 req.runner_id.to_string(),
                 i64::try_from(req.runner_epoch).map_err(store)?,
                 req.workspace_nonce.to_vec(),
+                ttl_seconds,
             ],
         )
         .map_err(store)?;
@@ -209,10 +237,20 @@ pub(super) fn heartbeat(conn: &Connection, req: &HeartbeatRequest) -> Result<(),
         ))
         .into());
     }
-    Ok(())
+    tx.commit().map_err(store)
 }
 
-type LeaseRow = (String, String, i64, String, i64, Vec<u8>, String, String);
+type LeaseRow = (
+    String,
+    String,
+    i64,
+    String,
+    i64,
+    Vec<u8>,
+    String,
+    String,
+    i64,
+);
 
 fn read_lease(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
     Ok((
@@ -224,11 +262,17 @@ fn read_lease(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
         row.get(5)?,
         row.get(6)?,
         row.get(7)?,
+        row.get(8)?,
     ))
 }
 
 fn lease_from(row: LeaseRow) -> Result<ActiveLease, LedgerError> {
-    let (variant, attempt, fence, runner, epoch, nonce, heartbeat_at, expires_at) = row;
+    let (variant, attempt, fence, runner, epoch, nonce, heartbeat_at, expires_at, ttl_seconds) =
+        row;
+    if !(1..=bullet_application::records::MAX_LEASE_TTL_SECONDS).contains(&ttl_seconds) {
+        return Err(store("active lease has an invalid persisted TTL"));
+    }
+    lease_time::validate_window(&heartbeat_at, &expires_at, ttl_seconds)?;
     Ok(ActiveLease {
         variant_id: VariantId::parse(&variant)?,
         attempt_id: AttemptId::parse(&attempt)?,
@@ -238,11 +282,12 @@ fn lease_from(row: LeaseRow) -> Result<ActiveLease, LedgerError> {
         workspace_nonce: graph::nonce_from(nonce)?,
         heartbeat_at,
         expires_at,
+        ttl_seconds,
     })
 }
 
 const LEASE_COLUMNS: &str = "variant_id, attempt_id, fence, runner_id, runner_epoch, \
-                             workspace_nonce, heartbeat_at, expires_at";
+                             workspace_nonce, heartbeat_at, expires_at, ttl_seconds";
 
 pub(super) fn get_lease(
     conn: &Connection,
@@ -275,11 +320,7 @@ pub(super) fn check_active_lease_in(
     conn: &Connection,
     subject: &ActiveLeaseSubject,
 ) -> Result<(), LedgerError> {
-    let now: String = conn
-        .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
-            row.get(0)
-        })
-        .map_err(store)?;
+    let now = lease_time::database_time(conn)?;
     let lease = get_lease(conn, &subject.variant_id)?.ok_or_else(|| {
         DomainError::StaleAuthority(format!("no active lease for {}", subject.attempt_id))
     })?;
@@ -288,23 +329,24 @@ pub(super) fn check_active_lease_in(
     check_active_lease_snapshot(&lease, &attempt, subject, &now)
 }
 
-pub(super) fn expire_leases(
-    conn: &mut Connection,
-    now: &str,
-) -> Result<Vec<ExpiredLease>, LedgerError> {
+pub(super) fn expire_leases(conn: &mut Connection) -> Result<Vec<ExpiredLease>, LedgerError> {
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store)?;
+    let now = lease_time::database_time(&tx)?;
     let expired = {
         let mut stmt = tx
             .prepare(&format!(
-                "SELECT {LEASE_COLUMNS} FROM active_leases WHERE expires_at <= ?1 ORDER BY variant_id"
+                "SELECT {LEASE_COLUMNS} FROM active_leases ORDER BY variant_id"
             ))
             .map_err(store)?;
-        let rows = stmt.query_map(params![now], read_lease).map_err(store)?;
+        let rows = stmt.query_map([], read_lease).map_err(store)?;
         let mut leases = Vec::new();
         for row in rows {
-            leases.push(lease_from(row.map_err(store)?)?);
+            let lease = lease_from(row.map_err(store)?)?;
+            if lease.expires_at <= now {
+                leases.push(lease);
+            }
         }
         leases
     };
@@ -327,7 +369,7 @@ pub(super) fn expire_leases(
             params![lease.variant_id.to_string()],
         )
         .map_err(store)?;
-        graph::requeue_package(&tx, &attempt.work_package_id, now)?;
+        graph::requeue_package(&tx, &attempt.work_package_id, &now)?;
         events::insert_event(
             &tx,
             "lease_expired",
@@ -361,6 +403,7 @@ pub(super) fn release_lease(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store)?;
+    let now = lease_time::database_time(&tx)?;
     let holder = get_lease(&tx, &req.variant_id)?;
     match holder {
         Some(lease) if lease.attempt_id == req.attempt_id => {
@@ -378,7 +421,7 @@ pub(super) fn release_lease(
             )
             .map_err(store)?;
             if req.requeue {
-                graph::requeue_package(&tx, &attempt.work_package_id, &req.now)?;
+                graph::requeue_package(&tx, &attempt.work_package_id, &now)?;
             }
             events::insert_event(
                 &tx,

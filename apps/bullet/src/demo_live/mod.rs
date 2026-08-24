@@ -151,7 +151,7 @@ fn first_incarnation(
     let mut guard = lock(ledger)?;
     let store = &mut *guard;
     let (attempt, _token, grant) =
-        LeaseService::acquire(store, graph, 0, "demo-synthetic-first", Utc::now(), 60)
+        LeaseService::acquire(store, graph, 0, "demo-synthetic-first", 15)
             .map_err(|err| format!("FIRST_LEASE:{}: {err}", err.reason_code()))?;
     let mut running = attempt;
     running.state = running
@@ -162,9 +162,9 @@ fn first_incarnation(
         .put_attempt(&running)
         .map_err(|err| format!("FIRST_PUT:{}: {err}", err.reason_code()))?;
     store
-        .heartbeat(&LeaseService::heartbeat_of(&grant, Utc::now(), 60))
+        .heartbeat(&LeaseService::heartbeat_of(&grant))
         .map_err(|err| format!("FIRST_HEARTBEAT:{}: {err}", err.reason_code()))?;
-    LeaseService::release(store, &grant, AttemptState::Superseded, true, Utc::now())
+    LeaseService::release(store, &grant, AttemptState::Superseded, true)
         .map_err(|err| format!("FIRST_RELEASE:{}: {err}", err.reason_code()))?;
     let fence = running.fence;
     Ok(FirstIncarnation {
@@ -224,7 +224,6 @@ fn stale_refused(
 ) -> Result<bool, String> {
     let mut guard = lock(ledger)?;
     let store = &mut *guard;
-    let now = Utc::now();
     let heartbeat = HeartbeatRequest {
         variant_id: first.variant_id.clone(),
         attempt_id: first.id.clone(),
@@ -232,8 +231,7 @@ fn stale_refused(
         runner_id: first.runner_id.clone(),
         runner_epoch: first.runner_epoch,
         workspace_nonce: first.workspace_nonce,
-        now: LeaseService::rfc3339(now),
-        expires_at: LeaseService::rfc3339(now + chrono::Duration::seconds(60)),
+        ttl_seconds: 15,
     };
     let heartbeat_refused = matches!(
         store.heartbeat(&heartbeat),

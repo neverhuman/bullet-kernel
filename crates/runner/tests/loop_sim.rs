@@ -44,7 +44,7 @@ async fn production_authority_refusal_is_typed_and_repository_inert() {
         runner_id: RunnerId::from_seed("authority-unavailable"),
         runner_epoch: 1,
         idempotency_key: key.into(),
-        ttl_seconds: 60,
+        ttl_seconds: 15,
     };
     let workspace_root = dir.path().join("farm");
     let config = AttemptConfig::new(

@@ -4,6 +4,7 @@ use bullet_adapters::SqliteLedger;
 use bullet_application::{materialize_plan, run_demo, LeaseService, Ledger, PlanInput};
 use bullet_domain::{AttemptState, DomainError, TaskClass};
 use chrono::{DateTime, Duration, Utc};
+use rusqlite::Connection;
 
 fn t(offset: i64) -> DateTime<Utc> {
     DateTime::<Utc>::UNIX_EPOCH + Duration::seconds(1_790_000_000 + offset)
@@ -19,6 +20,18 @@ fn plan() -> PlanInput {
         objective: "replay".into(),
         packages: vec![("pkg".into(), TaskClass::BoundedBugFix)],
     }
+}
+
+fn force_expired(path: &std::path::Path) {
+    Connection::open(path)
+        .expect("raw open")
+        .execute(
+            "UPDATE active_leases
+             SET heartbeat_at = '2000-01-01T00:00:00.000Z',
+                 expires_at = '2000-01-01T00:00:05.000Z'",
+            [],
+        )
+        .expect("set exact expired test window");
 }
 
 #[test]
@@ -47,13 +60,14 @@ fn killed_writer_is_reclaimed_and_successor_gets_next_fence() {
         let mut ledger = SqliteLedger::open(&path).expect("open");
         let graph = materialize_plan(&mut ledger, "kill", &plan(), &ts(0)).expect("plan");
         let (_attempt, _token, grant) =
-            LeaseService::acquire(&mut ledger, &graph, 0, "kill-a", t(0), 5).expect("lease");
+            LeaseService::acquire(&mut ledger, &graph, 0, "kill-a", 5).expect("lease");
         grant
         // The connection drops here without releasing: a killed process.
     };
     let mut ledger = SqliteLedger::open(&path).expect("recover");
     let graph = materialize_plan(&mut ledger, "kill", &plan(), &ts(0)).expect("replay");
-    let expired = ledger.expire_leases(&ts(60)).expect("expire");
+    force_expired(&path);
+    let expired = ledger.expire_leases().expect("expire");
     assert_eq!(expired.len(), 1);
     assert_eq!(expired[0].attempt_id, first_grant.attempt.id);
     let crashed = ledger
@@ -62,11 +76,11 @@ fn killed_writer_is_reclaimed_and_successor_gets_next_fence() {
         .expect("attempt");
     assert_eq!(crashed.state, AttemptState::Crashed);
     let (successor, _token, _grant) =
-        LeaseService::acquire(&mut ledger, &graph, 0, "kill-b", t(120), 60).expect("successor");
+        LeaseService::acquire(&mut ledger, &graph, 0, "kill-b", 15).expect("successor");
     assert_eq!(successor.fence, first_grant.attempt.fence + 1);
     // The dead incarnation's heartbeat stays refused forever.
     let err = ledger
-        .heartbeat(&LeaseService::heartbeat_of(&first_grant, t(130), 60))
+        .heartbeat(&LeaseService::heartbeat_of(&first_grant))
         .expect_err("stale");
     assert!(matches!(
         err,
@@ -81,11 +95,10 @@ fn stale_delta_cannot_rewind_successor_fence() {
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let graph = materialize_plan(&mut ledger, "rewind", &plan(), &ts(0)).expect("plan");
     let (first, _token, grant) =
-        LeaseService::acquire(&mut ledger, &graph, 0, "rw-a", t(0), 60).expect("first");
-    LeaseService::release(&mut ledger, &grant, AttemptState::Cancelled, true, t(10))
-        .expect("release");
+        LeaseService::acquire(&mut ledger, &graph, 0, "rw-a", 15).expect("first");
+    LeaseService::release(&mut ledger, &grant, AttemptState::Cancelled, true).expect("release");
     let (second, _token2, _grant2) =
-        LeaseService::acquire(&mut ledger, &graph, 0, "rw-b", t(20), 60).expect("second");
+        LeaseService::acquire(&mut ledger, &graph, 0, "rw-b", 15).expect("second");
     assert!(second.fence > first.fence);
     let current = ledger
         .get_graph(&graph.mission.id)
@@ -114,7 +127,7 @@ fn unknown_liveness_cannot_destroy() {
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let graph = materialize_plan(&mut ledger, "unknown", &plan(), &ts(0)).expect("plan");
     let (attempt, _token, _grant) =
-        LeaseService::acquire(&mut ledger, &graph, 0, "unk-a", t(0), 60).expect("lease");
+        LeaseService::acquire(&mut ledger, &graph, 0, "unk-a", 15).expect("lease");
     let unknown: bullet_domain::Observation<()> = bullet_domain::Observation::Unknown {
         source: "liveness".into(),
         reason: "probe timeout".into(),

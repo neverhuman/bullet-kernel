@@ -185,12 +185,13 @@ async fn run_cloned_attempt(
     gitd: &mut dyn WorkspaceSession,
     ws: &WorkspaceInfo,
 ) -> Result<AttemptOutcome, RunnerError> {
+    let heartbeat_call = HeartbeatCall::for_grant(grant)?;
     let heartbeat = start_heartbeat(
         client.clone(),
-        HeartbeatCall::for_grant(grant, config.heartbeat.ttl_seconds),
+        heartbeat_call,
         config.heartbeat.clone(),
         clock,
-    );
+    )?;
     let session = adapter.start(start_request(grant, ws, config)).await?;
     client
         .advance(&grant.attempt.id, AttemptState::Running)

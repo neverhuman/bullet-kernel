@@ -16,6 +16,9 @@ pub enum DomainError {
         /// Requested state label.
         to: String,
     },
+    /// A writer lease TTL was outside the admitted bounded interval.
+    #[error("invalid lease TTL {0}; expected Phase-1 range 1..=15 seconds")]
+    InvalidLeaseTtl(i64),
     /// The Authority Token did not match the subject.
     #[error("stale or incomplete authority token: {0}")]
     StaleAuthority(String),
@@ -43,6 +46,7 @@ impl DomainError {
         match self {
             Self::InvalidId(_) => "INVALID_ID",
             Self::InvalidTransition { .. } => "INVALID_TRANSITION",
+            Self::InvalidLeaseTtl(_) => "INVALID_LEASE_TTL",
             Self::StaleAuthority(_) => "STALE_AUTHORITY",
             Self::Fence(_) => "FENCE_REUSE",
             Self::Idempotency(_) => "IDEMPOTENCY_CONFLICT",

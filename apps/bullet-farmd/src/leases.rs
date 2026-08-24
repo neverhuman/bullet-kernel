@@ -16,10 +16,9 @@ use bullet_domain::{
     Attempt, AttemptId, AttemptState, AuthorityToken, Digest, RunnerId, VariantId, WorkPackageId,
     WorkspaceId,
 };
-use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_TTL_SECONDS: i64 = 30;
+const DEFAULT_TTL_SECONDS: i64 = bullet_application::records::MAX_LEASE_TTL_SECONDS;
 
 /// Lease routes merged into the main router.
 pub fn routes() -> Router<SharedState> {
@@ -32,7 +31,7 @@ pub fn routes() -> Router<SharedState> {
 }
 
 fn ttl_of(requested: Option<i64>) -> i64 {
-    requested.unwrap_or(DEFAULT_TTL_SECONDS).clamp(1, 3600)
+    requested.unwrap_or(DEFAULT_TTL_SECONDS)
 }
 
 fn graph_for_package<L: Ledger>(
@@ -78,10 +77,10 @@ async fn acquire(
     let package = WorkPackageId::parse(&body.work_package_id)?;
     let runner = RunnerId::parse(&body.runner_id)?;
     let ttl = ttl_of(body.ttl_seconds);
+    LeaseService::validate_ttl(ttl)?;
     let mut ledger = state.ledger.lock().await;
     let (graph, variant_id) = graph_for_package(&*ledger, &package)?
         .ok_or_else(|| ApiError::NotFound(format!("work package {package}")))?;
-    let now = Utc::now();
     let request = LeaseRequest {
         idempotency_key: body.idempotency_key.clone(),
         mission_id: graph.mission.id.clone(),
@@ -93,8 +92,7 @@ async fn acquire(
         workspace_nonce: *Digest::of(body.idempotency_key.as_bytes()).as_bytes(),
         scope_revision: 1,
         context_revision: 1,
-        now: LeaseService::rfc3339(now),
-        expires_at: LeaseService::rfc3339(now + Duration::seconds(ttl)),
+        ttl_seconds: ttl,
     };
     let grant = ledger.acquire_lease(&request)?;
     let token = LeaseService::token_for(&graph, &grant.attempt)?;
@@ -120,7 +118,8 @@ async fn heartbeat(
     State(state): State<SharedState>,
     Json(body): Json<HeartbeatBody>,
 ) -> Result<StatusCode, ApiError> {
-    let now = Utc::now();
+    let ttl = ttl_of(body.ttl_seconds);
+    LeaseService::validate_ttl(ttl)?;
     let request = HeartbeatRequest {
         variant_id: VariantId::parse(&body.variant_id)?,
         attempt_id: AttemptId::parse(&body.attempt_id)?,
@@ -128,8 +127,7 @@ async fn heartbeat(
         runner_id: RunnerId::parse(&body.runner_id)?,
         runner_epoch: body.runner_epoch,
         workspace_nonce: body.workspace_nonce,
-        now: LeaseService::rfc3339(now),
-        expires_at: LeaseService::rfc3339(now + Duration::seconds(ttl_of(body.ttl_seconds))),
+        ttl_seconds: ttl,
     };
     let mut ledger = state.ledger.lock().await;
     ledger.heartbeat(&request)?;
@@ -158,7 +156,6 @@ async fn release(
         attempt_id,
         final_state,
         requeue: body.requeue.unwrap_or(false),
-        now: LeaseService::rfc3339(Utc::now()),
     })?;
     Ok(StatusCode::NO_CONTENT)
 }

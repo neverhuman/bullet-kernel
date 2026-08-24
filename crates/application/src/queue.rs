@@ -4,7 +4,6 @@ use crate::leases::LeaseService;
 use crate::records::StoredGraph;
 use crate::store::{Ledger, LedgerError};
 use bullet_domain::{Attempt, AttemptId, AuthorityToken, MissionId, WorkPackage};
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 /// One dispatchable package.
@@ -76,8 +75,7 @@ pub fn claim_ready<L: Ledger>(
         .iter()
         .position(|variant| variant.work_package_id == item.package.id)
         .ok_or_else(|| LedgerError::Store("variant missing".into()))?;
-    let (attempt, token, _grant) =
-        LeaseService::acquire(ledger, &graph, variant_index, seed, Utc::now(), 60)?;
+    let (attempt, token, _grant) = LeaseService::acquire(ledger, &graph, variant_index, seed, 15)?;
     Ok(Some((attempt, token)))
 }
 

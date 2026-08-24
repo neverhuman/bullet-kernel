@@ -34,6 +34,8 @@ pub enum GraphDeltaFailure {
     InvalidId { message: String },
     /// Invalid state transition.
     InvalidTransition { from: String, to: String },
+    /// Lease TTL outside the admitted interval.
+    InvalidLeaseTtl { ttl_seconds: i64 },
     /// Stale authority.
     StaleAuthority { message: String },
     /// Fence invariant failure.
@@ -67,6 +69,9 @@ impl GraphDeltaFailure {
                     from: from.clone(),
                     to: to.clone(),
                 },
+                DomainError::InvalidLeaseTtl(ttl_seconds) => Self::InvalidLeaseTtl {
+                    ttl_seconds: *ttl_seconds,
+                },
                 DomainError::StaleAuthority(message) => Self::StaleAuthority {
                     message: message.clone(),
                 },
@@ -98,6 +103,9 @@ impl GraphDeltaFailure {
             Self::InvalidId { message } => DomainError::InvalidId(message).into(),
             Self::InvalidTransition { from, to } => {
                 DomainError::InvalidTransition { from, to }.into()
+            }
+            Self::InvalidLeaseTtl { ttl_seconds } => {
+                DomainError::InvalidLeaseTtl(ttl_seconds).into()
             }
             Self::StaleAuthority { message } => DomainError::StaleAuthority(message).into(),
             Self::Fence { message } => DomainError::Fence(message).into(),

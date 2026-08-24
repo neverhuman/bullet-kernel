@@ -10,6 +10,15 @@ fn database() -> (TempDir, std::path::PathBuf) {
     (directory, path)
 }
 
+#[test]
+fn lease_migration_matches_the_frozen_phase_one_maximum() {
+    let expected = format!(
+        "CHECK (ttl_seconds BETWEEN 1 AND {})",
+        bullet_application::records::MAX_LEASE_TTL_SECONDS
+    );
+    assert!(MIGRATIONS[4].sql.contains(&expected));
+}
+
 fn sidecar(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(suffix);
@@ -136,9 +145,9 @@ fn altered_name_and_checksum_are_refused() {
 #[test]
 fn partial_future_and_unrecognized_versions_are_refused() {
     for statement in [
-        "DELETE FROM schema_version WHERE version = 4",
-        "INSERT INTO schema_version VALUES (5, 'future.sql', '00', 'future')",
-        "UPDATE schema_version SET version = 99 WHERE version = 4",
+        "DELETE FROM schema_version WHERE version = 5",
+        "INSERT INTO schema_version VALUES (6, 'future.sql', '00', 'future')",
+        "UPDATE schema_version SET version = 99 WHERE version = 5",
     ] {
         let (_directory, path) = database();
         drop(SqliteLedger::open(&path).unwrap());

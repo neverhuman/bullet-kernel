@@ -6,6 +6,9 @@ use bullet_domain::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Frozen Phase-1 maximum for every admitted lease and renewal.
+pub const MAX_LEASE_TTL_SECONDS: i64 = 15;
+
 /// Materialized graph snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredGraph {
@@ -89,6 +92,8 @@ pub struct ActiveLease {
     pub heartbeat_at: String,
     /// Expiry deadline (RFC 3339 UTC).
     pub expires_at: String,
+    /// Exact TTL admitted at acquisition.
+    pub ttl_seconds: i64,
 }
 
 /// Input to the single-transaction lease acquisition (spec section 26.3).
@@ -114,21 +119,28 @@ pub struct LeaseRequest {
     pub scope_revision: u64,
     /// Context capsule revision.
     pub context_revision: u64,
-    /// Grant time (RFC 3339 UTC).
-    pub now: String,
-    /// Lease deadline (RFC 3339 UTC).
-    pub expires_at: String,
+    /// Requested lease lifetime. Valid Phase-1 range is 1..=15 seconds.
+    pub ttl_seconds: i64,
 }
 
 impl LeaseRequest {
-    /// Canonical payload for idempotency comparison. Excludes the volatile
-    /// `now`/`expires_at` fields so a retried acquisition replays instead of
-    /// conflicting, while any change to the requested authority conflicts.
+    /// Validate and return the requested TTL.
+    ///
+    /// # Errors
+    ///
+    /// Returns `INVALID_LEASE_TTL` outside 1..=15 seconds.
+    pub fn validated_ttl(&self) -> Result<i64, bullet_domain::DomainError> {
+        validate_lease_ttl(self.ttl_seconds)
+    }
+
+    /// Canonical payload for idempotency comparison. The admitted TTL is
+    /// authority and therefore conflicts when changed under the same key.
     ///
     /// # Errors
     ///
     /// Returns `Encoding` when serialization fails.
     pub fn stable_payload(&self) -> Result<String, bullet_domain::DomainError> {
+        self.validated_ttl()?;
         let value = serde_json::json!({
             "mission_id": self.mission_id.as_str(),
             "variant_id": self.variant_id.as_str(),
@@ -139,6 +151,7 @@ impl LeaseRequest {
             "workspace_nonce": self.workspace_nonce.to_vec(),
             "scope_revision": self.scope_revision,
             "context_revision": self.context_revision,
+            "ttl_seconds": self.ttl_seconds,
         });
         serde_json::to_string(&value)
             .map_err(|err| bullet_domain::DomainError::Encoding(err.to_string()))
@@ -169,10 +182,19 @@ pub struct HeartbeatRequest {
     pub runner_epoch: u64,
     /// Workspace nonce.
     pub workspace_nonce: [u8; 32],
-    /// Heartbeat time (RFC 3339 UTC).
-    pub now: String,
-    /// New expiry deadline (RFC 3339 UTC).
-    pub expires_at: String,
+    /// Exact admitted lease lifetime. Valid Phase-1 range is 1..=15 seconds.
+    pub ttl_seconds: i64,
+}
+
+impl HeartbeatRequest {
+    /// Validate and return the renewal TTL.
+    ///
+    /// # Errors
+    ///
+    /// Returns `INVALID_LEASE_TTL` outside 1..=15 seconds.
+    pub fn validated_ttl(&self) -> Result<i64, bullet_domain::DomainError> {
+        validate_lease_ttl(self.ttl_seconds)
+    }
 }
 
 /// Close one lease and optionally requeue the work package.
@@ -186,8 +208,19 @@ pub struct ReleaseRequest {
     pub final_state: AttemptState,
     /// Whether the work package returns to the ready queue.
     pub requeue: bool,
-    /// Release time (RFC 3339 UTC).
-    pub now: String,
+}
+
+/// Validate a requested lease lifetime without granting authority.
+///
+/// # Errors
+///
+/// Returns `INVALID_LEASE_TTL` outside 1..=15 seconds.
+pub fn validate_lease_ttl(ttl_seconds: i64) -> Result<i64, bullet_domain::DomainError> {
+    if (1..=MAX_LEASE_TTL_SECONDS).contains(&ttl_seconds) {
+        Ok(ttl_seconds)
+    } else {
+        Err(bullet_domain::DomainError::InvalidLeaseTtl(ttl_seconds))
+    }
 }
 
 /// One lease reclaimed by expiry.

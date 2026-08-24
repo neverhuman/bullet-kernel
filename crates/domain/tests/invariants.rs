@@ -221,6 +221,10 @@ fn reason_codes_are_stable() {
     );
     assert_eq!(DomainError::Fence("x".into()).reason_code(), "FENCE_REUSE");
     assert_eq!(
+        DomainError::InvalidLeaseTtl(0).reason_code(),
+        "INVALID_LEASE_TTL"
+    );
+    assert_eq!(
         DomainError::UnknownState("x".into()).reason_code(),
         "UNKNOWN_STATE"
     );

@@ -26,7 +26,7 @@ async fn unavailable_authority_stops_before_running_and_heartbeat() {
         runner_id: RunnerId::from_seed("authority-before-heartbeat"),
         runner_epoch: 1,
         idempotency_key: key.into(),
-        ttl_seconds: 60,
+        ttl_seconds: 15,
     };
     let mut config = AttemptConfig::new(
         origin,
@@ -38,7 +38,6 @@ async fn unavailable_authority_stops_before_running_and_heartbeat() {
     );
     config.heartbeat = HeartbeatConfig {
         interval: Duration::from_millis(1),
-        ttl_seconds: 60,
     };
 
     let error = run_attempt(

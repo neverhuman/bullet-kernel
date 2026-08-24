@@ -42,6 +42,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0004_event_time.sql",
         sql: include_str!("../../../../db/migrations/0004_event_time.sql"),
     },
+    Migration {
+        version: 5,
+        name: "0005_lease_ttl.sql",
+        sql: include_str!("../../../../db/migrations/0005_lease_ttl.sql"),
+    },
 ];
 
 #[derive(Debug, PartialEq, Eq)]

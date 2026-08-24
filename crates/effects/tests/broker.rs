@@ -8,7 +8,6 @@ use bullet_domain::{AttemptState, CommandPhase};
 use bullet_effects_core::{
     authorize, dispatch, propose, EffectsError, ForgeEffects, LocalBareForge, ReceiptVerdict,
 };
-use chrono::Utc;
 use support::{authority, intent_input, now, repos, sh};
 
 #[test]
@@ -151,18 +150,10 @@ fn superseded_fence_cannot_authorize() {
         &auth.grant,
         AttemptState::Superseded,
         true,
-        Utc::now(),
     )
     .expect("release");
-    bullet_application::LeaseService::acquire(
-        &mut auth.ledger,
-        &auth.graph,
-        0,
-        "br-fence-a2",
-        Utc::now(),
-        300,
-    )
-    .expect("successor");
+    bullet_application::LeaseService::acquire(&mut auth.ledger, &auth.graph, 0, "br-fence-a2", 15)
+        .expect("successor");
     let err = authorize(&mut auth.ledger, &row.id, &auth.token, &now()).expect_err("stale");
     assert_eq!(err.reason_code(), "STALE_AUTHORITY");
     let stored = auth

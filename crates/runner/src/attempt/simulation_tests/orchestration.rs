@@ -4,7 +4,7 @@ use super::harness::ScriptedSim;
 use super::{build_origin, proposal, seeded_ledger, SimWorkspace};
 use crate::journal::JournalSink;
 use crate::{DirectLeaseClient, HeartbeatConfig, LeaseClient, MemoryJournal, MonotonicClock};
-use bullet_application::{LeaseService, Ledger, MemoryLedger};
+use bullet_application::{Ledger, MemoryLedger};
 use bullet_domain::{AttemptId, AttemptState, RunnerId, WorkPackageId};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -36,7 +36,7 @@ fn request(package: WorkPackageId, key: &str) -> crate::AcquireRequest {
         runner_id: RunnerId::from_seed(key),
         runner_epoch: 1,
         idempotency_key: key.into(),
-        ttl_seconds: 60,
+        ttl_seconds: 15,
     }
 }
 
@@ -51,7 +51,6 @@ fn config(origin: PathBuf, base_sha: String, farm_root: PathBuf) -> AttemptConfi
     );
     config.heartbeat = HeartbeatConfig {
         interval: Duration::from_millis(10),
-        ttl_seconds: 60,
     };
     config
 }
@@ -74,13 +73,11 @@ async fn wait_for_state(ledger: &SharedLedger, attempt_id: &AttemptId, expected:
 }
 
 fn expire_live_lease(ledger: &SharedLedger) {
-    let expired = ledger
-        .lock()
-        .expect("ledger")
-        .expire_leases(&LeaseService::rfc3339(
-            chrono::Utc::now() + chrono::Duration::hours(2),
-        ))
-        .expect("expire lease");
+    let mut ledger = ledger.lock().expect("ledger");
+    ledger
+        .advance_simulation_time(15)
+        .expect("advance deterministic lease clock");
+    let expired = ledger.expire_leases().expect("expire lease");
     assert_eq!(expired.len(), 1, "one live test lease expires");
     assert_eq!(expired[0].fence, 1);
 }

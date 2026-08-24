@@ -8,6 +8,7 @@ use bullet_domain::{AttemptId, AttemptState, RunnerId, TaskClass, WorkPackageId}
 use bullet_runner_core::{
     AcquireRequest, HeartbeatCall, HttpLeaseClient, LeaseClient, ReleaseCall,
 };
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -29,6 +30,17 @@ fn seed_graph(db: &Path, seed: &str) -> String {
     )
     .expect("plan");
     graph.packages[0].id.to_string()
+}
+
+fn force_expired(db: &Path, ttl_seconds: i64) {
+    let expires = format!("2000-01-01T00:00:{ttl_seconds:02}.000Z");
+    Connection::open(db)
+        .expect("raw open")
+        .execute(
+            "UPDATE active_leases SET heartbeat_at = ?1, expires_at = ?2",
+            ["2000-01-01T00:00:00.000Z", &expires],
+        )
+        .expect("set exact expired test window");
 }
 
 async fn start(db: &Path) -> SocketAddr {
@@ -92,7 +104,7 @@ fn acquire_body(wp: &str, runner: &RunnerId, key: &str) -> Value {
         "runner_id": runner.as_str(),
         "runner_epoch": 1,
         "idempotency_key": key,
-        "ttl_seconds": 60,
+        "ttl_seconds": 15,
     })
 }
 
@@ -119,7 +131,10 @@ async fn ready_acquire_heartbeat_release_roundtrip() {
     // Same key replays the stored grant.
     let (status, replay) = request(addr, "POST", "/v1/leases/acquire", Some(&body)).await;
     assert_eq!(status, 200);
-    assert_eq!(replay["attempt"]["id"], grant["attempt"]["id"]);
+    assert_eq!(
+        replay, grant,
+        "exact replay returns the original grant bytes"
+    );
 
     // A different key while leased is a typed conflict.
     let mut second = body.clone();
@@ -141,7 +156,7 @@ async fn ready_acquire_heartbeat_release_roundtrip() {
         "runner_id": runner.as_str(),
         "runner_epoch": 1,
         "workspace_nonce": grant["lease"]["workspace_nonce"],
-        "ttl_seconds": 60,
+        "ttl_seconds": 15,
     });
     let (status, _) = request(addr, "POST", "/v1/leases/heartbeat", Some(&heartbeat)).await;
     assert_eq!(status, 204);
@@ -190,10 +205,9 @@ async fn stale_paths_are_typed_conflicts() {
 
     // Expire the lease behind the server's back, then a previously valid
     // heartbeat matches zero rows.
+    force_expired(&db, 15);
     let mut side = SqliteLedger::open(&db).expect("second connection");
-    let expired = side
-        .expire_leases("9999-01-01T00:00:00.000Z")
-        .expect("expire");
+    let expired = side.expire_leases().expect("expire");
     assert_eq!(expired.len(), 1);
     let valid = json!({
         "variant_id": grant["lease"]["variant_id"],
@@ -226,7 +240,7 @@ async fn stale_paths_are_typed_conflicts() {
 async fn invalid_and_unknown_requests_are_problem_details() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = dir.path().join("ledger.sqlite");
-    seed_graph(&db, "lease-bad");
+    let wp = seed_graph(&db, "lease-bad");
     let addr = start(&db).await;
     let bad = json!({
         "work_package_id": "not-an-id",
@@ -237,6 +251,30 @@ async fn invalid_and_unknown_requests_are_problem_details() {
     let (status, problem) = request(addr, "POST", "/v1/leases/acquire", Some(&bad)).await;
     assert_eq!(status, 400);
     assert_eq!(problem["code"], "INVALID_ID");
+    for ttl in [0, 16] {
+        let invalid_ttl = json!({
+            "work_package_id": wp,
+            "runner_id": RunnerId::from_seed("bad-ttl").as_str(),
+            "runner_epoch": 1,
+            "idempotency_key": format!("invalid-ttl-{ttl}"),
+            "ttl_seconds": ttl,
+        });
+        let (status, problem) =
+            request(addr, "POST", "/v1/leases/acquire", Some(&invalid_ttl)).await;
+        assert_eq!(status, 400);
+        assert_eq!(problem["code"], "INVALID_LEASE_TTL");
+    }
+    let valid = acquire_body(
+        &wp,
+        &RunnerId::from_seed("valid-after-invalid"),
+        "valid-after-invalid",
+    );
+    let (status, grant) = request(addr, "POST", "/v1/leases/acquire", Some(&valid)).await;
+    assert_eq!(status, 200, "{grant}");
+    assert_eq!(
+        grant["attempt"]["fence"], 1,
+        "invalid TTL never consumes a fence"
+    );
     let unknown = json!({
         "work_package_id": WorkPackageId::from_seed("missing").as_str(),
         "runner_id": RunnerId::from_seed("bad").as_str(),
@@ -276,7 +314,7 @@ async fn http_lease_client_speaks_the_same_contract() {
             runner_id: RunnerId::from_seed("client"),
             runner_epoch: 1,
             idempotency_key: "lease-client-1".into(),
-            ttl_seconds: 60,
+            ttl_seconds: 15,
         })
         .await
         .expect("acquire");
@@ -284,10 +322,10 @@ async fn http_lease_client_speaks_the_same_contract() {
     assert_eq!(grant.authority_token.attempt_fence, 1);
 
     client
-        .heartbeat(&HeartbeatCall::for_grant(&grant, 60))
+        .heartbeat(&HeartbeatCall::for_grant(&grant).expect("validated grant"))
         .await
         .expect("heartbeat");
-    let mut stale = HeartbeatCall::for_grant(&grant, 60);
+    let mut stale = HeartbeatCall::for_grant(&grant).expect("validated grant");
     stale.fence = 99;
     let err = client.heartbeat(&stale).await.expect_err("stale fence");
     assert!(err.is_stale(), "{err}");

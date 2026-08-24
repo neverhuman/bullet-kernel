@@ -5,6 +5,7 @@ mod commands;
 mod effects;
 mod events;
 mod graph;
+mod lease_time;
 mod leases;
 mod materialization;
 mod migrations;
@@ -148,11 +149,11 @@ impl Ledger for SqliteLedger {
     }
 
     fn heartbeat(&mut self, request: &HeartbeatRequest) -> Result<(), LedgerError> {
-        leases::heartbeat(&self.conn, request)
+        leases::heartbeat(&mut self.conn, request)
     }
 
-    fn expire_leases(&mut self, now: &str) -> Result<Vec<ExpiredLease>, LedgerError> {
-        leases::expire_leases(&mut self.conn, now)
+    fn expire_leases(&mut self) -> Result<Vec<ExpiredLease>, LedgerError> {
+        leases::expire_leases(&mut self.conn)
     }
 
     fn release_lease(&mut self, request: &ReleaseRequest) -> Result<(), LedgerError> {

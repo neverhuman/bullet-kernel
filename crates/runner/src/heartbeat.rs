@@ -5,34 +5,24 @@
 use crate::clock::{Clock, SelfKillDeadline};
 use crate::error::RunnerError;
 use crate::lease::{HeartbeatCall, LeaseClient};
+use bullet_application::LeaseService;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-/// Heartbeat cadence and lease TTL.
+/// Heartbeat cadence. The TTL comes only from the admitted grant.
 #[derive(Clone, Debug)]
 pub struct HeartbeatConfig {
     /// Interval between heartbeats.
     pub interval: Duration,
-    /// Lease TTL requested on acquire and every renewal.
-    pub ttl_seconds: i64,
 }
 
 impl Default for HeartbeatConfig {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(2),
-            ttl_seconds: 30,
         }
-    }
-}
-
-impl HeartbeatConfig {
-    /// TTL as a duration (minimum one second).
-    #[must_use]
-    pub fn ttl(&self) -> Duration {
-        Duration::from_secs(self.ttl_seconds.max(1).unsigned_abs())
     }
 }
 
@@ -87,16 +77,24 @@ impl Drop for HeartbeatHandle {
 }
 
 /// Start the heartbeat supervisor for one grant.
-#[must_use]
 pub fn start_heartbeat(
     client: Arc<dyn LeaseClient>,
     call: HeartbeatCall,
     config: HeartbeatConfig,
     clock: Arc<dyn Clock>,
-) -> HeartbeatHandle {
+) -> Result<HeartbeatHandle, RunnerError> {
+    LeaseService::validate_ttl(call.ttl_seconds).map_err(|error| RunnerError::Lease {
+        code: error.reason_code().into(),
+        message: error.to_string(),
+    })?;
+    if config.interval.is_zero() {
+        return Err(RunnerError::Protocol(
+            "heartbeat interval must be greater than zero".into(),
+        ));
+    }
     let (tx, rx) = watch::channel(None);
     let task = tokio::spawn(heartbeat_loop(client, call, config, clock, tx));
-    HeartbeatHandle { task, rx }
+    Ok(HeartbeatHandle { task, rx })
 }
 
 async fn heartbeat_loop(
@@ -106,10 +104,13 @@ async fn heartbeat_loop(
     clock: Arc<dyn Clock>,
     tx: watch::Sender<Option<FreezeReason>>,
 ) {
-    let mut deadline = SelfKillDeadline::new(clock.now(), config.ttl());
-    let mut ticker = tokio::time::interval(config.interval);
+    let admitted_ttl = Duration::from_secs(
+        u64::try_from(call.ttl_seconds).expect("HeartbeatCall TTL was validated from its grant"),
+    );
+    let mut deadline = SelfKillDeadline::new(clock.now(), admitted_ttl);
+    let cadence = config.interval.min(deadline.budget() / 2);
+    let mut ticker = tokio::time::interval(cadence);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    ticker.tick().await;
     loop {
         ticker.tick().await;
         let now = clock.now();
@@ -119,15 +120,16 @@ async fn heartbeat_loop(
             }));
             return;
         }
-        match client.heartbeat(&call).await {
-            Ok(()) => deadline.renew(clock.now()),
-            Err(err) if err.is_stale() => {
+        match tokio::time::timeout(cadence, client.heartbeat(&call)).await {
+            Ok(Ok(())) => deadline.renew(clock.now()),
+            Ok(Err(err)) if err.is_stale() => {
                 let _ = tx.send(Some(FreezeReason::StaleAuthority(err.to_string())));
                 return;
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 tracing::warn!(error = %err, "heartbeat transport failure; deadline keeps closing");
             }
+            Err(_) => tracing::warn!("heartbeat timed out; deadline keeps closing"),
         }
     }
 }
@@ -142,6 +144,8 @@ mod tests {
 
     struct StubClient {
         stale: bool,
+        hangs: bool,
+        entered: Option<Arc<tokio::sync::Notify>>,
     }
 
     #[async_trait]
@@ -150,6 +154,12 @@ mod tests {
             Err(RunnerError::Protocol("stub".into()))
         }
         async fn heartbeat(&self, _c: &HeartbeatCall) -> Result<(), RunnerError> {
+            if self.hangs {
+                if let Some(entered) = &self.entered {
+                    entered.notify_one();
+                }
+                return std::future::pending().await;
+            }
             if self.stale {
                 return Err(RunnerError::StaleAuthority("zero rows".into()));
             }
@@ -193,14 +203,18 @@ mod tests {
         let clock = Arc::new(ManualClock::new());
         let config = HeartbeatConfig {
             interval: Duration::from_millis(10),
-            ttl_seconds: 1,
         };
         let handle = start_heartbeat(
-            Arc::new(StubClient { stale: false }),
+            Arc::new(StubClient {
+                stale: false,
+                hangs: false,
+                entered: None,
+            }),
             call(),
             config,
             clock.clone(),
-        );
+        )
+        .expect("valid heartbeat");
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(
             handle.frozen().is_none(),
@@ -217,11 +231,63 @@ mod tests {
         let clock = Arc::new(ManualClock::new());
         let config = HeartbeatConfig {
             interval: Duration::from_millis(10),
-            ttl_seconds: 60,
         };
-        let handle = start_heartbeat(Arc::new(StubClient { stale: true }), call(), config, clock);
+        let handle = start_heartbeat(
+            Arc::new(StubClient {
+                stale: true,
+                hangs: false,
+                entered: None,
+            }),
+            call(),
+            config,
+            clock,
+        )
+        .expect("valid heartbeat");
         let reason = wait_frozen(&handle).await;
         assert!(matches!(reason, FreezeReason::StaleAuthority(_)));
         assert_eq!(reason.to_error().reason_code(), "STALE_AUTHORITY");
+    }
+
+    #[tokio::test]
+    async fn one_second_grant_overrides_slower_default_observation_interval() {
+        let clock = Arc::new(ManualClock::new());
+        let handle = start_heartbeat(
+            Arc::new(StubClient {
+                stale: false,
+                hangs: false,
+                entered: None,
+            }),
+            call(),
+            HeartbeatConfig::default(),
+            clock.clone(),
+        )
+        .expect("one-second grant");
+        tokio::task::yield_now().await;
+        clock.set_ms(800);
+        let reason = wait_frozen(&handle).await;
+        assert!(matches!(reason, FreezeReason::SelfKill { .. }));
+    }
+
+    #[tokio::test]
+    async fn hanging_heartbeat_cannot_outlive_one_second_local_budget() {
+        let clock = Arc::new(ManualClock::new());
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let handle = start_heartbeat(
+            Arc::new(StubClient {
+                stale: false,
+                hangs: true,
+                entered: Some(entered.clone()),
+            }),
+            call(),
+            HeartbeatConfig::default(),
+            clock.clone(),
+        )
+        .expect("one-second grant");
+        entered.notified().await;
+        clock.set_ms(800);
+        let reason = tokio::time::timeout(Duration::from_millis(700), wait_frozen(&handle))
+            .await
+            .expect("bounded heartbeat wait");
+        assert!(matches!(reason, FreezeReason::SelfKill { .. }));
     }
 }

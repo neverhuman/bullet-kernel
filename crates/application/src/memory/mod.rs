@@ -2,6 +2,7 @@
 //! with the SQLite adapter is enforced by the shared conformance suite.
 
 mod authority;
+mod clock;
 mod effects;
 mod materialization;
 
@@ -39,6 +40,7 @@ pub struct MemoryLedger {
     effect_keys: BTreeMap<String, String>,
     effect_receipts: Vec<EffectReceiptRecord>,
     fail_after_writes: Option<u32>,
+    simulation_clock_millis: i64,
 }
 
 impl MemoryLedger {
@@ -268,8 +270,8 @@ impl Ledger for MemoryLedger {
         self.heartbeat_impl(request)
     }
 
-    fn expire_leases(&mut self, now: &str) -> Result<Vec<ExpiredLease>, LedgerError> {
-        self.expire_leases_impl(now)
+    fn expire_leases(&mut self) -> Result<Vec<ExpiredLease>, LedgerError> {
+        self.expire_leases_impl()
     }
 
     fn release_lease(&mut self, request: &ReleaseRequest) -> Result<(), LedgerError> {

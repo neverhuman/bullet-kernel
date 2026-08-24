@@ -277,7 +277,7 @@ async fn run_simulated(
         runner_id: RunnerId::from_seed(seed),
         runner_epoch: 1,
         idempotency_key: format!("{seed}-1"),
-        ttl_seconds: 60,
+        ttl_seconds: 15,
     };
     let config = AttemptConfig::new(
         origin,

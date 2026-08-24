@@ -1,7 +1,7 @@
 //! Ledger port. Adapters implement this. The portal does not.
 //!
-//! Times cross this boundary as fixed-width RFC 3339 UTC strings so that
-//! implementations can compare them lexically without owning a clock.
+//! Caller-supplied non-authority timestamps cross this boundary as fixed-width
+//! RFC 3339 UTC strings. Lease authority time is owned by each store.
 
 use crate::authority::ActiveLeaseSubject;
 use crate::commands::{CommandRecord, CommandRequest};
@@ -149,13 +149,14 @@ pub trait Ledger {
     /// `StaleAuthority` when zero rows match; store failure otherwise.
     fn heartbeat(&mut self, request: &HeartbeatRequest) -> Result<(), LedgerError>;
 
-    /// Reclaim every lease with `expires_at < now`: attempt becomes
+    /// Reclaim every lease with `expires_at <=` the store's current time:
+    /// attempt becomes
     /// `Crashed`, the package returns to `Ready` with a ready row, the lease
-    /// row is deleted — one transaction per lease.
+    /// row is deleted — the complete reclaimed set commits atomically.
     ///
     /// # Errors
     /// Store failure.
-    fn expire_leases(&mut self, now: &str) -> Result<Vec<ExpiredLease>, LedgerError>;
+    fn expire_leases(&mut self) -> Result<Vec<ExpiredLease>, LedgerError>;
 
     /// Close a lease. Idempotent: releasing an attempt already in
     /// `final_state` with no lease row succeeds.

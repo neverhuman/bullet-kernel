@@ -57,7 +57,7 @@ pub async fn run_phase(
         runner_id: RunnerId::from_seed("demo-synthetic-runner"),
         runner_epoch: 1,
         idempotency_key: format!("demo-synthetic-runner:{}", graph.mission.id),
-        ttl_seconds: 60,
+        ttl_seconds: 15,
     };
     let workspace_root = data_dir.join("runner");
     let mut config = AttemptConfig::new(

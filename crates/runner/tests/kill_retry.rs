@@ -22,7 +22,7 @@ async fn refused_attempt(
         runner_id: RunnerId::from_seed(key),
         runner_epoch: 1,
         idempotency_key: key.into(),
-        ttl_seconds: 60,
+        ttl_seconds: 15,
     };
     let config = AttemptConfig::new(
         origin,

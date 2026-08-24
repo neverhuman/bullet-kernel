@@ -11,9 +11,11 @@ use bullet_domain::{
     Attempt, AttemptId, AttemptState, AuthorityToken, Digest, RunnerId, VariantId, WorkPackageId,
     WorkspaceId,
 };
-use chrono::{Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Frozen Phase-1 lease maximum, forwarded from the application authority contract.
+pub const MAX_LEASE_TTL_SECONDS: i64 = bullet_application::records::MAX_LEASE_TTL_SECONDS;
 
 /// Lease acquisition request keyed by work package.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,17 +64,21 @@ pub struct HeartbeatCall {
 
 impl HeartbeatCall {
     /// Heartbeat identity for one grant.
-    #[must_use]
-    pub fn for_grant(grant: &AcquireGrant, ttl_seconds: i64) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `INVALID_LEASE_TTL` when a decoded grant carries an invalid TTL.
+    pub fn for_grant(grant: &AcquireGrant) -> Result<Self, RunnerError> {
+        LeaseService::validate_ttl(grant.lease.ttl_seconds).map_err(map_ledger)?;
+        Ok(Self {
             variant_id: grant.lease.variant_id.clone(),
             attempt_id: grant.lease.attempt_id.clone(),
             fence: grant.lease.fence,
             runner_id: grant.lease.runner_id.clone(),
             runner_epoch: grant.lease.runner_epoch,
             workspace_nonce: grant.lease.workspace_nonce,
-            ttl_seconds,
-        }
+            ttl_seconds: grant.lease.ttl_seconds,
+        })
     }
 }
 
@@ -176,8 +182,6 @@ pub fn lease_request(
     request: &AcquireRequest,
     graph: &StoredGraph,
     variant_id: &VariantId,
-    now_rfc3339: &str,
-    expires_rfc3339: &str,
 ) -> LeaseRequest {
     LeaseRequest {
         idempotency_key: request.idempotency_key.clone(),
@@ -190,8 +194,7 @@ pub fn lease_request(
         workspace_nonce: *Digest::of(request.idempotency_key.as_bytes()).as_bytes(),
         scope_revision: 1,
         context_revision: 1,
-        now: now_rfc3339.to_string(),
-        expires_at: expires_rfc3339.to_string(),
+        ttl_seconds: request.ttl_seconds,
     }
 }
 
@@ -204,14 +207,7 @@ impl<L: Ledger + Send> LeaseClient for DirectLeaseClient<L> {
                 code: "NOT_FOUND".into(),
                 message: format!("work package {} not in any graph", request.work_package_id),
             })?;
-        let now = Utc::now();
-        let req = lease_request(
-            request,
-            &graph,
-            &variant_id,
-            &LeaseService::rfc3339(now),
-            &LeaseService::rfc3339(now + ChronoDuration::seconds(request.ttl_seconds)),
-        );
+        let req = lease_request(request, &graph, &variant_id);
         let grant = ledger.acquire_lease(&req).map_err(map_ledger)?;
         let token = LeaseService::token_for(&graph, &grant.attempt).map_err(map_ledger)?;
         Ok(AcquireGrant {
@@ -223,7 +219,6 @@ impl<L: Ledger + Send> LeaseClient for DirectLeaseClient<L> {
 
     async fn heartbeat(&self, call: &HeartbeatCall) -> Result<(), RunnerError> {
         let mut ledger = self.lock()?;
-        let now = Utc::now();
         let request = HeartbeatRequest {
             variant_id: call.variant_id.clone(),
             attempt_id: call.attempt_id.clone(),
@@ -231,8 +226,7 @@ impl<L: Ledger + Send> LeaseClient for DirectLeaseClient<L> {
             runner_id: call.runner_id.clone(),
             runner_epoch: call.runner_epoch,
             workspace_nonce: call.workspace_nonce,
-            now: LeaseService::rfc3339(now),
-            expires_at: LeaseService::rfc3339(now + ChronoDuration::seconds(call.ttl_seconds)),
+            ttl_seconds: call.ttl_seconds,
         };
         ledger.heartbeat(&request).map_err(map_ledger)
     }
@@ -269,7 +263,6 @@ impl<L: Ledger + Send> LeaseClient for DirectLeaseClient<L> {
                 attempt_id: call.attempt_id.clone(),
                 final_state: call.outcome,
                 requeue: call.requeue,
-                now: LeaseService::rfc3339(Utc::now()),
             })
             .map_err(map_ledger)
     }

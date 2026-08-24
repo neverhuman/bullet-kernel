@@ -59,7 +59,7 @@ struct Args {
     #[arg(long)]
     idempotency_key: Option<String>,
     /// Lease TTL seconds (self-kill deadline is 4/5 of this).
-    #[arg(long, default_value_t = 30)]
+    #[arg(long, default_value_t = bullet_runner_core::lease::MAX_LEASE_TTL_SECONDS)]
     ttl_seconds: i64,
 }
 
@@ -195,7 +195,7 @@ async fn execute(
         idempotency_key,
         ttl_seconds: args.ttl_seconds,
     };
-    let mut config = AttemptConfig::new(
+    let config = AttemptConfig::new(
         args.source_repo,
         args.base_sha,
         args.workspace_root,
@@ -203,7 +203,6 @@ async fn execute(
         args.scope,
         args.gate,
     );
-    config.heartbeat.ttl_seconds = args.ttl_seconds;
     let clock = Arc::new(MonotonicClock::new());
     let result = run_attempt(client, adapter, journal.clone(), clock, &request, &config).await;
     journal.close();

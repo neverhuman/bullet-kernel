@@ -95,15 +95,8 @@ pub fn authority(seed: &str) -> Authority {
         &now(),
     )
     .expect("plan");
-    let (_attempt, token, grant) = LeaseService::acquire(
-        &mut ledger,
-        &graph,
-        0,
-        &format!("{seed}-a1"),
-        Utc::now(),
-        300,
-    )
-    .expect("lease");
+    let (_attempt, token, grant) =
+        LeaseService::acquire(&mut ledger, &graph, 0, &format!("{seed}-a1"), 15).expect("lease");
     Authority {
         ledger,
         graph,
