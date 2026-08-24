@@ -1,0 +1,13 @@
+[package]
+name = "bullet-effects-core"
+description = "Effect broker: EffectIntent/Receipt state machine, OUTCOME_UNKNOWN reconciliation, ForgeEffects port (LocalBareForge, JeryuForge)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

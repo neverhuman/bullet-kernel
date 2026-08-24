@@ -116,6 +116,36 @@ impl Ledger for MemoryLedger {
             .cloned()
             .collect())
     }
+
+    fn list_events(&self) -> Result<Vec<crate::store::LedgerEvent>, LedgerError> {
+        Ok(self
+            .events
+            .iter()
+            .enumerate()
+            .map(|(idx, (kind, body))| crate::store::LedgerEvent {
+                seq: (idx as u64) + 1,
+                kind: kind.clone(),
+                body: body.clone(),
+            })
+            .collect())
+    }
+
+    fn list_attempts(&self, mission: &MissionId) -> Result<Vec<Attempt>, LedgerError> {
+        let Some(graph) = self.get_graph(mission)? else {
+            return Ok(Vec::new());
+        };
+        let variants: Vec<_> = graph
+            .variants
+            .iter()
+            .map(|variant| variant.id.clone())
+            .collect();
+        Ok(self
+            .attempts
+            .values()
+            .filter(|attempt| variants.contains(&attempt.variant_id))
+            .cloned()
+            .collect())
+    }
 }
 
 impl MemoryLedger {

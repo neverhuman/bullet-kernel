@@ -1,0 +1,13 @@
+[package]
+name = "bullet-harness-codex"
+description = "Codex CLI exec adapter (read-only sandbox, JSONL events, PatchProposal)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

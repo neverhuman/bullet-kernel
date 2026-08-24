@@ -28,4 +28,7 @@ pub enum DomainError {
     /// Canonical encoding failed.
     #[error("canonical encoding: {0}")]
     Encoding(String),
+    /// Graph parent digest did not match the stored graph.
+    #[error("graph conflict: {0}")]
+    Conflict(String),
 }

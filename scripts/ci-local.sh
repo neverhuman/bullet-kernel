@@ -5,6 +5,9 @@ lane="${1:-all}"
 case "$lane" in
   required) bash ops/ci/required.sh ;;
   fast)     bash ops/ci/fast.sh ;;
-  gates|all) bash ops/ci/required.sh ;;
-  *) echo "usage: $0 {required|fast|all}" >&2; exit 2 ;;
+  contract) bash ops/ci/contract.sh ;;
+  security) bash ops/ci/security.sh ;;
+  nightly)  bash ops/ci/nightly.sh ;;
+  gates|all) bash ops/ci/required.sh && bash ops/ci/contract.sh ;;
+  *) echo "usage: $0 {required|fast|contract|security|nightly|all}" >&2; exit 2 ;;
 esac

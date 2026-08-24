@@ -238,6 +238,10 @@ name = "bullet-effects"
 version = "0.1.0"
 
 [[package]]
+name = "bullet-effects-core"
+version = "0.1.0"
+
+[[package]]
 name = "bullet-farmd"
 version = "0.1.0"
 dependencies = [
@@ -255,7 +259,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "bullet-harness-antigravity"
+version = "0.1.0"
+
+[[package]]
+name = "bullet-harness-claude"
+version = "0.1.0"
+
+[[package]]
+name = "bullet-harness-codex"
+version = "0.1.0"
+
+[[package]]
+name = "bullet-harness-core"
+version = "0.1.0"
+
+[[package]]
+name = "bullet-harness-cursor"
+version = "0.1.0"
+
+[[package]]
+name = "bullet-harness-sim"
+version = "0.1.0"
+
+[[package]]
 name = "bullet-runner"
+version = "0.1.0"
+
+[[package]]
+name = "bullet-runner-core"
 version = "0.1.0"
 
 [[package]]
@@ -265,10 +297,15 @@ dependencies = [
  "bullet-adapters",
  "bullet-application",
  "bullet-domain",
+ "serde_json",
 ]
 
 [[package]]
 name = "bullet-verifier"
+version = "0.1.0"
+
+[[package]]
+name = "bullet-verifier-core"
 version = "0.1.0"
 
 [[package]]
@@ -1061,6 +1098,7 @@ version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
 dependencies = [
+ "bytes",
  "libc",
  "mio",
  "pin-project-lite",

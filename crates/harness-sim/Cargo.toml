@@ -1,0 +1,13 @@
+[package]
+name = "bullet-harness-sim"
+description = "Deterministic provider simulator implementing HarnessAdapter (spec s33.2)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

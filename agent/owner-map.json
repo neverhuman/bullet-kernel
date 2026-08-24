@@ -18,6 +18,18 @@
     "db/": "data",
     "docs/": "docs",
     "ops/": "ops",
-    "scripts/": "ops"
+    "scripts/": "ops",
+    ".github/": "ops",
+    ".config/": "ops",
+    "tests/": "tests",
+    "crates/harness-core/": "harness",
+    "crates/harness-sim/": "harness",
+    "crates/harness-claude/": "harness",
+    "crates/harness-codex/": "harness",
+    "crates/harness-cursor/": "harness",
+    "crates/harness-antigravity/": "harness",
+    "crates/runner/": "runner",
+    "crates/verifier/": "verifier",
+    "crates/effects/": "effects"
   }
 }

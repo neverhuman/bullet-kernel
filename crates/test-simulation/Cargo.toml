@@ -12,3 +12,4 @@ workspace = true
 bullet-adapters.workspace = true
 bullet-application.workspace = true
 bullet-domain.workspace = true
+serde_json.workspace = true

@@ -116,4 +116,29 @@ pub trait Ledger {
     ///
     /// Returns a store error when the read fails.
     fn pending_outbox(&self) -> Result<Vec<CommandRecord>, LedgerError>;
+
+    /// Durable events newest-last.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error when the read fails.
+    fn list_events(&self) -> Result<Vec<LedgerEvent>, LedgerError>;
+
+    /// Attempts whose variant belongs to `mission`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error when the read fails.
+    fn list_attempts(&self, mission: &MissionId) -> Result<Vec<Attempt>, LedgerError>;
+}
+
+/// One durable outbox / audit event.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LedgerEvent {
+    /// Monotonic sequence.
+    pub seq: u64,
+    /// Event kind.
+    pub kind: String,
+    /// Payload body.
+    pub body: String,
 }

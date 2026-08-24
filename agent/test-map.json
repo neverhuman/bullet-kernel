@@ -22,8 +22,48 @@
       "purpose": "prove generated client matches OpenAPI"
     },
     "ops/": {
-      "command": "just fast",
+      "command": "just check",
       "purpose": "verify local CI parity"
+    },
+    "tests/": {
+      "command": "cargo test -p bullet-test-simulation",
+      "purpose": "prove harness tapes stay non-authoritative"
+    },
+    ".github/": {
+      "command": "bash scripts/ci-local.sh required",
+      "purpose": "prove hosted lanes match local scripts"
+    },
+    "crates/harness-core/": {
+      "command": "cargo test -p bullet-harness-core -p bullet-harness-sim",
+      "purpose": "prove adapter trait, capability matrix, and simulator conformance"
+    },
+    "crates/harness-claude/": {
+      "command": "cargo test -p bullet-harness-claude",
+      "purpose": "prove Claude adapter parsing and argv guardrails"
+    },
+    "crates/harness-codex/": {
+      "command": "cargo test -p bullet-harness-codex",
+      "purpose": "prove Codex adapter parsing and argv guardrails"
+    },
+    "crates/harness-cursor/": {
+      "command": "cargo test -p bullet-harness-cursor",
+      "purpose": "prove Cursor adapter parsing and argv guardrails"
+    },
+    "crates/harness-antigravity/": {
+      "command": "cargo test -p bullet-harness-antigravity",
+      "purpose": "prove agy text adapter and Unsupported capability gating"
+    },
+    "crates/runner/": {
+      "command": "cargo test -p bullet-runner-core",
+      "purpose": "prove attempt loop, scope check, heartbeat self-fence"
+    },
+    "crates/verifier/": {
+      "command": "cargo test -p bullet-verifier-core",
+      "purpose": "prove clean reconstruction and typed gate outcomes"
+    },
+    "crates/effects/": {
+      "command": "cargo test -p bullet-effects-core",
+      "purpose": "prove effect state machine and OUTCOME_UNKNOWN reconciliation"
     }
   }
 }

@@ -1,0 +1,7 @@
+{
+  "name": "timeout-after-success",
+  "transport": "httpmock",
+  "request": { "method": "POST", "path": "/repos/demo/demo/git/refs" },
+  "response": { "status": 201, "body": { "ref": "refs/heads/candidate/demo" } },
+  "then": { "kind": "timeout", "observation": "unknown" }
+}

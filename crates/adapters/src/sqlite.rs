@@ -266,6 +266,58 @@ impl Ledger for SqliteLedger {
         }
         Ok(out)
     }
+
+    fn list_events(&self) -> Result<Vec<bullet_application::LedgerEvent>, LedgerError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, kind, body FROM events ORDER BY seq")
+            .map_err(store)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(store)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, kind, body) = row.map_err(store)?;
+            out.push(bullet_application::LedgerEvent {
+                seq: u64::try_from(seq).unwrap_or(0),
+                kind,
+                body,
+            });
+        }
+        Ok(out)
+    }
+
+    fn list_attempts(&self, mission: &MissionId) -> Result<Vec<Attempt>, LedgerError> {
+        let Some(graph) = self.get_graph(mission)? else {
+            return Ok(Vec::new());
+        };
+        let variants: Vec<_> = graph
+            .variants
+            .iter()
+            .map(|variant| variant.id.clone())
+            .collect();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT body FROM attempts")
+            .map_err(store)?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(store)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let attempt: Attempt = from_json(&row.map_err(store)?)?;
+            if variants.contains(&attempt.variant_id) {
+                out.push(attempt);
+            }
+        }
+        Ok(out)
+    }
 }
 
 fn phase_name(phase: CommandPhase) -> &'static str {

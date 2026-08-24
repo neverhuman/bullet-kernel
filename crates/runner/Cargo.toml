@@ -1,0 +1,13 @@
+[package]
+name = "bullet-runner-core"
+description = "Attempt runner loop: lease, private clone via bullet-gitd, provider session, scope check, apply, gate, candidate."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
