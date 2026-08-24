@@ -10,4 +10,17 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+live = []
+
 [dependencies]
+bullet-domain.workspace = true
+bullet-harness-core.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+tempfile.workspace = true

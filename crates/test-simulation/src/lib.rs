@@ -4,6 +4,9 @@ pub mod harness_tape;
 
 pub use bullet_adapters::{ProviderSimulator, ScmSimulator};
 pub use bullet_application::{run_demo, MemoryLedger};
+pub use bullet_harness_core as harness_core;
+pub use bullet_harness_sim as harness_sim;
+pub use bullet_harness_sim::SimAdapter;
 pub use harness_tape::{load_tape, tape_claims_authoritative_done, HarnessTape};
 
 #[cfg(test)]

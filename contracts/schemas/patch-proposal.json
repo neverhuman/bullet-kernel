@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bullet.farm/schemas/patch-proposal.json",
+  "title": "PatchProposal",
+  "description": "The only structured output the kernel accepts from a provider turn. Full-file contents per changed path so application is deterministic and order-independent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["intent_summary", "changes", "tests_to_run", "claims", "uncertainties", "done"],
+  "properties": {
+    "intent_summary": {
+      "type": "string",
+      "description": "One-paragraph summary of what this proposal intends."
+    },
+    "changes": {
+      "type": "array",
+      "description": "Whole-file changes. contents is the complete new file body, or null for delete.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "op", "contents"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Repository-relative path. No leading slash, no '..' segments."
+          },
+          "op": {
+            "type": "string",
+            "enum": ["create", "modify", "delete"]
+          },
+          "contents": {
+            "type": ["string", "null"],
+            "description": "Full new file contents; null if and only if op is delete."
+          }
+        }
+      }
+    },
+    "tests_to_run": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Deterministic commands the kernel should run as the gate."
+    },
+    "claims": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What the provider asserts is true after the change. Claims are never evidence."
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What the provider is unsure about."
+    },
+    "done": {
+      "type": "boolean",
+      "description": "Provider's completion claim. Not authoritative; the gate decides."
+    }
+  }
+}
