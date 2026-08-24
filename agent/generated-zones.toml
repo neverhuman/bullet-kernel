@@ -2,3 +2,13 @@
 path = "contracts/generated/"
 source = "contracts/openapi.yaml"
 owner = "contracts"
+
+[[zone]]
+path = "crates/domain/src/schema_bundle.rs"
+source = "bullet-farm:contracts/generated/rust/schema_bundle.rs via scripts/sync-family-contracts.sh"
+owner = "contracts"
+
+[[zone]]
+path = "crates/adapters/tests/fixtures/formal/"
+source = "bullet-farm:formal/traces via scripts/sync-family-contracts.sh"
+owner = "assurance"
