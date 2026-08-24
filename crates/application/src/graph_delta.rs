@@ -28,6 +28,8 @@ pub enum GraphDeltaCommandResult {
 pub enum GraphDeltaFailure {
     /// Durable store or logical lookup failure.
     Store { message: String },
+    /// Persisted pre-1.0 schema is not supported by this binary.
+    UnsupportedSchema { detail: String },
     /// Invalid identifier.
     InvalidId { message: String },
     /// Invalid state transition.
@@ -53,6 +55,9 @@ impl GraphDeltaFailure {
         match error {
             LedgerError::Store(message) => Self::Store {
                 message: message.clone(),
+            },
+            LedgerError::UnsupportedSchema { detail } => Self::UnsupportedSchema {
+                detail: detail.clone(),
             },
             LedgerError::Domain(error) => match error {
                 DomainError::InvalidId(message) => Self::InvalidId {
@@ -89,6 +94,7 @@ impl GraphDeltaFailure {
     pub fn into_error(self) -> LedgerError {
         match self {
             Self::Store { message } => LedgerError::Store(message),
+            Self::UnsupportedSchema { detail } => LedgerError::UnsupportedSchema { detail },
             Self::InvalidId { message } => DomainError::InvalidId(message).into(),
             Self::InvalidTransition { from, to } => {
                 DomainError::InvalidTransition { from, to }.into()

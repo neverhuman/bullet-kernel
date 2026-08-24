@@ -36,6 +36,8 @@ pub enum ApiError {
     Conflict(DomainError),
     /// A request-level protocol rule was violated.
     BadRequest(&'static str),
+    /// The database schema is not supported by this pre-1.0 binary.
+    UnsupportedSchema(String),
     /// The durable store failed. Logged; the detail is not exposed.
     Internal(String),
 }
@@ -44,6 +46,7 @@ impl From<LedgerError> for ApiError {
     fn from(value: LedgerError) -> Self {
         match value {
             LedgerError::Store(detail) => Self::Internal(detail),
+            LedgerError::UnsupportedSchema { detail } => Self::UnsupportedSchema(detail),
             LedgerError::Domain(err) => Self::from(err),
         }
     }
@@ -74,6 +77,7 @@ fn title_for(code: &str) -> &'static str {
         "CONFLICTING_CURSOR" => "Conflicting event cursors",
         "INVALID_CURSOR" => "Invalid event cursor",
         "NOT_FOUND" => "Resource not found",
+        "UNSUPPORTED_SCHEMA" => "Unsupported database schema",
         "STORE_FAILURE" => "Ledger store failure",
         _ => "Request failed",
     }
@@ -86,6 +90,11 @@ impl ApiError {
             Self::Invalid(err) => (StatusCode::BAD_REQUEST, err.reason_code().into(), false),
             Self::Conflict(err) => (StatusCode::CONFLICT, err.reason_code().into(), false),
             Self::BadRequest(code) => (StatusCode::BAD_REQUEST, (*code).into(), false),
+            Self::UnsupportedSchema(_) => (
+                StatusCode::PRECONDITION_FAILED,
+                "UNSUPPORTED_SCHEMA".into(),
+                false,
+            ),
             Self::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "STORE_FAILURE".into(),
@@ -99,6 +108,12 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         if let Self::Internal(detail) = &self {
             tracing::error!(detail, "ledger store failure");
+        }
+        if let Self::UnsupportedSchema(detail) = &self {
+            tracing::error!(
+                detail,
+                "database requires export and removal before restart"
+            );
         }
         let (status, code, retryable) = self.status_and_code();
         let nanos = std::time::SystemTime::now()

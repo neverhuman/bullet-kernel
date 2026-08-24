@@ -7,6 +7,7 @@ mod events;
 mod graph;
 mod leases;
 mod materialization;
+mod migrations;
 mod outbox;
 
 use bullet_application::{
@@ -19,28 +20,9 @@ use bullet_domain::{
     Attempt, AttemptId, Candidate, CandidateId, CommandPhase, Effect, EffectId, Evidence,
     EvidenceId, Mission, MissionId, VariantId, WorkPackageId,
 };
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 use std::path::Path;
 use std::time::Duration;
-
-const MIGRATIONS: &[(&str, &str)] = &[
-    (
-        "0001_ledger.sql",
-        include_str!("../../../../db/migrations/0001_ledger.sql"),
-    ),
-    (
-        "0002_authority.sql",
-        include_str!("../../../../db/migrations/0002_authority.sql"),
-    ),
-    (
-        "0003_effects.sql",
-        include_str!("../../../../db/migrations/0003_effects.sql"),
-    ),
-    (
-        "0004_event_time.sql",
-        include_str!("../../../../db/migrations/0004_event_time.sql"),
-    ),
-];
 
 /// SQLite-backed ledger.
 pub struct SqliteLedger {
@@ -50,19 +32,21 @@ pub struct SqliteLedger {
 }
 
 impl SqliteLedger {
-    /// Open or create a database at `path` with WAL, a busy timeout, and all
-    /// migrations applied.
+    /// Open or create a database at `path` with enforced foreign keys, WAL,
+    /// a busy timeout, and an exactly verified schema.
     ///
     /// # Errors
     ///
-    /// Returns a store error when SQLite cannot open or migrate.
+    /// Returns `UNSUPPORTED_SCHEMA` before mutating legacy or unrecognized
+    /// pre-1.0 databases; other SQLite failures are store errors.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, LedgerError> {
         let mut conn = Connection::open(path.as_ref()).map_err(store)?;
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(store)?;
         conn.busy_timeout(Duration::from_millis(5_000))
             .map_err(store)?;
-        migrate(&mut conn)?;
+        migrations::enable_foreign_keys(&conn)?;
+        migrations::verify_or_initialize(&mut conn)?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(store)?;
         Ok(Self {
             conn,
             materialization_fail_after: None,
@@ -93,40 +77,6 @@ pub(crate) fn json<T: serde::Serialize>(value: &T) -> Result<String, LedgerError
 
 pub(crate) fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, LedgerError> {
     serde_json::from_str(text).map_err(store)
-}
-
-fn migrate(conn: &mut Connection) -> Result<(), LedgerError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_version (
-           version INTEGER PRIMARY KEY,
-           name TEXT NOT NULL,
-           applied_at TEXT NOT NULL
-         );",
-    )
-    .map_err(store)?;
-    for (idx, (name, sql)) in MIGRATIONS.iter().enumerate() {
-        let version = i64::try_from(idx).map_err(store)? + 1;
-        let applied: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM schema_version WHERE version = ?1)",
-                params![version],
-                |row| row.get(0),
-            )
-            .map_err(store)?;
-        if applied {
-            continue;
-        }
-        let tx = conn.transaction().map_err(store)?;
-        tx.execute_batch(sql).map_err(store)?;
-        tx.execute(
-            "INSERT INTO schema_version (version, name, applied_at)
-             VALUES (?1, ?2, datetime('now'))",
-            params![version, name],
-        )
-        .map_err(store)?;
-        tx.commit().map_err(store)?;
-    }
-    Ok(())
 }
 
 impl Ledger for SqliteLedger {

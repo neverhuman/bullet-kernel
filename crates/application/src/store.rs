@@ -24,6 +24,14 @@ pub enum LedgerError {
     /// Durable store failure.
     #[error("ledger: {0}")]
     Store(String),
+    /// Persisted schema is not the exact disposable pre-1.0 schema this binary owns.
+    #[error(
+        "unsupported schema: {detail}. Export any data you need before removing the database file and starting fresh; pre-1.0 Bullet Farm databases are not migrated in place"
+    )]
+    UnsupportedSchema {
+        /// Exact fail-closed reason suitable for operator logs.
+        detail: String,
+    },
     /// Domain invariant.
     #[error(transparent)]
     Domain(#[from] bullet_domain::DomainError),
@@ -35,6 +43,7 @@ impl LedgerError {
     pub fn reason_code(&self) -> &'static str {
         match self {
             Self::Store(_) => "STORE_FAILURE",
+            Self::UnsupportedSchema { .. } => "UNSUPPORTED_SCHEMA",
             Self::Domain(err) => err.reason_code(),
         }
     }

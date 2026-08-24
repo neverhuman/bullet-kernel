@@ -48,14 +48,14 @@ fn corrupt_lease_row_never_authorizes() {
 fn unavailable_authority_table_never_authorizes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("unavailable.sqlite");
-    let subject = acquire(&path, "unavailable");
+    let _subject = acquire(&path, "unavailable");
     Connection::open(&path)
         .expect("raw open")
         .execute("DROP TABLE active_leases", [])
         .expect("remove authority table");
-    let mut ledger = SqliteLedger::open(&path).expect("reopen");
-    let error = ledger
-        .check_active_lease(&subject)
-        .expect_err("unavailable authority must not authorize");
-    assert_eq!(error.reason_code(), "STORE_FAILURE");
+    let error = match SqliteLedger::open(&path) {
+        Ok(_) => panic!("missing authority table must prevent ledger open"),
+        Err(error) => error,
+    };
+    assert_eq!(error.reason_code(), "UNSUPPORTED_SCHEMA");
 }
