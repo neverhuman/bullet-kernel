@@ -4,14 +4,108 @@
 // DO NOT EDIT BY HAND.
 pub const SCHEMA_VERSION: &str = "v1alpha1";
 pub const SCHEMA_BUNDLE_HASH: &str =
-    "f670dd9fe8694a1f54d4be9af67ad5e62a597a28dfe664efb4471899ea77cde7";
+    "0a6df08780940bd2363068a2c958ffc9d5d6c346ce760ccacce663fd853d7099";
 pub const INVARIANT_REGISTRY_HASH: &str =
     "978a8b4ebb14ff0c978afb431c154647adef2f9839de322356a765c59a0c3858";
 pub const POLICY_SNAPSHOT_HASH: &str =
-    "78858376aaf635636a82bee274a4ff899897df834f7925a1b8c3b867313ae802";
+    "b9860c3a8856f820d0e960b064dd470963923ca706d57634568cd5cbfd962063";
 pub const CANONICAL_GOLDEN_JSON: &str = r##"{"a":"é","array":[true,null,17],"z":"last"}"##;
 pub const CANONICAL_GOLDEN_HASH: &str =
     "1d800cb94962906f78d42cb8cc84c2c078311a50e35ca515240b800abc3d2263";
+pub const AUTHORITY_GOLDEN_HASH: &str =
+    "4ff1ce8a4ba7a37ae705a8d2459e5a9d900abe55610f6d6984fe514cd37860df";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthorityAudienceV1 {
+    BulletGitd,
+    EffectBroker,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MutationOperationV1 {
+    CloneWorkspace,
+    ReadWorkspace,
+    ApplyPatch,
+    Checkpoint,
+    PrepareCandidate,
+    PreserveWorkspace,
+    CleanupWorkspace,
+    DispatchEffect,
+    ReconcileEffect,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthorityDecisionV1 {
+    Authorized,
+    Settled,
+    Refused,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReplayDispositionV1 {
+    Fresh,
+    ExactReplay,
+    Conflict,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MutationResultStateV1 {
+    InFlight,
+    Committed,
+    Aborted,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MutationOutcomeV1 {
+    Committed,
+    Aborted,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SettlementStatusV1 {
+    Accepted,
+    ExactReplay,
+    Conflict,
+    Refused,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PatchPreimageKindV1 {
+    Absent,
+    Digest,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PatchMutationKindV1 {
+    Write,
+    Delete,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyPurposeV1 {
+    AuthoritySigning,
+    ReleaseSigning,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum KeyAlgorithmV1 {
+    #[serde(rename = "paseto-v4.public")]
+    PasetoV4Public,
+    #[serde(rename = "ssh-ed25519")]
+    SshEd25519,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PinnedContract {
@@ -177,6 +271,17 @@ pub struct AllocationReceiptV1 {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ApplyPatchRequestV1 {
+    pub schema_version: String,
+    pub mutation_id: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_generation: u64,
+    pub proposal: PatchProposalV1,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArchivePolicyV1 {
     pub schema_version: String,
     pub archive_policy_id: String,
@@ -215,6 +320,55 @@ pub struct AuditBatchV1 {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AuthorityClaimsV1 {
+    pub schema_version: String,
+    pub issuer: String,
+    pub audience: AuthorityAudienceV1,
+    pub operation: MutationOperationV1,
+    pub request_digest: String,
+    pub mutation_id: String,
+    pub subject_principal: String,
+    pub organization_id: String,
+    pub repository_id: String,
+    pub mission_id: String,
+    pub acceptance_contract_id: String,
+    pub plan_revision_id: String,
+    pub graph_revision_id: String,
+    pub graph_sequence: u64,
+    pub work_package_id: String,
+    pub selection_group_id: String,
+    pub variant_id: String,
+    pub attempt_id: String,
+    pub attempt_fence: u64,
+    pub runner_id: String,
+    pub runner_epoch: u64,
+    pub workspace_id: String,
+    pub workspace_generation: u64,
+    pub workspace_nonce: String,
+    pub scope_grant_digest: String,
+    pub scope_revision: u64,
+    pub context_revision: u64,
+    pub configuration_snapshot_id: String,
+    pub configuration_generation: u64,
+    pub policy_snapshot_id: String,
+    pub policy_generation: u64,
+    pub routing_snapshot_id: String,
+    pub routing_generation: u64,
+    pub provider: String,
+    pub model: String,
+    pub adapter: String,
+    pub provider_profile_id: String,
+    pub credential_generation: u64,
+    pub authority_epoch: u64,
+    pub freeze_generation: u64,
+    pub issued_at_unix_ms: u64,
+    pub not_before_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    pub token_nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BehaviorTraceV1 {
     pub schema_version: String,
     pub trace_id: String,
@@ -222,6 +376,16 @@ pub struct BehaviorTraceV1 {
     pub task_id: String,
     pub events: Vec<serde_json::Value>,
     pub environment_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetPolicyV1 {
+    pub schema_version: String,
+    pub maximum_lease_ttl_seconds: u64,
+    pub unknown_quota_is_headroom: bool,
+    pub maximum_changed_paths: u64,
+    pub maximum_attempt_seconds: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -295,6 +459,56 @@ pub struct CheckIntentV1 {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CheckpointRequestV1 {
+    pub schema_version: String,
+    pub mutation_id: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_generation: u64,
+    pub tree_oid: String,
+    pub journal_start: u64,
+    pub journal_end: u64,
+    pub journal_digest: String,
+    pub cas_root: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupAuthorizationV1 {
+    pub schema_version: String,
+    pub preservation_receipt_digest: String,
+    pub expected_destination_digest: String,
+    pub authority_decision_digest: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupWorkspaceRequestV1 {
+    pub schema_version: String,
+    pub mutation_id: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_generation: u64,
+    pub authorization: CleanupAuthorizationV1,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloneWorkspaceRequestV1 {
+    pub schema_version: String,
+    pub mutation_id: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub base_oid: String,
+    pub source_descriptor_id: String,
+    pub workspace_generation: u64,
+    pub scope_grant: ScopeGrantV1,
+    pub scope_grant_digest: String,
+    pub trusted_commit_time_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContaminationDecision {
     pub schema_version: String,
     pub contamination_decision_id: String,
@@ -339,6 +553,28 @@ pub struct DeliveryGrantV1 {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct DispatchEffectRequestV1 {
+    pub schema_version: String,
+    pub mutation_id: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_generation: u64,
+    pub effect_intent_id: String,
+    pub effect_intent_digest: String,
+    pub effect_kind: String,
+    pub endpoint_identity: String,
+    pub logical_key: String,
+    pub desired_state_digest: String,
+    pub expected_state_digest: String,
+    pub candidate_id: String,
+    pub candidate_proof_root: String,
+    pub policy_snapshot_id: String,
+    pub authority_epoch: u64,
+    pub freeze_generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DriftSignal {
     pub schema_version: String,
     pub drift_signal_id: String,
@@ -378,6 +614,15 @@ pub struct EvaluationVectorV1 {
     pub costs: serde_json::Value,
     pub outcome: String,
     pub closure_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidencePolicyV1 {
+    pub schema_version: String,
+    pub r2_requires_sealed_product_holdout: bool,
+    pub author_evidence_is_independent: bool,
+    pub unknown_satisfies_gate: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -436,6 +681,33 @@ pub struct FailureClass {
     pub taxonomy_version: String,
     pub class_name: String,
     pub definition: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAuthorityCheckRequestV1 {
+    pub schema_version: String,
+    pub envelope: SignedAuthorityEnvelopeV1,
+    pub envelope_digest: String,
+    pub mutation_id: String,
+    pub audience: AuthorityAudienceV1,
+    pub operation: MutationOperationV1,
+    pub request_digest: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAuthorityDecisionV1 {
+    pub schema_version: String,
+    pub decision: AuthorityDecisionV1,
+    pub replay: ReplayDispositionV1,
+    pub mutation_id: String,
+    pub operation: MutationOperationV1,
+    pub request_digest: String,
+    pub reservation_id: Option<String>,
+    pub permit: Option<SignedMutationPermitV1>,
+    pub replay_result: Option<MutationReplayResultV1>,
+    pub reason_code: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -529,6 +801,22 @@ pub struct InterventionV1 {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct IssuerKeyV1 {
+    pub schema_version: String,
+    pub issuer: String,
+    pub key_id: String,
+    pub key_purpose: KeyPurposeV1,
+    pub algorithm: KeyAlgorithmV1,
+    pub public_key: String,
+    pub audiences: Vec<AuthorityAudienceV1>,
+    pub activates_at_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    pub revoked_at_unix_ms: Option<u64>,
+    pub retain_until_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LaunchGrantV1 {
     pub schema_version: String,
     pub authority_envelope_digest: String,
@@ -538,6 +826,71 @@ pub struct LaunchGrantV1 {
     pub sandbox_manifest: serde_json::Value,
     pub gate_ids: Vec<String>,
     pub budget_reservation: serde_json::Value,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MutationPermitClaimsV1 {
+    pub schema_version: String,
+    pub issuer: String,
+    pub audience: AuthorityAudienceV1,
+    pub operation: MutationOperationV1,
+    pub authority_envelope_digest: String,
+    pub authority_token_nonce: String,
+    pub mutation_id: String,
+    pub reservation_id: String,
+    pub request_digest: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_generation: u64,
+    pub attempt_id: String,
+    pub attempt_fence: u64,
+    pub authority_epoch: u64,
+    pub freeze_generation: u64,
+    pub issued_at_unix_ms: u64,
+    pub not_before_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    pub permit_nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MutationReplayResultV1 {
+    pub schema_version: String,
+    pub reservation_id: String,
+    pub mutation_id: String,
+    pub operation: MutationOperationV1,
+    pub request_digest: String,
+    pub state: MutationResultStateV1,
+    pub result_digest: Option<String>,
+    pub completed_at_unix_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MutationSettlementRequestV1 {
+    pub schema_version: String,
+    pub reservation_id: String,
+    pub mutation_id: String,
+    pub operation: MutationOperationV1,
+    pub request_digest: String,
+    pub permit: SignedMutationPermitV1,
+    pub permit_digest: String,
+    pub outcome: MutationOutcomeV1,
+    pub result_digest: String,
+    pub completed_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MutationSettlementResultV1 {
+    pub schema_version: String,
+    pub status: SettlementStatusV1,
+    pub replay: ReplayDispositionV1,
+    pub mutation_id: String,
+    pub reservation_id: String,
+    pub result_digest: Option<String>,
+    pub reason_code: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -577,6 +930,29 @@ pub struct OverrideReceipt {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PatchOperationV1 {
+    pub schema_version: String,
+    pub path: String,
+    pub preimage_kind: PatchPreimageKindV1,
+    pub preimage_digest: Option<String>,
+    pub mutation_kind: PatchMutationKindV1,
+    pub content_utf8: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatchProposalV1 {
+    pub schema_version: String,
+    pub proposal_id: String,
+    pub producing_attempt_id: String,
+    pub base_checkpoint_id: String,
+    pub base_checkpoint_digest: String,
+    pub operations: Vec<PatchOperationV1>,
+    pub gate_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanRevisionV1 {
     pub schema_version: String,
     pub plan_revision_id: String,
@@ -592,13 +968,48 @@ pub struct PolicySnapshotV1 {
     pub policy_generation: u64,
     pub invariant_registry_hash: String,
     pub schema_bundle_hash: String,
-    pub risk_policy: serde_json::Value,
-    pub evidence_policy: serde_json::Value,
-    pub sandbox_policy: serde_json::Value,
-    pub budget_policy: serde_json::Value,
-    pub issuer_keys: Vec<serde_json::Value>,
+    pub risk_policy: RiskPolicyV1,
+    pub evidence_policy: EvidencePolicyV1,
+    pub sandbox_policy: SandboxPolicyV1,
+    pub budget_policy: BudgetPolicyV1,
+    pub route_policy: RoutePolicyV1,
+    pub issuer_keys: Vec<IssuerKeyV1>,
     pub activation_at_unix_ms: u64,
     pub expires_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrepareCandidateRequestV1 {
+    pub schema_version: String,
+    pub mutation_id: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub change_id: String,
+    pub base_checkpoint_id: String,
+    pub base_checkpoint_digest: String,
+    pub workspace_generation: u64,
+    pub tree_oid: String,
+    pub parent_candidate_ids: Vec<String>,
+    pub trusted_commit_time_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreserveWorkspaceRequestV1 {
+    pub schema_version: String,
+    pub mutation_id: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_generation: u64,
+    pub tree_oid: String,
+    pub dirty_manifest_digest: String,
+    pub untracked_manifest_digest: String,
+    pub journal_start: u64,
+    pub journal_end: u64,
+    pub journal_digest: String,
+    pub destination_id: String,
+    pub expected_destination_digest: String,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -652,13 +1063,32 @@ pub struct QueryReceipt {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ReviewerAssignment {
+pub struct ReadWorkspaceRequestV1 {
     pub schema_version: String,
-    pub reviewer_assignment_id: String,
-    pub candidate_id: String,
-    pub reviewer_principal: String,
-    pub independence_class: String,
-    pub seed: u64,
+    pub mutation_id: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_generation: u64,
+    pub checkpoint_id: String,
+    pub checkpoint_digest: String,
+    pub paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReconcileEffectRequestV1 {
+    pub schema_version: String,
+    pub mutation_id: String,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_generation: u64,
+    pub effect_intent_id: String,
+    pub effect_intent_digest: String,
+    pub endpoint_identity: String,
+    pub logical_key: String,
+    pub desired_state_digest: String,
+    pub dispatch_receipt_digest: String,
+    pub observed_state_digest: String,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -675,6 +1105,25 @@ pub struct ReviewReceipt {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ReviewerAssignment {
+    pub schema_version: String,
+    pub reviewer_assignment_id: String,
+    pub candidate_id: String,
+    pub reviewer_principal: String,
+    pub independence_class: String,
+    pub seed: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RiskPolicyV1 {
+    pub schema_version: String,
+    pub automatic_integration_max_risk: String,
+    pub signed_human_approval_min_risk: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RouteDecision {
     pub schema_version: String,
     pub route_decision_id: String,
@@ -686,6 +1135,15 @@ pub struct RouteDecision {
     pub reservation: serde_json::Value,
     pub policy_hash: String,
     pub abstention_reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoutePolicyV1 {
+    pub schema_version: String,
+    pub universal_incumbent: String,
+    pub deterministic_abstention_target: String,
+    pub evolutionary_authority: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -711,6 +1169,16 @@ pub struct RouterUpdateBatch {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SandboxPolicyV1 {
+    pub schema_version: String,
+    pub production_reference: String,
+    pub arbitrary_shell_gates: bool,
+    pub network_default: String,
+    pub live_admission_enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SanitizationReceipt {
     pub schema_version: String,
     pub sanitization_receipt_id: String,
@@ -729,7 +1197,6 @@ pub struct ScopeGrantV1 {
     pub normalized_paths: Vec<String>,
     pub protected_resources: Vec<String>,
     pub envelope_class: String,
-    pub scope_digest: String,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -748,45 +1215,17 @@ pub struct SentinelResult {
 pub struct SignedAuthorityEnvelopeV1 {
     pub schema_version: String,
     pub issuer: String,
-    pub audience: String,
-    pub operation: String,
-    pub subject_principal: String,
-    pub organization_id: String,
-    pub repository_id: String,
-    pub mission_id: String,
-    pub contract_id: String,
-    pub plan_revision_id: String,
-    pub graph_sequence: u64,
-    pub work_package_id: String,
-    pub selection_group_id: String,
-    pub variant_id: String,
-    pub attempt_id: String,
-    pub attempt_fence: u64,
-    pub runner_id: String,
-    pub runner_epoch: u64,
-    pub workspace_id: String,
-    pub workspace_nonce: String,
-    pub scope_grant_digest: String,
-    pub scope_revision: u64,
-    pub context_revision: u64,
-    pub config_hash: String,
-    pub policy_hash: String,
-    pub routing_hash: String,
-    pub provider: String,
-    pub model: String,
-    pub adapter: String,
-    pub profile: String,
-    pub credential_generation: u64,
-    pub authority_epoch: u64,
-    pub freeze_generation: u64,
-    pub request_digest: String,
-    pub issued_at_unix_ms: u64,
-    pub not_before_unix_ms: u64,
-    pub expires_at_unix_ms: u64,
-    pub token_nonce: String,
     pub key_id: String,
-    pub algorithm: String,
-    pub signature: String,
+    pub paseto: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedMutationPermitV1 {
+    pub schema_version: String,
+    pub issuer: String,
+    pub key_id: String,
+    pub paseto: String,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
