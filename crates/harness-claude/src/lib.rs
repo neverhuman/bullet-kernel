@@ -6,13 +6,13 @@ mod parse;
 
 use bullet_domain::Observation;
 use bullet_harness_core::{
-    stable_uuid, synthetic_uuid, unsupported, Ack, AgentEventKind, ArgvBuilder, ArtifactRef,
-    AuthChallenge, Capability, CapabilityMatrix, CapabilityState, CompactRequest,
-    ContextTransition, EventNormalizer, HarnessAdapter, HarnessDescriptor, HarnessError,
-    HarnessEventStream, HarnessResult, InvocationBudget, InvocationId, ModelSnapshot,
-    PermissionDecision, PlanDecision, ProbeResult, ProfileRef, PromotionStage, QuotaObservation,
-    ResumeSession, SessionCheckpoint, SessionEntry, SessionHandle, SessionState, SessionStore,
-    StartSession, SteeringMessage, Turn, TurnHandle,
+    synthetic_uuid, unsupported, Ack, AgentEventKind, ArgvBuilder, ArtifactRef, AuthChallenge,
+    Capability, CapabilityMatrix, CapabilityState, CompactRequest, ContextTransition,
+    EventNormalizer, HarnessAdapter, HarnessDescriptor, HarnessError, HarnessEventStream,
+    HarnessResult, InvocationBudget, InvocationId, ModelSnapshot, PermissionDecision, PlanDecision,
+    ProbeResult, ProfileRef, PromotionStage, QuotaObservation, ResumeSession, SessionCheckpoint,
+    SessionEntry, SessionHandle, SessionState, SessionStore, StartSession, SteeringMessage, Turn,
+    TurnHandle,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -151,7 +151,6 @@ impl ClaudeAdapter {
         config: &SessionConfig,
         workdir: &PathBuf,
         prompt: &str,
-        first_turn: bool,
     ) -> HarnessResult<bullet_harness_core::PreparedInvocation> {
         let mut builder = ArgvBuilder::new(BINARY, workdir)
             .timeout(config.wall_timeout)
@@ -164,19 +163,9 @@ impl ClaudeAdapter {
                 "--permission-mode",
                 "plan",
             ]);
-        // claude 2.1.241 requires a canonical UUID for --session-id/--resume
-        // ("Invalid session ID. Must be a valid UUID."). Callers pass labels
-        // like `plan-claude-2` or `atm_...`; map any non-UUID label to a stable
-        // UUID here so every caller is safe. A real UUID passes through unchanged.
-        // A single --session-id may be claimed only once ("already in use"), so
-        // multi-turn sessions (the runner's repair rounds) resume after the
-        // first turn on the same derived UUID.
         builder = match &config.resume_native {
-            Some(native) => builder.args(["--resume".to_string(), stable_uuid(native)]),
-            None if first_turn => {
-                builder.args(["--session-id".to_string(), stable_uuid(session_id)])
-            }
-            None => builder.args(["--resume".to_string(), stable_uuid(session_id)]),
+            Some(native) => builder.args(["--resume", native]),
+            None => builder.args(["--session-id", session_id]),
         };
         if let Some(schema) = &config.schema {
             // claude 2.1.241 cannot resolve the draft 2020-12 meta-schema
@@ -296,16 +285,12 @@ impl HarnessAdapter for ClaudeAdapter {
             wall_timeout: request.wall_timeout,
             resume_native: None,
         };
-        // The kernel keys the session by its own label (`session_id`), but the
-        // provider-native id is the canonical UUID we actually pass to claude.
-        // Record that derived UUID so receipts carry a real session id even
-        // before the init envelope confirms it.
         self.register(
             &session_id,
             request.workdir,
             &request.artifact_dir,
             config,
-            Some(stable_uuid(&session_id)),
+            Some(session_id.clone()),
         )
     }
 
@@ -330,24 +315,16 @@ impl HarnessAdapter for ClaudeAdapter {
         let session_id = session.session_id.as_str().to_string();
         self.budget.try_acquire()?;
         let invocation_id = InvocationId::new(synthetic_uuid("claude-invocation"));
-        let (workdir, pid_slot, artifact_path, invocations) =
-            self.store.with_entry(&session_id, |e| {
-                e.invocations += 1;
-                (
-                    e.workdir.clone(),
-                    e.pid_slot.clone(),
-                    e.artifact_path.clone(),
-                    e.invocations,
-                )
-            })?;
+        let (workdir, pid_slot, artifact_path) = self.store.with_entry(&session_id, |e| {
+            e.invocations += 1;
+            (
+                e.workdir.clone(),
+                e.pid_slot.clone(),
+                e.artifact_path.clone(),
+            )
+        })?;
         let config = self.config(&session_id)?;
-        let prep = self.build_turn_argv(
-            &session_id,
-            &config,
-            &workdir,
-            &turn.prompt,
-            invocations <= 1,
-        )?;
+        let prep = self.build_turn_argv(&session_id, &config, &workdir, &turn.prompt)?;
         self.with_normalizer(&session_id, |n| n.set_invocation(invocation_id.clone()))?;
         self.emit(
             &session_id,

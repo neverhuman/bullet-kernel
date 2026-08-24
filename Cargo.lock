@@ -213,15 +213,11 @@ dependencies = [
 name = "bullet"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bullet-adapters",
  "bullet-application",
  "bullet-domain",
  "bullet-effects-core",
- "bullet-harness-claude",
- "bullet-harness-codex",
  "bullet-harness-core",
- "bullet-harness-cursor",
  "bullet-harness-sim",
  "bullet-runner-core",
  "bullet-verifier-core",

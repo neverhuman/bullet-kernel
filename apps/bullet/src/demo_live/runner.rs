@@ -1,12 +1,10 @@
 //! The runner phase: bullet-runner-core's attempt loop over the shared
-//! ledger, a real bullet-gitd private clone, and the admitted provider
-//! adapter (the simulator by default).
+//! ledger, a real bullet-gitd private clone, and the simulator adapter.
 
-use crate::demo_live::fixture::{Fixture, OBJECTIVE};
-use crate::demo_live::live_adapters;
-use crate::demo_live::synthetic_adapter;
-use crate::demo_live::turns::{events_cost, events_session};
-use crate::demo_live::SharedLedger;
+use crate::demo_synthetic::fixture::{Fixture, OBJECTIVE};
+use crate::demo_synthetic::synthetic_adapter::adapter_for;
+use crate::demo_synthetic::turns::{events_cost, events_session};
+use crate::demo_synthetic::SharedLedger;
 use bullet_application::StoredGraph;
 use bullet_domain::{RunnerId, WorkPackageId};
 use bullet_harness_core::{AgentEvent, AgentSessionId, SessionHandle};
@@ -37,7 +35,6 @@ pub struct RunnerPhase {
 
 /// Run one complete fenced attempt with the chosen provider.
 pub async fn run_phase(
-    provider: &str,
     ledger: &SharedLedger,
     graph: &StoredGraph,
     fixture: &Fixture,
@@ -46,12 +43,7 @@ pub async fn run_phase(
     if !gitd_available() {
         return Err("GITD_BINARY_ABSENT: build bullet-gitd or set BULLET_GITD_BIN".into());
     }
-    let adapter = if provider == "sim" {
-        synthetic_adapter::adapter_for(provider)
-    } else {
-        live_adapters::adapter_for(provider)
-    }
-    .ok_or_else(|| format!("UNKNOWN_PROVIDER: {provider}"))?;
+    let adapter = adapter_for("sim").ok_or("SIMULATOR_ADAPTER_UNAVAILABLE")?;
     let client = Arc::new(DirectLeaseClient::new(ledger.clone()));
     let journal = Arc::new(MemoryJournal::new());
     let clock = Arc::new(MonotonicClock::new());
@@ -99,7 +91,7 @@ pub async fn run_phase(
     }
     let handle = SessionHandle {
         session_id: AgentSessionId::new(outcome.attempt_id.as_str()),
-        provider: provider.to_string(),
+        provider: "sim".to_string(),
         native_session_id: None,
     };
     let events: Vec<AgentEvent> = adapter.events(&handle).collect().await;

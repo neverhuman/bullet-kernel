@@ -45,19 +45,6 @@ pub fn kill_switch_active(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
-/// Environment variable carrying the operator's explicit live admission.
-pub const LIVE_ADMISSION_VAR: &str = "BULLET_LIVE_ADMISSION";
-/// The only admission value accepted this iteration (ADR 0001 live-spend
-/// rules, operator approval recorded 2026-08-24).
-pub const LIVE_ADMISSION_TOKEN: &str = "adr-0001-operator-approved-2026-08-24";
-
-/// Whether an explicit operator admission opens the live-provider gate.
-/// Absent, empty, or any value other than the exact token refuses.
-#[must_use]
-pub fn live_admission_granted(value: Option<&str>) -> bool {
-    value == Some(LIVE_ADMISSION_TOKEN)
-}
-
 /// Recognize every live-provider executable currently compiled into adapters.
 #[must_use]
 pub fn live_provider_program(program: &str) -> Option<&str> {
@@ -169,12 +156,9 @@ impl ArgvBuilder {
             }
         }
         if let Some(provider) = live_provider_program(&self.program) {
-            let admission = std::env::var(LIVE_ADMISSION_VAR).ok();
-            if !live_admission_granted(admission.as_deref()) {
-                return Err(HarnessError::LiveAdmissionUnavailable {
-                    provider: provider.to_owned(),
-                });
-            }
+            return Err(HarnessError::LiveAdmissionUnavailable {
+                provider: provider.to_owned(),
+            });
         }
         let env = filter_env(std::env::vars());
         Ok(PreparedInvocation {
@@ -254,14 +238,6 @@ mod tests {
             .unwrap();
         assert_eq!(prep.program, "printf");
         assert_eq!(prep.cwd, PathBuf::from("/tmp"));
-    }
-
-    #[test]
-    fn live_admission_requires_the_exact_operator_token() {
-        assert!(live_admission_granted(Some(LIVE_ADMISSION_TOKEN)));
-        for wrong in [None, Some(""), Some("yes"), Some("ADR-0001")] {
-            assert!(!live_admission_granted(wrong), "{wrong:?} must refuse");
-        }
     }
 
     #[test]

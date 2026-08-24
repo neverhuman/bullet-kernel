@@ -1,10 +1,10 @@
 //! Deterministic simulator council for non-gating integration scaffolding.
 
-use crate::demo_live::plan_types::{
+use crate::demo_synthetic::plan_types::{
     fused_digest, provenance_counts, validate_fused, FusedItem, FusedPlan, PlanProposal,
     PlannerRecord,
 };
-use crate::demo_live::SharedLedger;
+use crate::demo_synthetic::SharedLedger;
 use bullet_application::Ledger;
 use serde_json::json;
 
