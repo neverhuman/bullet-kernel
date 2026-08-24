@@ -1,0 +1,23 @@
+{
+  "workspace": "bullet-kernel",
+  "owners": {
+    "AGENTS.md": "agent",
+    "SPLIT.md": "split",
+    "README.md": "docs",
+    "LICENSE": "workspace",
+    "Justfile": "ops",
+    "Cargo.toml": "workspace",
+    "Cargo.lock": "workspace",
+    "agent/": "agent",
+    "apps/": "apps",
+    "contracts/": "contracts",
+    "crates/domain/": "domain",
+    "crates/application/": "application",
+    "crates/adapters/": "adapters",
+    "crates/test-simulation/": "tests",
+    "db/": "data",
+    "docs/": "docs",
+    "ops/": "ops",
+    "scripts/": "ops"
+  }
+}

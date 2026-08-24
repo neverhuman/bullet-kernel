@@ -1,0 +1,29 @@
+{
+  "workspace": "bullet-kernel",
+  "tests": {
+    "crates/domain/": {
+      "command": "cargo test -p bullet-domain",
+      "purpose": "prove IDs, tokens, observations, and transitions"
+    },
+    "crates/application/": {
+      "command": "cargo test -p bullet-application",
+      "purpose": "prove materializer, leases, and demo scenario"
+    },
+    "crates/adapters/": {
+      "command": "cargo test -p bullet-adapters",
+      "purpose": "prove SQLite ledger and simulators"
+    },
+    "apps/": {
+      "command": "cargo test --workspace",
+      "purpose": "prove daemon and CLI surfaces"
+    },
+    "contracts/": {
+      "command": "python3 scripts/generate-types.py --check",
+      "purpose": "prove generated client matches OpenAPI"
+    },
+    "ops/": {
+      "command": "just fast",
+      "purpose": "verify local CI parity"
+    }
+  }
+}

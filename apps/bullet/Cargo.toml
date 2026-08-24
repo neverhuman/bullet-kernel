@@ -1,0 +1,15 @@
+[package]
+name = "bullet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bullet-adapters.workspace = true
+bullet-application.workspace = true
+clap.workspace = true
+serde_json.workspace = true

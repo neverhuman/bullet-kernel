@@ -1,0 +1,4 @@
+[[zone]]
+path = "contracts/generated/"
+source = "contracts/openapi.yaml"
+owner = "contracts"

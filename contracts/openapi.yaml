@@ -1,0 +1,87 @@
+openapi: 3.1.0
+info:
+  title: Bullet Farm Control Plane
+  version: 0.1.0
+  description: Projection API. The portal is never an authority source.
+servers:
+  - url: http://127.0.0.1:7420
+paths:
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        "200":
+          description: ok
+  /openapi.yaml:
+    get:
+      summary: This contract
+      responses:
+        "200":
+          description: OpenAPI document
+  /v1/missions:
+    get:
+      summary: List missions
+      responses:
+        "200":
+          description: missions
+  /v1/missions/{id}:
+    get:
+      summary: Mission graph projection
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: mission view
+        "404":
+          description: missing
+  /v1/demo:
+    get:
+      summary: Last demo receipt if present
+      responses:
+        "200":
+          description: receipt or null
+  /v1/demo/run:
+    post:
+      summary: Run the simulator demonstration
+      responses:
+        "200":
+          description: DemoReceipt
+  /v1/outbox:
+    get:
+      summary: Commands not yet verified
+      responses:
+        "200":
+          description: pending commands
+components:
+  schemas:
+    DemoReceipt:
+      type: object
+      required:
+        - mission_id
+        - plan_hash
+        - fence
+        - attempt_id
+        - stale_attempt_id
+        - candidate_head
+        - evidence_result
+        - effect_outcome
+        - materialize_idempotent
+        - stale_refused
+      properties:
+        mission_id: { type: string }
+        plan_hash: { type: string }
+        fence: { type: integer }
+        attempt_id: { type: string }
+        stale_attempt_id: { type: string }
+        candidate_head: { type: string }
+        evidence_result: { type: string }
+        effect_outcome: { type: string }
+        materialize_idempotent: { type: boolean }
+        stale_refused: { type: boolean }
+    ObservationKind:
+      type: string
+      enum: [value, empty, unknown, contradictory]

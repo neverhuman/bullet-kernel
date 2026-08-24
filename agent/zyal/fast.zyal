@@ -1,0 +1,3 @@
+name: fast
+purpose: kernel proof
+command: just fast
