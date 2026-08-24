@@ -208,7 +208,7 @@ export type ReadyView = {
 };
 
 export type ReadySnapshot = {
-  data: ReadyView;
+  data: ReadyView | null;
   as_of_sequence: number;
   observed_at: string;
   source: "bullet-kernel/sqlite-ledger";

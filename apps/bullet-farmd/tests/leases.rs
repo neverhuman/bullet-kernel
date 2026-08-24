@@ -151,8 +151,10 @@ async fn ready_acquire_heartbeat_release_roundtrip() {
         "leased package is no longer ready"
     );
 
-    let (status, _) = request(addr, "GET", "/v1/ready", None).await;
-    assert_eq!(status, 404, "leased package leaves the queue");
+    let (status, empty) = request(addr, "GET", "/v1/ready", None).await;
+    assert_eq!(status, 200, "leased package leaves a verified empty queue");
+    assert_eq!(empty["data"], Value::Null);
+    assert!(empty["as_of_sequence"].is_u64());
 
     let heartbeat = json!({
         "variant_id": grant["lease"]["variant_id"],
@@ -177,11 +179,26 @@ async fn ready_acquire_heartbeat_release_roundtrip() {
     // Idempotent replay of the release.
     let (status, _) = request(addr, "POST", "/v1/leases/release", Some(&release)).await;
     assert_eq!(status, 204);
-    let (status, _) = request(addr, "GET", "/v1/ready", None).await;
+    let (status, empty) = request(addr, "GET", "/v1/ready", None).await;
     assert_eq!(
-        status, 404,
-        "succeeded without requeue stays out of the queue"
+        status, 200,
+        "succeeded without requeue leaves a verified empty queue"
     );
+    assert_eq!(empty["data"], Value::Null);
+}
+
+#[tokio::test]
+async fn empty_ready_queue_is_an_atomic_null_snapshot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let addr = start(&dir.path().join("empty.sqlite")).await;
+    let (status, snapshot) = request(addr, "GET", "/v1/ready", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(snapshot.as_object().expect("snapshot").len(), 4);
+    assert_eq!(snapshot["data"], Value::Null);
+    assert_eq!(snapshot["as_of_sequence"], 0);
+    chrono::DateTime::parse_from_rfc3339(snapshot["observed_at"].as_str().expect("observed_at"))
+        .expect("RFC 3339 observation time");
+    assert_eq!(snapshot["source"], "bullet-kernel/sqlite-ledger");
 }
 
 #[tokio::test]

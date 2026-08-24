@@ -131,8 +131,7 @@ impl LeaseClient for HttpLeaseClient {
     async fn next_ready(&self) -> Result<Option<ReadyView>, RunnerError> {
         let (status, value) = self.http.get("/v1/ready").await?;
         match status {
-            200 => Ok(Some(decode_snapshot(value, "ready snapshot")?)),
-            404 => Ok(None),
+            200 => decode_snapshot(value, "ready snapshot"),
             _ => Err(problem_error(status, &value)),
         }
     }
@@ -171,5 +170,13 @@ mod tests {
         let mut extra = ready_snapshot();
         extra["optimistic"] = json!(true);
         assert!(decode_snapshot::<ReadyView>(extra, "ready").is_err());
+    }
+
+    #[test]
+    fn ready_snapshot_preserves_verified_empty() {
+        let mut empty = ready_snapshot();
+        empty["data"] = Value::Null;
+        let decoded = decode_snapshot::<Option<ReadyView>>(empty, "ready").expect("empty snapshot");
+        assert!(decoded.is_none());
     }
 }

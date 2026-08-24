@@ -280,12 +280,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReadySnapshot"
-        "404":
-          description: ready queue empty
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
 components:
   schemas:
     Health:
@@ -643,7 +637,9 @@ components:
       required: [data, as_of_sequence, observed_at, source]
       properties:
         data:
-          $ref: "#/components/schemas/ReadyView"
+          oneOf:
+            - $ref: "#/components/schemas/ReadyView"
+            - type: "null"
         as_of_sequence: { type: integer }
         observed_at: { type: string, format: date-time }
         source: { type: string, enum: [bullet-kernel/sqlite-ledger] }

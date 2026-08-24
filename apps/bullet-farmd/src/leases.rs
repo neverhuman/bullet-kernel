@@ -213,8 +213,5 @@ async fn next_ready(State(state): State<SharedState>) -> Result<Response, ApiErr
             enqueued_at: row.enqueued_at,
         }))
     })?;
-    let Some(view) = view else {
-        return Err(ApiError::NotFound("ready queue is empty".into()));
-    };
     snapshot_response(view, as_of_sequence)
 }
