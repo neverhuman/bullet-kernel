@@ -31,6 +31,14 @@ pub enum RunnerError {
         /// Daemon message.
         message: String,
     },
+    /// BulletGit cannot validate a frozen authority contract, so mutation is unavailable.
+    #[error("authority contract unavailable during gitd {method}: {message}")]
+    AuthorityContractUnavailable {
+        /// Method refused before repository mutation.
+        method: String,
+        /// BulletGit's fail-closed detail.
+        message: String,
+    },
     /// Provider adapter failure.
     #[error(transparent)]
     Harness(#[from] HarnessError),
@@ -81,6 +89,7 @@ impl RunnerError {
             Self::SelfKill { .. } => "SELF_KILL_DEADLINE",
             Self::ScopeDenied { .. } => "SCOPE_DENIED",
             Self::Gitd { .. } => "GITD_REFUSED",
+            Self::AuthorityContractUnavailable { .. } => "AUTHORITY_CONTRACT_UNAVAILABLE",
             Self::Harness(err) => err.reason_code(),
             Self::Lease { .. } => "LEASE_REFUSED",
             Self::Gate { .. } => "GATE_FAILED",
@@ -135,6 +144,14 @@ mod tests {
         assert!(RunnerError::StaleAuthority("x".into()).is_frozen());
         assert!(RunnerError::SelfKill { elapsed_ms: 1 }.is_frozen());
         assert!(!RunnerError::CapsExhausted { rounds: 2 }.is_frozen());
+        assert_eq!(
+            RunnerError::AuthorityContractUnavailable {
+                method: "clone".into(),
+                message: "frozen source unavailable".into(),
+            }
+            .reason_code(),
+            "AUTHORITY_CONTRACT_UNAVAILABLE"
+        );
     }
 
     #[test]

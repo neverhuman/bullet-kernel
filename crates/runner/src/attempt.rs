@@ -3,6 +3,10 @@
 //! exact candidate → release. A freeze (stale authority or self-kill) stops
 //! all applying, checkpoints salvage, and terminates the provider.
 
+#[cfg(test)]
+mod simulation_tests;
+mod workspace;
+
 use crate::capsule::Capsule;
 use crate::clock::Clock;
 use crate::error::RunnerError;
@@ -22,6 +26,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use workspace::WorkspaceSession;
 
 /// Everything one attempt run needs beyond the lease request.
 #[derive(Clone, Debug)]
@@ -140,32 +145,62 @@ pub async fn run_attempt(
         "lease_acquired",
         &format!("attempt {} fence {}", grant.attempt.id, grant.attempt.fence),
     );
-    let mut gitd = GitdSession::spawn(&grant.authority_token).await?;
-    let ws = gitd
+    let mut gitd = match GitdSession::spawn(&grant.authority_token).await {
+        Ok(gitd) => gitd,
+        Err(error) => {
+            cleanup_before_session(client.as_ref(), &grant, journal.as_ref(), &error).await;
+            return Err(error);
+        }
+    };
+    let ws = match gitd
         .clone_workspace(
             &config.source_repo,
             &config.base_sha,
             &config.workspace_root,
             &config.scope_prefixes,
         )
-        .await?;
+        .await
+    {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            cleanup_before_session(client.as_ref(), &grant, journal.as_ref(), &error).await;
+            return Err(error);
+        }
+    };
     journal.record("workspace_cloned", &ws.repo_dir.display().to_string());
+    run_cloned_attempt(
+        client, adapter, journal, clock, &grant, config, &mut gitd, &ws,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_cloned_attempt(
+    client: Arc<dyn LeaseClient>,
+    adapter: Arc<dyn HarnessAdapter>,
+    journal: Arc<dyn JournalSink>,
+    clock: Arc<dyn Clock>,
+    grant: &AcquireGrant,
+    config: &AttemptConfig,
+    gitd: &mut dyn WorkspaceSession,
+    ws: &WorkspaceInfo,
+) -> Result<AttemptOutcome, RunnerError> {
     let heartbeat = start_heartbeat(
         client.clone(),
-        HeartbeatCall::for_grant(&grant, config.heartbeat.ttl_seconds),
+        HeartbeatCall::for_grant(grant, config.heartbeat.ttl_seconds),
         config.heartbeat.clone(),
         clock,
     );
-    let session = adapter.start(start_request(&grant, &ws, config)).await?;
+    let session = adapter.start(start_request(grant, ws, config)).await?;
     client
         .advance(&grant.attempt.id, AttemptState::Running)
         .await?;
     match drive_and_finish(
         client.as_ref(),
         adapter.as_ref(),
-        &mut gitd,
-        &ws,
-        &grant,
+        gitd,
+        ws,
+        grant,
         config,
         journal.as_ref(),
         &heartbeat,
@@ -184,8 +219,8 @@ pub async fn run_attempt(
             cleanup_failure(
                 client.as_ref(),
                 adapter.as_ref(),
-                &mut gitd,
-                &grant,
+                gitd,
+                grant,
                 journal.as_ref(),
                 &session,
                 &err,
@@ -196,11 +231,31 @@ pub async fn run_attempt(
     }
 }
 
+async fn cleanup_before_session(
+    client: &dyn LeaseClient,
+    grant: &AcquireGrant,
+    journal: &dyn JournalSink,
+    error: &RunnerError,
+) {
+    journal.record("workspace_refused", error.reason_code());
+    let released = client
+        .release(&ReleaseCall {
+            attempt_id: grant.attempt.id.clone(),
+            outcome: AttemptState::Failed,
+            requeue: true,
+        })
+        .await;
+    journal.record(
+        "released",
+        &format!("failed requeue=true ok={}", released.is_ok()),
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn drive_and_finish(
     client: &dyn LeaseClient,
     adapter: &dyn HarnessAdapter,
-    gitd: &mut GitdSession,
+    gitd: &mut dyn WorkspaceSession,
     ws: &WorkspaceInfo,
     grant: &AcquireGrant,
     config: &AttemptConfig,
@@ -241,7 +296,7 @@ async fn drive_and_finish(
 #[allow(clippy::too_many_arguments)]
 async fn session_loop(
     adapter: &dyn HarnessAdapter,
-    gitd: &mut GitdSession,
+    gitd: &mut dyn WorkspaceSession,
     ws: &WorkspaceInfo,
     capsule: &Capsule,
     config: &AttemptConfig,
@@ -365,7 +420,7 @@ async fn latest_proposal(
 async fn cleanup_failure(
     client: &dyn LeaseClient,
     adapter: &dyn HarnessAdapter,
-    gitd: &mut GitdSession,
+    gitd: &mut dyn WorkspaceSession,
     grant: &AcquireGrant,
     journal: &dyn JournalSink,
     session: &SessionHandle,

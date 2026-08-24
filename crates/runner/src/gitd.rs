@@ -124,7 +124,8 @@ impl GitdSession {
     ///
     /// # Errors
     ///
-    /// Daemon refusals become typed `STALE_AUTHORITY` or `GITD_REFUSED`.
+    /// Daemon refusals preserve `STALE_AUTHORITY` and
+    /// `AUTHORITY_CONTRACT_UNAVAILABLE`; all others become `GITD_REFUSED`.
     pub async fn call_with(
         &mut self,
         token: &Value,
@@ -171,6 +172,12 @@ impl GitdSession {
                 return Err(RunnerError::StaleAuthority(format!(
                     "gitd {method}: {message}"
                 )));
+            }
+            if code == "AUTHORITY_CONTRACT_UNAVAILABLE" {
+                return Err(RunnerError::AuthorityContractUnavailable {
+                    method: method.to_string(),
+                    message,
+                });
             }
             return Err(RunnerError::Gitd {
                 method: method.to_string(),

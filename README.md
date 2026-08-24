@@ -58,9 +58,15 @@ The portal is a projection of this API. It is never an authority source.
 | --- | --- |
 | Component tests | Lease, ledger, harness, runner, verifier, effects, and protocol primitives |
 | `bullet demo` | Deterministic ledger simulation only |
-| `bullet demo-synthetic` | Offline integration scaffold; its receipt is explicitly non-gating |
+| `bullet demo-synthetic` | Offline non-gating scaffold; while production authority is unavailable, it exits failed with a typed refusal and no Candidate |
 | Exact five-plane transaction | Not implemented or proven |
 | Production | Not eligible; signed authority, sandbox, budgets, freeze, audit, and restore gates are incomplete |
+
+The product scaffold never selects Runner's private `#[cfg(test)]` workspace
+simulator. That simulator covers repair-loop mechanics only and cannot produce
+transaction, live, or release evidence. Until signed BulletGit authority is
+available, the product receipt must preserve `AUTHORITY_CONTRACT_UNAVAILABLE`
+and show no Candidate, Evidence, or effect.
 
 Every provider spawn passes through the harness argv gate, which refuses by
 default (`LIVE_ADMISSION_UNAVAILABLE`). The `--features live` smoke tests in

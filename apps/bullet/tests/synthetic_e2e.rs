@@ -1,7 +1,4 @@
-//! End-to-end synthetic run: council events, fenced attempts with a live
-//! stale refusal, a real bullet-gitd private clone, the real verifier
-//! binary, and a LocalBareForge effect — proven offline against a
-//! temporary data dir.
+//! Product scaffold conformance while production BulletGit authority is unavailable.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -27,7 +24,7 @@ fn verifier_sibling() -> PathBuf {
 }
 
 #[test]
-fn synthetic_end_to_end_receipt_holds() {
+fn synthetic_scaffold_records_typed_authority_refusal_without_evidence() {
     assert!(
         gitd_binary().is_file(),
         "GITD_BINARY_ABSENT: build bullet-gitd or set BULLET_GITD_BIN"
@@ -49,10 +46,10 @@ fn synthetic_end_to_end_receipt_holds() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        out.status.success(),
-        "exit {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
-        out.status.code()
+        !out.status.success(),
+        "scaffold laundered refusal as success"
     );
+    assert!(stderr.contains("SYNTHETIC_INTEGRATION_SCAFFOLD failed"));
     let raw = std::fs::read_to_string(data.path().join("synthetic-integration-receipt.json"))
         .expect("receipt file");
     let receipt: serde_json::Value = serde_json::from_str(&raw).expect("receipt json");
@@ -60,24 +57,23 @@ fn synthetic_end_to_end_receipt_holds() {
     assert_eq!(receipt["transaction_gate_eligible"], false);
     assert_eq!(receipt["mission_materialized_once"], true);
     assert_eq!(receipt["fence_first"], 1);
-    assert_eq!(receipt["fence_second"], 2);
-    assert_eq!(receipt["stale_refused"], true);
+    assert!(receipt["fence_second"].is_null());
+    assert_eq!(receipt["stale_refused"], false);
     assert_eq!(receipt["planning"]["degraded"], false);
     assert_eq!(receipt["planning"]["fused_by"], "sim");
-    let candidate = &receipt["candidate"];
-    assert_ne!(candidate["base"], candidate["head"]);
-    assert_eq!(candidate["actual_scope"][0], "PONG.txt");
-    assert_eq!(receipt["gate"]["writer_outcome"], "PASS");
-    assert_eq!(receipt["evidence"]["verifier_outcome"], "PASS");
-    assert_eq!(receipt["evidence"]["tier"], "E2");
-    assert_eq!(receipt["effect"]["local"]["read_back_verified"], true);
-    assert_eq!(receipt["effect"]["local"]["state"], "COMMITTED");
-    let jeryu = receipt["effect"]["jeryu"]["status"]
-        .as_str()
-        .unwrap_or_default();
-    assert_eq!(jeryu, "LIVE_FORGE_QUARANTINED");
+    assert!(receipt["candidate"].is_null());
+    assert!(receipt["gate"].is_null());
+    assert!(receipt["evidence"].is_null());
+    assert!(receipt["effect"]["local"].is_null());
+    assert!(receipt["effect"]["jeryu"].is_null());
     let failures = receipt["scaffold_failures"]
         .as_array()
         .expect("failures array");
-    assert!(failures.is_empty(), "failures: {raw}");
+    assert!(failures.iter().any(|failure| {
+        failure
+            .as_str()
+            .is_some_and(|text| text.contains("RUNNER:AUTHORITY_CONTRACT_UNAVAILABLE"))
+    }));
+    assert!(!data.path().join("runner").exists());
+    assert!(stdout.contains("\"transaction_gate_eligible\": false"));
 }
