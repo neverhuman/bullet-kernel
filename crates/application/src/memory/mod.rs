@@ -5,6 +5,7 @@ mod authority;
 mod effects;
 mod materialization;
 
+use crate::authority::ActiveLeaseSubject;
 use crate::commands::{CommandRecord, CommandRequest};
 use crate::effect_state::EffectState;
 use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
@@ -277,6 +278,10 @@ impl Ledger for MemoryLedger {
 
     fn get_lease(&self, variant: &VariantId) -> Result<Option<ActiveLease>, LedgerError> {
         Ok(self.leases.get(&variant.to_string()).cloned())
+    }
+
+    fn check_active_lease(&mut self, subject: &ActiveLeaseSubject) -> Result<(), LedgerError> {
+        self.check_active_lease_impl(subject)
     }
 
     fn put_attempt(&mut self, attempt: &Attempt) -> Result<(), LedgerError> {

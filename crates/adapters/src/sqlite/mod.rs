@@ -10,9 +10,10 @@ mod materialization;
 mod outbox;
 
 use bullet_application::{
-    ActiveLease, CommandRecord, CommandRequest, EffectIntentRecord, EffectReceiptRecord,
-    EffectState, ExpiredLease, GraphDelta, HeartbeatRequest, LeaseGrant, LeaseRequest, Ledger,
-    LedgerError, LedgerEvent, OutboxItem, ReadyRow, ReleaseRequest, StoredGraph,
+    ActiveLease, ActiveLeaseSubject, CommandRecord, CommandRequest, EffectIntentRecord,
+    EffectReceiptRecord, EffectState, ExpiredLease, GraphDelta, HeartbeatRequest, LeaseGrant,
+    LeaseRequest, Ledger, LedgerError, LedgerEvent, OutboxItem, ReadyRow, ReleaseRequest,
+    StoredGraph,
 };
 use bullet_domain::{
     Attempt, AttemptId, Candidate, CandidateId, CommandPhase, Effect, EffectId, Evidence,
@@ -210,6 +211,10 @@ impl Ledger for SqliteLedger {
 
     fn get_lease(&self, variant: &VariantId) -> Result<Option<ActiveLease>, LedgerError> {
         leases::get_lease(&self.conn, variant)
+    }
+
+    fn check_active_lease(&mut self, subject: &ActiveLeaseSubject) -> Result<(), LedgerError> {
+        leases::check_active_lease(&mut self.conn, subject)
     }
 
     fn put_attempt(&mut self, attempt: &Attempt) -> Result<(), LedgerError> {

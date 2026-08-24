@@ -1,5 +1,6 @@
 //! Application services: commands, materializer, leases, queue, demo.
 
+pub mod authority;
 pub mod commands;
 pub mod conformance;
 pub mod conformance_effects;
@@ -15,6 +16,7 @@ pub mod records;
 pub mod simulators;
 pub mod store;
 
+pub use authority::{check_active_lease_snapshot, ActiveLeaseSubject};
 pub use commands::{CommandRecord, CommandRequest};
 pub use demo::{derive_receipt, run_demo, DemoReceipt};
 pub use effect_state::EffectState;

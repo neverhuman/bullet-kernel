@@ -4,8 +4,8 @@
 
 use super::{commands, events, from_json, graph, json, store};
 use bullet_application::{
-    ActiveLease, CommandRecord, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest,
-    LedgerError, ReadyRow, ReleaseRequest,
+    check_active_lease_snapshot, ActiveLease, ActiveLeaseSubject, CommandRecord, ExpiredLease,
+    HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerError, ReadyRow, ReleaseRequest,
 };
 use bullet_domain::{
     Attempt, AttemptId, AttemptState, CommandId, CommandPhase, Digest, DomainError, RunnerId,
@@ -257,6 +257,35 @@ pub(super) fn get_lease(
         .optional()
         .map_err(store)?;
     row.map(lease_from).transpose()
+}
+
+pub(super) fn check_active_lease(
+    conn: &mut Connection,
+    subject: &ActiveLeaseSubject,
+) -> Result<(), LedgerError> {
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(store)?;
+    check_active_lease_in(&tx, subject)?;
+    tx.commit().map_err(store)
+}
+
+/// Reusable inner check for the future mutation-reservation transaction.
+pub(super) fn check_active_lease_in(
+    conn: &Connection,
+    subject: &ActiveLeaseSubject,
+) -> Result<(), LedgerError> {
+    let now: String = conn
+        .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
+            row.get(0)
+        })
+        .map_err(store)?;
+    let lease = get_lease(conn, &subject.variant_id)?.ok_or_else(|| {
+        DomainError::StaleAuthority(format!("no active lease for {}", subject.attempt_id))
+    })?;
+    let attempt = graph::get_attempt(conn, &lease.attempt_id)?
+        .ok_or_else(|| LedgerError::Store("active lease has no Attempt".into()))?;
+    check_active_lease_snapshot(&lease, &attempt, subject, &now)
 }
 
 pub(super) fn expire_leases(

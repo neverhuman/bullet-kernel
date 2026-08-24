@@ -3,6 +3,7 @@
 //! and serializes first, then commits all map mutations together.
 
 use super::{json, MemoryLedger};
+use crate::authority::{check_active_lease_snapshot, ActiveLeaseSubject};
 use crate::records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReleaseRequest, StoredGraph,
@@ -15,6 +16,28 @@ use bullet_domain::{
 use chrono::{SecondsFormat, Utc};
 
 impl MemoryLedger {
+    pub(super) fn check_active_lease_impl(
+        &self,
+        subject: &ActiveLeaseSubject,
+    ) -> Result<(), LedgerError> {
+        let lease = self
+            .leases
+            .get(subject.variant_id.as_str())
+            .ok_or_else(|| {
+                DomainError::StaleAuthority(format!("no active lease for {}", subject.attempt_id))
+            })?;
+        let attempt = self
+            .attempts
+            .get(lease.attempt_id.as_str())
+            .ok_or_else(|| LedgerError::Store("active lease has no Attempt".into()))?;
+        check_active_lease_snapshot(
+            lease,
+            attempt,
+            subject,
+            &Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        )
+    }
+
     pub(super) fn push_event(
         &mut self,
         kind: &str,

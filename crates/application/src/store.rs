@@ -3,6 +3,7 @@
 //! Times cross this boundary as fixed-width RFC 3339 UTC strings so that
 //! implementations can compare them lexically without owning a clock.
 
+use crate::authority::ActiveLeaseSubject;
 use crate::commands::{CommandRecord, CommandRequest};
 use crate::effect_state::EffectState;
 use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
@@ -159,6 +160,15 @@ pub trait Ledger {
     /// # Errors
     /// Store failure.
     fn get_lease(&self, variant: &VariantId) -> Result<Option<ActiveLease>, LedgerError>;
+
+    /// Coherently check the exact active lease and linked Attempt using the
+    /// store's authoritative clock. Success is not a mutation capability;
+    /// permit issuance must repeat this helper inside its reservation write.
+    ///
+    /// # Errors
+    /// `StaleAuthority` for missing, expired, or mismatched state; store
+    /// failure for unavailable or corrupt persisted state.
+    fn check_active_lease(&mut self, subject: &ActiveLeaseSubject) -> Result<(), LedgerError>;
 
     /// Insert a new attempt, or apply a legal state transition to an
     /// existing one. Identity columns never change.

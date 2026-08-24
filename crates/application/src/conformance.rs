@@ -2,6 +2,7 @@
 //! SQLite adapter must pass every check; tests in each crate call
 //! `check_all` with a factory for a fresh ledger.
 
+use crate::authority::ActiveLeaseSubject;
 use crate::leases::LeaseService;
 use crate::materializer::{materialize_plan, PlanInput};
 use crate::records::{LeaseGrant, ReleaseRequest, StoredGraph};
@@ -50,6 +51,7 @@ pub fn check_all<L: Ledger, F: FnMut() -> L>(mut make: F) -> Result<(), String> 
     single_writer(&mut make())?;
     fence_never_reused(&mut make())?;
     heartbeat_semantics(&mut make())?;
+    active_lease_authority(&mut make())?;
     idempotent_replay(&mut make())?;
     command_conflict(&mut make())?;
     expire_then_reacquire(&mut make())?;
@@ -58,6 +60,86 @@ pub fn check_all<L: Ledger, F: FnMut() -> L>(mut make: F) -> Result<(), String> 
     append_only_rows(&mut make())?;
     release_by_non_holder(&mut make())?;
     Ok(())
+}
+
+fn active_lease_authority<L: Ledger>(ledger: &mut L) -> Result<(), String> {
+    let graph = setup(ledger, "conf-auth", 1)?;
+    let now = Utc::now();
+    let (attempt, grant) = acquire(ledger, &graph, 0, "auth-a", now, 60)?;
+    let subject = ActiveLeaseSubject::from_attempt(&attempt);
+    ledger
+        .check_active_lease(&subject)
+        .map_err(|err| format!("active_lease_authority live: {err}"))?;
+
+    let mut changed = Vec::new();
+    let mut value = subject.clone();
+    value.variant_id = bullet_domain::VariantId::from_seed("wrong-variant");
+    changed.push(value);
+    let mut value = subject.clone();
+    value.attempt_id = AttemptId::from_seed("wrong-attempt");
+    changed.push(value);
+    let mut value = subject.clone();
+    value.work_package_id = bullet_domain::WorkPackageId::from_seed("wrong-package");
+    changed.push(value);
+    let mut value = subject.clone();
+    value.fence += 1;
+    changed.push(value);
+    let mut value = subject.clone();
+    value.runner_id = bullet_domain::RunnerId::from_seed("wrong-runner");
+    changed.push(value);
+    let mut value = subject.clone();
+    value.runner_epoch += 1;
+    changed.push(value);
+    let mut value = subject.clone();
+    value.workspace_id = bullet_domain::WorkspaceId::from_seed("wrong-workspace");
+    changed.push(value);
+    let mut value = subject.clone();
+    value.workspace_nonce[0] ^= 0xff;
+    changed.push(value);
+    let mut value = subject.clone();
+    value.scope_revision += 1;
+    changed.push(value);
+    let mut value = subject.clone();
+    value.context_revision += 1;
+    changed.push(value);
+    for changed_subject in changed {
+        match ledger.check_active_lease(&changed_subject) {
+            Err(err) if err.reason_code() == "STALE_AUTHORITY" => {}
+            other => {
+                return Err(format!(
+                    "active_lease_authority: changed subject gave {other:?}"
+                ));
+            }
+        }
+    }
+
+    LeaseService::release(ledger, &grant, AttemptState::Cancelled, true, now)
+        .map_err(|err| format!("active_lease_authority release: {err}"))?;
+    match ledger.check_active_lease(&subject) {
+        Err(err) if err.reason_code() == "STALE_AUTHORITY" => {}
+        other => {
+            return Err(format!(
+                "active_lease_authority: released subject gave {other:?}"
+            ));
+        }
+    }
+    let (successor, _grant) = acquire(ledger, &graph, 0, "auth-b", now, 60)?;
+    if successor.fence != attempt.fence + 1 {
+        return Err("active_lease_authority: successor did not advance fence".into());
+    }
+    ledger
+        .check_active_lease(&ActiveLeaseSubject::from_attempt(&successor))
+        .map_err(|err| format!("active_lease_authority successor: {err}"))?;
+
+    let expired_graph = setup(ledger, "conf-auth-expired", 1)?;
+    let old = Utc::now() - Duration::seconds(120);
+    let (expired, _grant) = acquire(ledger, &expired_graph, 0, "auth-expired", old, 60)?;
+    match ledger.check_active_lease(&ActiveLeaseSubject::from_attempt(&expired)) {
+        Err(err) if err.reason_code() == "STALE_AUTHORITY" => Ok(()),
+        other => Err(format!(
+            "active_lease_authority: expired subject gave {other:?}"
+        )),
+    }
 }
 
 fn single_writer<L: Ledger>(ledger: &mut L) -> Result<(), String> {
