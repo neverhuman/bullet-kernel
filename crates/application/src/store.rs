@@ -55,8 +55,8 @@ impl LedgerError {
 /// either all rows land or none do. Errors are typed; callers never parse
 /// message strings.
 pub trait Ledger {
-    /// Record a command with phase `Pending`. Same key + same payload replays
-    /// the stored record; same key + different payload is a typed
+    /// Record a command with phase `Pending`. Same key + kind + exact payload
+    /// replays the stored record; a changed kind or payload under that key is a typed
     /// `Idempotency` error.
     ///
     /// # Errors
@@ -79,6 +79,15 @@ pub trait Ledger {
     /// # Errors
     /// Store failure.
     fn get_command(&self, key: &str) -> Result<Option<CommandRecord>, LedgerError>;
+
+    /// Load a command by its durable identity.
+    ///
+    /// # Errors
+    /// Store failure or corrupt persisted command truth.
+    fn get_command_by_id(
+        &self,
+        id: &bullet_domain::CommandId,
+    ) -> Result<Option<CommandRecord>, LedgerError>;
 
     /// Admit and materialize one Mission plan in a single transaction. The
     /// command row, graph, fence counters, ready rows, audit event, and exact
@@ -296,6 +305,15 @@ pub trait Ledger {
     /// # Errors
     /// Store failure.
     fn outbox_all(&self) -> Result<Vec<OutboxItem>, LedgerError>;
+
+    /// Outbox rows caused by one durable command, oldest-first.
+    ///
+    /// # Errors
+    /// Store failure or corrupt persisted correlation.
+    fn outbox_for_command(
+        &self,
+        command: &bullet_domain::CommandId,
+    ) -> Result<Vec<OutboxItem>, LedgerError>;
 
     /// Advance one outbox row: `Applied` stamps `delivered_at`,
     /// `Verified`/`Unknown` stamp `acked_at`.

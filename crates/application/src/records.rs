@@ -1,8 +1,8 @@
 //! Durable record shapes shared by every ledger implementation.
 
 use bullet_domain::{
-    Attempt, AttemptId, AttemptState, CommandPhase, Mission, MissionId, PlanRevision, RunnerId,
-    Variant, VariantId, WorkPackage, WorkPackageId, WorkspaceId,
+    Attempt, AttemptId, AttemptState, CommandId, CommandPhase, Mission, MissionId, PlanRevision,
+    RunnerId, Variant, VariantId, WorkPackage, WorkPackageId, WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +61,11 @@ pub struct ReadyRow {
 pub struct OutboxItem {
     /// Monotonic outbox sequence.
     pub seq: u64,
+    /// Durable command that caused this row, when the outbox item belongs to
+    /// a command transaction. Kept off the pre-contract HTTP shape until the
+    /// generated public command DTO is consumed.
+    #[serde(skip)]
+    pub command_id: Option<CommandId>,
     /// Message kind.
     pub kind: String,
     /// Message payload.

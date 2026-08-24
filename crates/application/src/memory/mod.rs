@@ -3,6 +3,7 @@
 
 mod authority;
 mod clock;
+mod commands;
 mod effects;
 mod materialization;
 
@@ -95,25 +96,7 @@ fn append_only<T: PartialEq + Clone>(
 
 impl Ledger for MemoryLedger {
     fn record_command(&mut self, request: &CommandRequest) -> Result<CommandRecord, LedgerError> {
-        self.tick()?;
-        if let Some(existing) = self.commands.get(&request.idempotency_key) {
-            if existing.payload_digest != request.digest() {
-                return Err(DomainError::Idempotency(request.idempotency_key.clone()).into());
-            }
-            return Ok(existing.clone());
-        }
-        let record = CommandRecord {
-            id: CommandId::from_seed(&request.idempotency_key),
-            idempotency_key: request.idempotency_key.clone(),
-            kind: request.kind.clone(),
-            payload: request.payload.clone(),
-            payload_digest: request.digest(),
-            phase: CommandPhase::Pending,
-            response: None,
-        };
-        self.commands
-            .insert(request.idempotency_key.clone(), record.clone());
-        Ok(record)
+        self.record_command_impl(request)
     }
 
     fn set_command_phase(
@@ -122,20 +105,15 @@ impl Ledger for MemoryLedger {
         phase: CommandPhase,
         response: Option<&str>,
     ) -> Result<(), LedgerError> {
-        self.tick()?;
-        let record = self
-            .commands
-            .get_mut(key)
-            .ok_or_else(|| LedgerError::Store(format!("unknown command key {key}")))?;
-        record.phase = phase;
-        if let Some(response) = response {
-            record.response = Some(response.to_string());
-        }
-        Ok(())
+        self.set_command_phase_impl(key, phase, response)
     }
 
     fn get_command(&self, key: &str) -> Result<Option<CommandRecord>, LedgerError> {
-        Ok(self.commands.get(key).cloned())
+        self.get_command_impl(key)
+    }
+
+    fn get_command_by_id(&self, id: &CommandId) -> Result<Option<CommandRecord>, LedgerError> {
+        self.get_command_by_id_impl(id)
     }
 
     fn materialize_plan_command(
@@ -400,17 +378,7 @@ impl Ledger for MemoryLedger {
     }
 
     fn outbox_enqueue(&mut self, kind: &str, payload: &str) -> Result<u64, LedgerError> {
-        self.tick()?;
-        let seq = self.outbox.len() as u64 + 1;
-        self.outbox.push(OutboxItem {
-            seq,
-            kind: kind.to_string(),
-            payload: payload.to_string(),
-            phase: CommandPhase::Pending,
-            delivered_at: None,
-            acked_at: None,
-        });
-        Ok(seq)
+        self.outbox_enqueue_impl(None, kind, payload)
     }
 
     fn outbox_pending(&self) -> Result<Vec<OutboxItem>, LedgerError> {
@@ -424,6 +392,15 @@ impl Ledger for MemoryLedger {
 
     fn outbox_all(&self) -> Result<Vec<OutboxItem>, LedgerError> {
         Ok(self.outbox.clone())
+    }
+
+    fn outbox_for_command(&self, command: &CommandId) -> Result<Vec<OutboxItem>, LedgerError> {
+        Ok(self
+            .outbox
+            .iter()
+            .filter(|item| item.command_id.as_ref() == Some(command))
+            .cloned()
+            .collect())
     }
 
     fn outbox_mark(&mut self, seq: u64, phase: CommandPhase, now: &str) -> Result<(), LedgerError> {

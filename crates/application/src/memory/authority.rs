@@ -4,13 +4,14 @@
 
 use super::{json, MemoryLedger};
 use crate::authority::{check_active_lease_snapshot, ActiveLeaseSubject};
+use crate::commands::{CommandRecord, CommandRequest};
 use crate::records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReleaseRequest, StoredGraph,
 };
 use crate::store::LedgerError;
 use bullet_domain::{
-    Attempt, AttemptId, AttemptState, CommandId, CommandPhase, Digest, DomainError, WorkPackageId,
+    Attempt, AttemptId, AttemptState, CommandPhase, Digest, DomainError, WorkPackageId,
     WorkPackageState,
 };
 
@@ -92,10 +93,10 @@ impl MemoryLedger {
         req: &LeaseRequest,
     ) -> Result<LeaseGrant, LedgerError> {
         let stable = req.stable_payload()?;
+        let command_request =
+            CommandRequest::from_json(&req.idempotency_key, "acquire_lease", &stable)?;
         if let Some(existing) = self.commands.get(&req.idempotency_key) {
-            if existing.payload != stable {
-                return Err(DomainError::Idempotency(req.idempotency_key.clone()).into());
-            }
+            command_request.matches(existing)?;
             let response = existing
                 .response
                 .as_deref()
@@ -187,7 +188,30 @@ impl MemoryLedger {
         };
         let grant_json = json(&grant)?;
         let token_hash = Digest::of(grant_json.as_bytes()).to_hex();
-        // Commit.
+        let command = CommandRecord {
+            id: command_request.id(),
+            idempotency_key: command_request.idempotency_key.clone(),
+            kind: command_request.kind.clone(),
+            payload: command_request.payload.clone(),
+            payload_digest: command_request.digest(),
+            phase: CommandPhase::Applied,
+            response: Some(grant_json.clone()),
+        };
+        command.validate()?;
+        let seq = u64::try_from(self.outbox.len())
+            .map_err(|error| LedgerError::Store(error.to_string()))?
+            .checked_add(1)
+            .ok_or_else(|| LedgerError::Store("outbox sequence overflow".into()))?;
+        let outbox_item = OutboxItem {
+            seq,
+            command_id: Some(command.id.clone()),
+            kind: "dispatch_attempt".into(),
+            payload: grant_json.clone(),
+            phase: CommandPhase::Pending,
+            delivered_at: None,
+            acked_at: None,
+        };
+        // Commit only after every fallible construction and validation step.
         self.fences.insert(req.variant_id.to_string(), fence);
         self.attempts.insert(attempt.id.to_string(), attempt);
         self.leases.insert(req.variant_id.to_string(), lease);
@@ -201,27 +225,8 @@ impl MemoryLedger {
             Some(req.idempotency_key.clone()),
             Some(token_hash),
         );
-        let seq = self.outbox.len() as u64 + 1;
-        self.outbox.push(OutboxItem {
-            seq,
-            kind: "dispatch_attempt".into(),
-            payload: grant_json.clone(),
-            phase: CommandPhase::Pending,
-            delivered_at: None,
-            acked_at: None,
-        });
-        self.commands.insert(
-            req.idempotency_key.clone(),
-            crate::commands::CommandRecord {
-                id: CommandId::from_seed(&req.idempotency_key),
-                idempotency_key: req.idempotency_key.clone(),
-                kind: "acquire_lease".into(),
-                payload: stable.clone(),
-                payload_digest: Digest::of(stable.as_bytes()),
-                phase: CommandPhase::Applied,
-                response: Some(grant_json),
-            },
-        );
+        self.commands.insert(req.idempotency_key.clone(), command);
+        self.outbox.push(outbox_item);
         Ok(grant)
     }
 

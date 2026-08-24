@@ -145,9 +145,9 @@ fn altered_name_and_checksum_are_refused() {
 #[test]
 fn partial_future_and_unrecognized_versions_are_refused() {
     for statement in [
-        "DELETE FROM schema_version WHERE version = 5",
-        "INSERT INTO schema_version VALUES (6, 'future.sql', '00', 'future')",
-        "UPDATE schema_version SET version = 99 WHERE version = 5",
+        "DELETE FROM schema_version WHERE version = 6",
+        "INSERT INTO schema_version VALUES (7, 'future.sql', '00', 'future')",
+        "UPDATE schema_version SET version = 99 WHERE version = 6",
     ] {
         let (_directory, path) = database();
         drop(SqliteLedger::open(&path).unwrap());
@@ -156,6 +156,49 @@ fn partial_future_and_unrecognized_versions_are_refused() {
         drop(conn);
         unsupported(SqliteLedger::open(path));
     }
+}
+
+#[test]
+fn command_identity_is_unique_and_outbox_correlation_is_foreign_keyed() {
+    let (_directory, path) = database();
+    let ledger = SqliteLedger::open(path).unwrap();
+    ledger
+        .conn
+        .execute(
+            "INSERT INTO commands
+               (idempotency_key, id, kind, payload, payload_digest, phase, response_json)
+             VALUES ('key-one', 'command-same', 'kind', '{}', '00', 'pending', NULL)",
+            [],
+        )
+        .unwrap();
+    let duplicate = ledger
+        .conn
+        .execute(
+            "INSERT INTO commands
+               (idempotency_key, id, kind, payload, payload_digest, phase, response_json)
+             VALUES ('key-two', 'command-same', 'kind', '{}', '00', 'pending', NULL)",
+            [],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        duplicate,
+        Error::SqliteFailure(ref code, _)
+            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+    ));
+
+    let missing = ledger
+        .conn
+        .execute(
+            "INSERT INTO outbox (command_id, kind, payload, phase)
+             VALUES ('command-missing', 'dispatch', '{}', 'pending')",
+            [],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        missing,
+        Error::SqliteFailure(ref code, _)
+            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY
+    ));
 }
 
 #[test]

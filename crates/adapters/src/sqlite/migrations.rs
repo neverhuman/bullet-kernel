@@ -47,6 +47,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0005_lease_ttl.sql",
         sql: include_str!("../../../../db/migrations/0005_lease_ttl.sql"),
     },
+    Migration {
+        version: 6,
+        name: "0006_command_correlation.sql",
+        sql: include_str!("../../../../db/migrations/0006_command_correlation.sql"),
+    },
 ];
 
 #[derive(Debug, PartialEq, Eq)]

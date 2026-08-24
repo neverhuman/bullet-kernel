@@ -30,6 +30,7 @@ pub struct SqliteLedger {
     conn: Connection,
     materialization_fail_after: Option<u8>,
     graph_delta_fail_after: Option<u8>,
+    lease_acquisition_fail_after: Option<u8>,
 }
 
 impl SqliteLedger {
@@ -52,6 +53,7 @@ impl SqliteLedger {
             conn,
             materialization_fail_after: None,
             graph_delta_fail_after: None,
+            lease_acquisition_fail_after: None,
         })
     }
 
@@ -65,6 +67,12 @@ impl SqliteLedger {
     /// transaction boundaries. Used by crash-atomicity integration tests.
     pub fn set_graph_delta_failpoint(&mut self, allowed: u8) {
         self.graph_delta_fail_after = Some(allowed);
+    }
+
+    /// Inject a one-shot lease acquisition failure after `allowed` successful
+    /// transaction boundaries. Used by crash-atomicity integration tests.
+    pub fn set_lease_acquisition_failpoint(&mut self, allowed: u8) {
+        self.lease_acquisition_fail_after = Some(allowed);
     }
 }
 
@@ -96,6 +104,13 @@ impl Ledger for SqliteLedger {
 
     fn get_command(&self, key: &str) -> Result<Option<CommandRecord>, LedgerError> {
         commands::get_command(&self.conn, key)
+    }
+
+    fn get_command_by_id(
+        &self,
+        id: &bullet_domain::CommandId,
+    ) -> Result<Option<CommandRecord>, LedgerError> {
+        commands::get_command_by_id(&self.conn, id)
     }
 
     fn materialize_plan_command(
@@ -145,7 +160,11 @@ impl Ledger for SqliteLedger {
     }
 
     fn acquire_lease(&mut self, request: &LeaseRequest) -> Result<LeaseGrant, LedgerError> {
-        leases::acquire_lease(&mut self.conn, request)
+        leases::acquire_lease(
+            &mut self.conn,
+            &mut self.lease_acquisition_fail_after,
+            request,
+        )
     }
 
     fn heartbeat(&mut self, request: &HeartbeatRequest) -> Result<(), LedgerError> {
@@ -233,7 +252,7 @@ impl Ledger for SqliteLedger {
     }
 
     fn outbox_enqueue(&mut self, kind: &str, payload: &str) -> Result<u64, LedgerError> {
-        outbox::enqueue(&self.conn, kind, payload)
+        outbox::enqueue(&self.conn, None, kind, payload)
     }
 
     fn outbox_pending(&self) -> Result<Vec<OutboxItem>, LedgerError> {
@@ -242,6 +261,13 @@ impl Ledger for SqliteLedger {
 
     fn outbox_all(&self) -> Result<Vec<OutboxItem>, LedgerError> {
         outbox::all(&self.conn)
+    }
+
+    fn outbox_for_command(
+        &self,
+        command: &bullet_domain::CommandId,
+    ) -> Result<Vec<OutboxItem>, LedgerError> {
+        outbox::for_command(&self.conn, command)
     }
 
     fn outbox_mark(&mut self, seq: u64, phase: CommandPhase, now: &str) -> Result<(), LedgerError> {

@@ -5,43 +5,82 @@ use bullet_application::{CommandRecord, CommandRequest, LedgerError};
 use bullet_domain::{CommandId, CommandPhase, Digest, DomainError};
 use rusqlite::{params, Connection, OptionalExtension};
 
+type CommandRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+);
+
+fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommandRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+    ))
+}
+
+fn decode(row: CommandRow) -> Result<CommandRecord, LedgerError> {
+    let (key, id, kind, payload, digest, phase, response) = row;
+    let record = (|| -> Result<CommandRecord, DomainError> {
+        Ok(CommandRecord {
+            id: CommandId::parse(&id)?,
+            idempotency_key: key,
+            kind,
+            payload,
+            payload_digest: Digest::from_hex(&digest)?,
+            phase: CommandPhase::parse(&phase)?,
+            response,
+        })
+    })()
+    .map_err(|error| store(format!("invalid persisted command: {error}")))?;
+    record
+        .validate()
+        .map_err(|error| store(format!("invalid persisted command: {error}")))?;
+    Ok(record)
+}
+
 pub(super) fn get_command(
     conn: &Connection,
     key: &str,
 ) -> Result<Option<CommandRecord>, LedgerError> {
     let row = conn
         .query_row(
-            "SELECT id, kind, payload, payload_digest, phase, response_json
+            "SELECT idempotency_key, id, kind, payload, payload_digest, phase, response_json
              FROM commands WHERE idempotency_key = ?1",
             params![key],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
-            },
+            read_row,
         )
         .optional()
         .map_err(store)?;
-    let Some((id, kind, payload, digest, phase, response)) = row else {
-        return Ok(None);
-    };
-    Ok(Some(CommandRecord {
-        id: CommandId::parse(&id)?,
-        idempotency_key: key.to_string(),
-        kind,
-        payload,
-        payload_digest: Digest::from_hex(&digest)?,
-        phase: CommandPhase::parse(&phase)?,
-        response,
-    }))
+    row.map(decode).transpose()
+}
+
+pub(super) fn get_command_by_id(
+    conn: &Connection,
+    id: &CommandId,
+) -> Result<Option<CommandRecord>, LedgerError> {
+    let row = conn
+        .query_row(
+            "SELECT idempotency_key, id, kind, payload, payload_digest, phase, response_json
+             FROM commands WHERE id = ?1",
+            params![id.to_string()],
+            read_row,
+        )
+        .optional()
+        .map_err(store)?;
+    row.map(decode).transpose()
 }
 
 pub(super) fn insert_command(conn: &Connection, record: &CommandRecord) -> Result<(), LedgerError> {
+    record.validate()?;
     conn.execute(
         "INSERT INTO commands
            (idempotency_key, id, kind, payload, payload_digest, phase, response_json)
@@ -64,14 +103,13 @@ pub(super) fn record_command(
     conn: &Connection,
     request: &CommandRequest,
 ) -> Result<CommandRecord, LedgerError> {
+    request.validate()?;
     if let Some(existing) = get_command(conn, &request.idempotency_key)? {
-        if existing.payload_digest != request.digest() {
-            return Err(DomainError::Idempotency(request.idempotency_key.clone()).into());
-        }
+        request.matches(&existing)?;
         return Ok(existing);
     }
     let record = CommandRecord {
-        id: CommandId::from_seed(&request.idempotency_key),
+        id: request.id(),
         idempotency_key: request.idempotency_key.clone(),
         kind: request.kind.clone(),
         payload: request.payload.clone(),
@@ -89,6 +127,13 @@ pub(super) fn set_phase(
     phase: CommandPhase,
     response: Option<&str>,
 ) -> Result<(), LedgerError> {
+    let mut record = get_command(conn, key)?
+        .ok_or_else(|| LedgerError::Store(format!("unknown command key {key}")))?;
+    record.phase = phase;
+    if let Some(response) = response {
+        record.response = Some(response.to_string());
+    }
+    record.validate()?;
     let changed = if let Some(response) = response {
         conn.execute(
             "UPDATE commands SET phase = ?1, response_json = ?2 WHERE idempotency_key = ?3",

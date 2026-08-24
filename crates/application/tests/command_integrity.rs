@@ -1,0 +1,112 @@
+use bullet_application::{
+    materialize_plan, CommandRequest, LeaseService, Ledger, MemoryLedger, PlanInput,
+};
+use bullet_domain::{CommandPhase, DomainError, TaskClass};
+
+const AT: &str = "2026-01-01T00:00:00.000Z";
+
+fn plan() -> PlanInput {
+    PlanInput {
+        title: "command integrity".into(),
+        objective: "bind every durable effect to the exact request".into(),
+        packages: vec![("package".into(), TaskClass::BoundedBugFix)],
+    }
+}
+
+#[test]
+fn command_digest_and_replay_bind_kind_and_exact_payload() {
+    let first = CommandRequest::from_json("same-key", "first_kind", r#"{"value":1}"#)
+        .expect("first request");
+    let changed_kind = CommandRequest::from_json("same-key", "second_kind", r#"{"value":1}"#)
+        .expect("changed request");
+    assert_ne!(first.digest(), changed_kind.digest());
+
+    let mut ledger = MemoryLedger::new();
+    let record = ledger.record_command(&first).expect("record");
+    assert_eq!(
+        ledger.get_command_by_id(&record.id).expect("lookup"),
+        Some(record)
+    );
+    let error = ledger
+        .record_command(&changed_kind)
+        .expect_err("kind-conflicting replay");
+    assert!(matches!(
+        error,
+        bullet_application::LedgerError::Domain(DomainError::Idempotency(_))
+    ));
+}
+
+#[test]
+fn malformed_or_incoherent_commands_are_inert() {
+    for (key, kind, payload) in [
+        ("", "valid", "{}"),
+        ("key", "Uppercase", "{}"),
+        ("key", "valid", "not-json"),
+    ] {
+        assert!(CommandRequest::from_json(key, kind, payload).is_err());
+    }
+
+    let mut ledger = MemoryLedger::new();
+    let request = CommandRequest::from_json("pending", "valid", "{}").expect("request");
+    ledger.record_command(&request).expect("record");
+    let error = ledger
+        .set_command_phase("pending", CommandPhase::Pending, Some("{}"))
+        .expect_err("pending result must fail");
+    assert_eq!(error.reason_code(), "ENCODING_FAILURE");
+    let stored = ledger
+        .get_command("pending")
+        .expect("lookup")
+        .expect("record");
+    assert_eq!(stored.phase, CommandPhase::Pending);
+    assert!(stored.response.is_none());
+}
+
+#[test]
+fn lease_dispatch_is_correlated_to_its_exact_command_only() {
+    let mut ledger = MemoryLedger::new();
+    let graph = materialize_plan(&mut ledger, "memory-command", &plan(), AT).expect("plan");
+    let request = LeaseService::request_for(&graph, 0, "memory-lease", 5).expect("request");
+    let grant = ledger.acquire_lease(&request).expect("acquire");
+    let command = ledger
+        .get_command(&request.idempotency_key)
+        .expect("lookup")
+        .expect("lease command");
+    assert_eq!(command.id, request_id(&request));
+
+    let correlated = ledger
+        .outbox_for_command(&command.id)
+        .expect("correlated outbox");
+    assert_eq!(correlated.len(), 1);
+    assert_eq!(correlated[0].command_id.as_ref(), Some(&command.id));
+    assert_eq!(correlated[0].kind, "dispatch_attempt");
+    assert_eq!(
+        correlated[0].payload,
+        serde_json::to_string(&grant).expect("grant json")
+    );
+
+    ledger
+        .outbox_enqueue("maintenance", "{}")
+        .expect("generic row");
+    assert_eq!(
+        ledger
+            .outbox_for_command(&command.id)
+            .expect("filter")
+            .len(),
+        1
+    );
+    assert!(ledger
+        .outbox_all()
+        .expect("all")
+        .iter()
+        .any(|item| item.command_id.is_none()));
+}
+
+fn request_id(request: &bullet_application::LeaseRequest) -> bullet_domain::CommandId {
+    CommandRequest::from_json(
+        &request.idempotency_key,
+        "acquire_lease",
+        request.stable_payload().expect("stable payload"),
+    )
+    .expect("command request")
+    .id()
+}
