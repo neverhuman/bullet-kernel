@@ -1,32 +1,48 @@
-//! HTTP + JSON API. Generated TypeScript clients consume this contract.
+//! HTTP + SSE API. Generated TypeScript clients consume this contract.
 
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use crate::errors::ApiError;
+use axum::extract::{Path, Query, State};
+use axum::response::sse::{Event as SseFrame, KeepAlive, Sse};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bullet_adapters::SqliteLedger;
-use bullet_application::{run_demo, DemoReceipt, Ledger};
+use bullet_application::{
+    derive_receipt, run_demo, DemoReceipt, Ledger, LedgerError, LedgerEvent, OutboxItem,
+};
 use bullet_domain::{Mission, MissionId};
-use serde::Serialize;
+use futures_util::stream::Stream;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::convert::Infallible;
 use std::path::Path as FsPath;
-use std::sync::Mutex;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 
 const OPENAPI: &str = include_str!("../../../contracts/openapi.yaml");
+const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Shared daemon state.
+/// Shared daemon state. The async mutex cannot poison; a panicked holder
+/// simply releases the lock.
 pub struct AppState {
     ledger: Mutex<SqliteLedger>,
 }
 
-/// Build the router.
-pub fn router(db: &FsPath) -> Router {
-    let ledger = SqliteLedger::open(db).unwrap_or_else(|err| panic!("open ledger: {err}"));
-    let state = AppState {
+type SharedState = Arc<AppState>;
+
+/// Build the router against a SQLite file.
+///
+/// # Errors
+///
+/// Returns a ledger error when the database cannot be opened or migrated.
+pub fn router(db: &FsPath) -> Result<Router, LedgerError> {
+    let ledger = SqliteLedger::open(db)?;
+    let state: SharedState = Arc::new(AppState {
         ledger: Mutex::new(ledger),
-    };
-    Router::new()
+    });
+    Ok(Router::new()
         .route("/health", get(health))
         .route("/openapi.yaml", get(openapi))
         .route("/v1/missions", get(list_missions))
@@ -34,8 +50,9 @@ pub fn router(db: &FsPath) -> Router {
         .route("/v1/demo", get(get_demo))
         .route("/v1/demo/run", post(run_demo_handler))
         .route("/v1/outbox", get(outbox))
+        .route("/v1/events", get(events))
         .layer(CorsLayer::permissive())
-        .with_state(std::sync::Arc::new(state))
+        .with_state(state))
 }
 
 #[derive(Serialize)]
@@ -54,10 +71,8 @@ async fn openapi() -> impl IntoResponse {
     )
 }
 
-async fn list_missions(
-    State(state): State<std::sync::Arc<AppState>>,
-) -> Result<Json<Vec<Mission>>, ApiError> {
-    let ledger = state.ledger.lock().map_err(ApiError::lock)?;
+async fn list_missions(State(state): State<SharedState>) -> Result<Json<Vec<Mission>>, ApiError> {
+    let ledger = state.ledger.lock().await;
     Ok(Json(ledger.list_missions()?))
 }
 
@@ -69,13 +84,15 @@ struct MissionView {
 }
 
 async fn get_mission(
-    State(state): State<std::sync::Arc<AppState>>,
+    State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> Result<Json<MissionView>, ApiError> {
     let mission_id = MissionId::parse(&id)?;
-    let ledger = state.ledger.lock().map_err(ApiError::lock)?;
-    let graph = ledger.get_graph(&mission_id)?.ok_or(ApiError::NotFound)?;
-    let fence = graph.variants.first().map(|v| v.fence_counter);
+    let ledger = state.ledger.lock().await;
+    let graph = ledger
+        .get_graph(&mission_id)?
+        .ok_or_else(|| ApiError::NotFound(format!("mission {id}")))?;
+    let fence = graph.variants.first().map(|variant| variant.fence_counter);
     Ok(Json(MissionView {
         mission: graph.mission,
         packages: graph.packages,
@@ -83,81 +100,85 @@ async fn get_mission(
     }))
 }
 
-async fn get_demo(
-    State(state): State<std::sync::Arc<AppState>>,
-) -> Result<Json<Option<DemoReceipt>>, ApiError> {
-    let ledger = state.ledger.lock().map_err(ApiError::lock)?;
-    let missions = ledger.list_missions()?;
-    let Some(mission) = missions.into_iter().next() else {
-        return Ok(Json(None));
-    };
-    let graph = ledger.get_graph(&mission.id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(Some(DemoReceipt {
-        mission_id: mission.id.to_string(),
-        plan_hash: graph.plan.canonical_hash.to_hex(),
-        fence: graph.variants.first().map_or(0, |v| v.fence_counter),
-        attempt_id: String::new(),
-        stale_attempt_id: String::new(),
-        candidate_head: String::new(),
-        evidence_result: String::new(),
-        effect_outcome: String::new(),
-        materialize_idempotent: true,
-        stale_refused: true,
-    })))
+async fn get_demo(State(state): State<SharedState>) -> Result<Json<Option<DemoReceipt>>, ApiError> {
+    let mut ledger = state.ledger.lock().await;
+    Ok(Json(derive_receipt(&mut *ledger)?))
 }
 
-async fn run_demo_handler(
-    State(state): State<std::sync::Arc<AppState>>,
-) -> Result<Json<DemoReceipt>, ApiError> {
-    let mut ledger = state.ledger.lock().map_err(ApiError::lock)?;
+async fn run_demo_handler(State(state): State<SharedState>) -> Result<Json<DemoReceipt>, ApiError> {
+    let mut ledger = state.ledger.lock().await;
     Ok(Json(run_demo(&mut *ledger)?))
 }
 
 #[derive(Serialize)]
 struct OutboxView {
-    pending: Vec<String>,
+    items: Vec<OutboxItem>,
 }
 
-async fn outbox(
-    State(state): State<std::sync::Arc<AppState>>,
-) -> Result<Json<OutboxView>, ApiError> {
-    let ledger = state.ledger.lock().map_err(ApiError::lock)?;
-    let pending = ledger
-        .pending_outbox()?
-        .into_iter()
-        .map(|c| format!("{}:{}", c.kind, c.phase.as_str()))
-        .collect();
-    Ok(Json(OutboxView { pending }))
+async fn outbox(State(state): State<SharedState>) -> Result<Json<OutboxView>, ApiError> {
+    let ledger = state.ledger.lock().await;
+    Ok(Json(OutboxView {
+        items: ledger.outbox_all()?,
+    }))
 }
 
-enum ApiError {
-    NotFound,
-    Domain(String),
+#[derive(Deserialize)]
+struct EventsQuery {
+    after: Option<u64>,
 }
 
-impl ApiError {
-    fn lock<T>(_: T) -> Self {
-        Self::Domain("ledger lock poisoned".into())
-    }
+async fn events(
+    State(state): State<SharedState>,
+    Query(query): Query<EventsQuery>,
+) -> Sse<impl Stream<Item = Result<SseFrame, Infallible>>> {
+    Sse::new(event_stream(state, query.after.unwrap_or(0))).keep_alive(KeepAlive::default())
 }
 
-impl From<bullet_application::LedgerError> for ApiError {
-    fn from(value: bullet_application::LedgerError) -> Self {
-        Self::Domain(value.to_string())
-    }
-}
-
-impl From<bullet_domain::DomainError> for ApiError {
-    fn from(value: bullet_domain::DomainError) -> Self {
-        Self::Domain(value.to_string())
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        match self {
-            Self::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
-            Self::Domain(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+fn event_stream(
+    state: SharedState,
+    after: u64,
+) -> impl Stream<Item = Result<SseFrame, Infallible>> {
+    let seed: (SharedState, u64, VecDeque<LedgerEvent>) = (state, after, VecDeque::new());
+    futures_util::stream::unfold(seed, |(state, mut last, mut buffer)| async move {
+        loop {
+            if let Some(event) = buffer.pop_front() {
+                let frame = sse_frame(&event);
+                return Some((Ok(frame), (state, last, buffer)));
+            }
+            let batch = {
+                let ledger = state.ledger.lock().await;
+                ledger.list_events_after(last, 64)
+            };
+            match batch {
+                Ok(events) if !events.is_empty() => {
+                    if let Some(max) = events.iter().map(|event| event.seq).max() {
+                        last = last.max(max);
+                    }
+                    buffer.extend(events);
+                }
+                Ok(_) => tokio::time::sleep(POLL_INTERVAL).await,
+                Err(err) => {
+                    tracing::warn!(error = %err, "event poll failed; retrying");
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                }
+            }
         }
+    })
+}
+
+fn sse_frame(event: &LedgerEvent) -> SseFrame {
+    let base = SseFrame::default()
+        .id(event.seq.to_string())
+        .event(event.kind.clone());
+    match serde_json::to_string(event) {
+        Ok(data) => base.data(data),
+        Err(err) => base.event("encoding_failure").data(
+            serde_json::json!({
+                "seq": event.seq,
+                "code": "ENCODING_FAILURE",
+                "detail": err.to_string(),
+            })
+            .to_string(),
+        ),
     }
 }

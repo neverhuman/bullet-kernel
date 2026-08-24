@@ -1,6 +1,6 @@
 //! Durable, idempotent commands. Success is not printed before the postcondition.
 
-use bullet_domain::{CommandId, CommandPhase, Digest};
+use bullet_domain::{CommandId, CommandPhase, Digest, DomainError};
 use serde::{Deserialize, Serialize};
 
 /// Inbound command.
@@ -29,6 +29,8 @@ pub struct CommandRecord {
     pub payload_digest: Digest,
     /// Phase. UI must show pending until verified.
     pub phase: CommandPhase,
+    /// Stored result for idempotent replay.
+    pub response: Option<String>,
 }
 
 impl CommandRequest {
@@ -36,14 +38,19 @@ impl CommandRequest {
     ///
     /// # Errors
     ///
-    /// Returns an encoding error when the payload cannot be serialized.
-    pub fn new(key: impl Into<String>, kind: impl Into<String>, payload: &impl Serialize) -> Self {
-        let payload = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
-        Self {
+    /// Returns `Encoding` when the payload cannot be serialized.
+    pub fn new(
+        key: impl Into<String>,
+        kind: impl Into<String>,
+        payload: &impl Serialize,
+    ) -> Result<Self, DomainError> {
+        let payload =
+            serde_json::to_string(payload).map_err(|err| DomainError::Encoding(err.to_string()))?;
+        Ok(Self {
             idempotency_key: key.into(),
             kind: kind.into(),
             payload,
-        }
+        })
     }
 
     /// Digest of the payload bytes.

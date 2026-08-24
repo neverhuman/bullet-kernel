@@ -12,6 +12,10 @@ paths:
       responses:
         "200":
           description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
   /openapi.yaml:
     get:
       summary: This contract
@@ -24,6 +28,18 @@ paths:
       responses:
         "200":
           description: missions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Mission"
+        "500":
+          description: store failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/missions/{id}:
     get:
       summary: Mission graph projection
@@ -36,28 +52,131 @@ paths:
       responses:
         "200":
           description: mission view
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionView"
+        "400":
+          description: invalid id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "404":
           description: missing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/demo:
     get:
-      summary: Last demo receipt if present
+      summary: Demo receipt re-derived from ledger rows, or null before a run
       responses:
         "200":
           description: receipt or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/DemoReceipt"
+                  - type: "null"
   /v1/demo/run:
     post:
       summary: Run the simulator demonstration
       responses:
         "200":
           description: DemoReceipt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoReceipt"
   /v1/outbox:
     get:
-      summary: Commands not yet verified
+      summary: Outbox rows with real delivery phases
       responses:
         "200":
-          description: pending commands
+          description: outbox rows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboxView"
+  /v1/events:
+    get:
+      summary: Server-sent event stream of ledger events
+      description: >
+        Emits one SSE frame per ledger event with the ledger sequence as the
+        SSE id, the event kind as the SSE event name, and the Event JSON as
+        data. Poll-backed; resume with `after`.
+      parameters:
+        - in: query
+          name: after
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: text/event-stream of Event frames
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/Event"
 components:
   schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+    ObservationKind:
+      type: string
+      enum: [value, empty, unknown, contradictory]
+    Mission:
+      type: object
+      required:
+        - id
+        - organization_id
+        - repository_id
+        - title
+        - objective
+        - acceptance_contract_id
+        - state
+      properties:
+        id: { type: string }
+        organization_id: { type: string }
+        repository_id: { type: string }
+        title: { type: string }
+        objective: { type: string }
+        acceptance_contract_id: { type: string }
+        state: { type: string }
+    WorkPackage:
+      type: object
+      required:
+        - id
+        - mission_id
+        - plan_revision_id
+        - task_class
+        - title
+        - state
+      properties:
+        id: { type: string }
+        mission_id: { type: string }
+        plan_revision_id: { type: string }
+        task_class: { type: string }
+        title: { type: string }
+        state: { type: string }
+    MissionView:
+      type: object
+      required: [mission, packages, fence]
+      properties:
+        mission:
+          $ref: "#/components/schemas/Mission"
+        packages:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkPackage"
+        fence:
+          type: [integer, "null"]
     DemoReceipt:
       type: object
       required:
@@ -65,10 +184,13 @@ components:
         - plan_hash
         - fence
         - attempt_id
+        - fence_second
+        - attempt_second_id
         - stale_attempt_id
         - candidate_head
         - evidence_result
         - effect_outcome
+        - effect_unknown_outcome
         - materialize_idempotent
         - stale_refused
       properties:
@@ -76,12 +198,70 @@ components:
         plan_hash: { type: string }
         fence: { type: integer }
         attempt_id: { type: string }
+        fence_second: { type: integer }
+        attempt_second_id: { type: string }
         stale_attempt_id: { type: string }
         candidate_head: { type: string }
         evidence_result: { type: string }
         effect_outcome: { type: string }
+        effect_unknown_outcome: { type: string }
         materialize_idempotent: { type: boolean }
         stale_refused: { type: boolean }
-    ObservationKind:
-      type: string
-      enum: [value, empty, unknown, contradictory]
+    OutboxItem:
+      type: object
+      required: [seq, kind, payload, phase, delivered_at, acked_at]
+      properties:
+        seq: { type: integer }
+        kind: { type: string }
+        payload: { type: string }
+        phase: { type: string }
+        delivered_at:
+          type: [string, "null"]
+        acked_at:
+          type: [string, "null"]
+    OutboxView:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutboxItem"
+    Event:
+      type: object
+      required:
+        - seq
+        - kind
+        - body
+        - event_id
+        - stream_id
+        - sequence
+        - causation_id
+        - correlation_id
+        - authority_token_hash
+      properties:
+        seq: { type: integer }
+        kind: { type: string }
+        body: { type: string }
+        event_id:
+          type: [string, "null"]
+        stream_id:
+          type: [string, "null"]
+        sequence:
+          type: [integer, "null"]
+        causation_id:
+          type: [string, "null"]
+        correlation_id:
+          type: [string, "null"]
+        authority_token_hash:
+          type: [string, "null"]
+    Problem:
+      type: object
+      required: [type, title, status, code, correlation_id, retryable]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        correlation_id: { type: string }
+        retryable: { type: boolean }

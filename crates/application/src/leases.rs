@@ -1,129 +1,154 @@
-//! Writer leases and permanent fences.
+//! Writer leases and permanent fences. Authority flows through the ledger's
+//! single-transaction acquisition (spec section 26.3), never through checks
+//! followed by separate writes.
 
+use crate::records::{HeartbeatRequest, LeaseGrant, LeaseRequest, ReleaseRequest, StoredGraph};
 use crate::store::{Ledger, LedgerError};
 use bullet_domain::{
-    Attempt, AttemptId, AttemptState, AuthorityToken, Digest, DomainError, RunnerId, WorkspaceId,
+    Attempt, AttemptState, AuthorityToken, Digest, DomainError, RunnerId, WorkspaceId,
 };
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 
 /// Lease and fence operations.
 pub struct LeaseService;
 
 impl LeaseService {
-    /// Open a new Attempt on a variant. The fence is never reused.
+    /// Fixed-width RFC 3339 UTC encoding used across the ledger boundary.
+    #[must_use]
+    pub fn rfc3339(at: DateTime<Utc>) -> String {
+        at.to_rfc3339_opts(SecondsFormat::Millis, true)
+    }
+
+    /// Build the deterministic acquisition request for one variant.
     ///
     /// # Errors
     ///
-    /// Returns a domain error when a writer already exists or the fence would reuse.
-    pub fn open_attempt<L: Ledger>(
-        ledger: &mut L,
-        graph: &crate::store::StoredGraph,
+    /// Returns a store error when the variant index is out of range.
+    pub fn request_for(
+        graph: &StoredGraph,
         variant_index: usize,
         seed: &str,
-    ) -> Result<(Attempt, AuthorityToken), LedgerError> {
+        now: DateTime<Utc>,
+        ttl_seconds: i64,
+    ) -> Result<LeaseRequest, LedgerError> {
         let variant = graph
             .variants
             .get(variant_index)
             .ok_or_else(|| LedgerError::Store("variant missing".into()))?;
-        let package = graph
-            .packages
-            .iter()
-            .find(|p| p.id == variant.work_package_id)
-            .ok_or_else(|| LedgerError::Store("package missing".into()))?;
-        if let Some(existing) = ledger.active_attempt(&package.id)? {
-            if existing.state.may_mutate() {
-                return Err(DomainError::Fence(format!(
-                    "variant already has writer {}",
-                    existing.id
-                ))
-                .into());
-            }
-        }
-        let fence = variant.fence_counter;
-        let attempt = Attempt {
-            id: AttemptId::from_seed(seed),
+        Ok(LeaseRequest {
+            idempotency_key: format!("lease:{seed}"),
+            mission_id: graph.mission.id.clone(),
             variant_id: variant.id.clone(),
-            fence,
+            attempt_seed: seed.to_string(),
+            runner_id: RunnerId::from_seed(seed),
+            runner_epoch: 1,
             workspace_id: WorkspaceId::from_seed(seed),
-            state: AttemptState::Executing,
-        };
-        let token = Self::token_for(graph, variant_index, &attempt, seed);
-        ledger.put_attempt(&attempt)?;
-        Ok((attempt, token))
+            workspace_nonce: *Digest::of(seed.as_bytes()).as_bytes(),
+            scope_revision: 1,
+            context_revision: 1,
+            now: Self::rfc3339(now),
+            expires_at: Self::rfc3339(now + Duration::seconds(ttl_seconds)),
+        })
     }
 
-    /// Rebuild the token that `open_attempt` would have issued.
-    #[must_use]
-    pub fn token_for(
-        graph: &crate::store::StoredGraph,
+    /// Acquire the writer lease for one variant in a single ledger
+    /// transaction and mint the matching Authority Token.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed fence/idempotency errors or a store failure.
+    pub fn acquire<L: Ledger>(
+        ledger: &mut L,
+        graph: &StoredGraph,
         variant_index: usize,
-        attempt: &Attempt,
         seed: &str,
-    ) -> AuthorityToken {
-        let variant = &graph.variants[variant_index];
-        let package = graph
-            .packages
+        now: DateTime<Utc>,
+        ttl_seconds: i64,
+    ) -> Result<(Attempt, AuthorityToken, LeaseGrant), LedgerError> {
+        let request = Self::request_for(graph, variant_index, seed, now, ttl_seconds)?;
+        let grant = ledger.acquire_lease(&request)?;
+        let token = Self::token_for(graph, &grant.attempt)?;
+        Ok((grant.attempt.clone(), token, grant))
+    }
+
+    /// Rebuild the token an acquisition minted for `attempt`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error when the attempt's variant is not in the graph.
+    pub fn token_for(
+        graph: &StoredGraph,
+        attempt: &Attempt,
+    ) -> Result<AuthorityToken, LedgerError> {
+        let variant = graph
+            .variants
             .iter()
-            .find(|package| package.id == variant.work_package_id)
-            .expect("package bound to variant");
-        AuthorityToken {
+            .find(|variant| variant.id == attempt.variant_id)
+            .ok_or_else(|| LedgerError::Store("attempt variant not in graph".into()))?;
+        Ok(AuthorityToken {
             organization_id: graph.mission.organization_id.clone(),
             repository_id: graph.mission.repository_id.clone(),
             mission_id: graph.mission.id.clone(),
             acceptance_contract_id: graph.mission.acceptance_contract_id.clone(),
             plan_revision_id: graph.plan.id.clone(),
             graph_sequence: 1,
-            work_package_id: package.id.clone(),
+            work_package_id: attempt.work_package_id.clone(),
             selection_group_id: variant.selection_group_id.clone(),
             variant_id: variant.id.clone(),
             attempt_id: attempt.id.clone(),
             attempt_fence: attempt.fence,
-            runner_id: RunnerId::from_seed(seed),
-            runner_epoch: 1,
+            runner_id: attempt.runner_id.clone(),
+            runner_epoch: attempt.runner_epoch,
             workspace_id: attempt.workspace_id.clone(),
-            workspace_nonce: Digest::of(seed.as_bytes()).as_bytes().to_owned(),
-            scope_revision: 1,
-            context_revision: 1,
+            workspace_nonce: attempt.workspace_nonce,
+            scope_revision: attempt.scope_revision,
+            context_revision: attempt.context_revision,
             config_snapshot_hash: Digest::of(b"cfg"),
             policy_snapshot_hash: Digest::of(b"pol"),
             routing_policy_hash: Digest::of(b"route"),
             credential_profile_id: None,
             credential_generation: None,
+        })
+    }
+
+    /// Heartbeat request carrying the six identity columns of one grant.
+    #[must_use]
+    pub fn heartbeat_of(
+        grant: &LeaseGrant,
+        now: DateTime<Utc>,
+        ttl_seconds: i64,
+    ) -> HeartbeatRequest {
+        HeartbeatRequest {
+            variant_id: grant.lease.variant_id.clone(),
+            attempt_id: grant.lease.attempt_id.clone(),
+            fence: grant.lease.fence,
+            runner_id: grant.lease.runner_id.clone(),
+            runner_epoch: grant.lease.runner_epoch,
+            workspace_nonce: grant.lease.workspace_nonce,
+            now: Self::rfc3339(now),
+            expires_at: Self::rfc3339(now + Duration::seconds(ttl_seconds)),
         }
     }
 
-    /// Open a successor Attempt. Fence is incremented; the previous writer is stale.
+    /// Close one grant's lease.
     ///
     /// # Errors
     ///
-    /// Returns a domain error when the previous writer is still live or the fence
-    /// would not increase.
-    pub fn open_successor<L: Ledger>(
+    /// Returns `StaleAuthority` when the lease is held by another attempt.
+    pub fn release<L: Ledger>(
         ledger: &mut L,
-        graph: &crate::store::StoredGraph,
-        variant_index: usize,
-        previous: &Attempt,
-        seed: &str,
-    ) -> Result<(Attempt, AuthorityToken, crate::store::StoredGraph), LedgerError> {
-        let mut previous = previous.clone();
-        if previous.state.may_mutate() {
-            previous.state = previous.state.transition(AttemptState::Stale)?;
-            ledger.put_attempt(&previous)?;
-        }
-        let variant = graph
-            .variants
-            .get(variant_index)
-            .ok_or_else(|| LedgerError::Store("variant missing".into()))?;
-        let delta = crate::graph_delta::GraphDelta {
-            parent: crate::graph_delta::graph_digest(graph),
-            ops: vec![crate::graph_delta::GraphOp::BumpFence {
-                variant_id: variant.id.clone(),
-                from: variant.fence_counter,
-                to: variant.fence_counter.saturating_add(1),
-            }],
-        };
-        let graph = crate::graph_delta::apply_graph_delta(ledger, &graph.mission.id, &delta)?;
-        let (attempt, token) = Self::open_attempt(ledger, &graph, variant_index, seed)?;
-        Ok((attempt, token, graph))
+        grant: &LeaseGrant,
+        final_state: AttemptState,
+        requeue: bool,
+        now: DateTime<Utc>,
+    ) -> Result<(), LedgerError> {
+        ledger.release_lease(&ReleaseRequest {
+            variant_id: grant.lease.variant_id.clone(),
+            attempt_id: grant.lease.attempt_id.clone(),
+            final_state,
+            requeue,
+            now: Self::rfc3339(now),
+        })
     }
 
     /// Refuse cleanup when the observation is not a verified value.

@@ -1,0 +1,327 @@
+//! In-process ledger for tests and the first-slice demo. Behavioral parity
+//! with the SQLite adapter is enforced by the shared conformance suite.
+
+mod authority;
+
+use crate::commands::{CommandRecord, CommandRequest};
+use crate::records::{
+    ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
+    ReadyRow, ReleaseRequest, StoredGraph,
+};
+use crate::store::{Ledger, LedgerError};
+use bullet_domain::{
+    Attempt, AttemptId, Candidate, CandidateId, CommandId, CommandPhase, DomainError, Effect,
+    EffectId, Evidence, EvidenceId, Mission, MissionId, VariantId, WorkPackageId,
+};
+use std::collections::BTreeMap;
+
+/// Memory ledger.
+#[derive(Default)]
+pub struct MemoryLedger {
+    commands: BTreeMap<String, CommandRecord>,
+    graphs: BTreeMap<String, StoredGraph>,
+    attempts: BTreeMap<String, Attempt>,
+    candidates: BTreeMap<String, Candidate>,
+    evidence: BTreeMap<String, Evidence>,
+    effects: BTreeMap<String, Effect>,
+    events: Vec<LedgerEvent>,
+    leases: BTreeMap<String, ActiveLease>,
+    fences: BTreeMap<String, u64>,
+    ready: BTreeMap<String, String>,
+    outbox: Vec<OutboxItem>,
+    fail_after_writes: Option<u32>,
+}
+
+impl MemoryLedger {
+    /// Empty store.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Inject a failpoint: after `allowed` further successful mutating calls,
+    /// the next one fails with a store error and commits nothing.
+    pub fn set_failpoint(&mut self, allowed: u32) {
+        self.fail_after_writes = Some(allowed);
+    }
+
+    pub(super) fn tick(&mut self) -> Result<(), LedgerError> {
+        match self.fail_after_writes {
+            Some(0) => {
+                self.fail_after_writes = None;
+                Err(LedgerError::Store("injected failpoint".into()))
+            }
+            Some(n) => {
+                self.fail_after_writes = Some(n - 1);
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+}
+
+pub(super) fn json<T: serde::Serialize>(value: &T) -> Result<String, LedgerError> {
+    serde_json::to_string(value).map_err(|err| LedgerError::Store(err.to_string()))
+}
+
+fn append_only<T: PartialEq + Clone>(
+    map: &mut BTreeMap<String, T>,
+    key: String,
+    value: &T,
+    what: &str,
+) -> Result<bool, LedgerError> {
+    if let Some(existing) = map.get(&key) {
+        if existing == value {
+            return Ok(false);
+        }
+        return Err(
+            DomainError::Conflict(format!("{what} {key} differs from the stored row")).into(),
+        );
+    }
+    map.insert(key, value.clone());
+    Ok(true)
+}
+
+impl Ledger for MemoryLedger {
+    fn record_command(&mut self, request: &CommandRequest) -> Result<CommandRecord, LedgerError> {
+        self.tick()?;
+        if let Some(existing) = self.commands.get(&request.idempotency_key) {
+            if existing.payload_digest != request.digest() {
+                return Err(DomainError::Idempotency(request.idempotency_key.clone()).into());
+            }
+            return Ok(existing.clone());
+        }
+        let record = CommandRecord {
+            id: CommandId::from_seed(&request.idempotency_key),
+            idempotency_key: request.idempotency_key.clone(),
+            kind: request.kind.clone(),
+            payload: request.payload.clone(),
+            payload_digest: request.digest(),
+            phase: CommandPhase::Pending,
+            response: None,
+        };
+        self.commands
+            .insert(request.idempotency_key.clone(), record.clone());
+        Ok(record)
+    }
+
+    fn set_command_phase(
+        &mut self,
+        key: &str,
+        phase: CommandPhase,
+        response: Option<&str>,
+    ) -> Result<(), LedgerError> {
+        self.tick()?;
+        let record = self
+            .commands
+            .get_mut(key)
+            .ok_or_else(|| LedgerError::Store(format!("unknown command key {key}")))?;
+        record.phase = phase;
+        if let Some(response) = response {
+            record.response = Some(response.to_string());
+        }
+        Ok(())
+    }
+
+    fn get_command(&self, key: &str) -> Result<Option<CommandRecord>, LedgerError> {
+        Ok(self.commands.get(key).cloned())
+    }
+
+    fn materialize_graph(&mut self, graph: &StoredGraph, now: &str) -> Result<(), LedgerError> {
+        self.materialize_graph_impl(graph, now)
+    }
+
+    fn put_graph(&mut self, graph: &StoredGraph) -> Result<(), LedgerError> {
+        self.tick()?;
+        let key = graph.mission.id.to_string();
+        if !self.graphs.contains_key(&key) {
+            return Err(LedgerError::Store(format!(
+                "graph {key} was never materialized"
+            )));
+        }
+        self.graphs.insert(key, graph.clone());
+        Ok(())
+    }
+
+    fn get_graph(&self, mission: &MissionId) -> Result<Option<StoredGraph>, LedgerError> {
+        Ok(self.graphs.get(&mission.to_string()).cloned())
+    }
+
+    fn list_missions(&self) -> Result<Vec<Mission>, LedgerError> {
+        Ok(self.graphs.values().map(|g| g.mission.clone()).collect())
+    }
+
+    fn acquire_lease(&mut self, request: &LeaseRequest) -> Result<LeaseGrant, LedgerError> {
+        self.acquire_lease_impl(request)
+    }
+
+    fn heartbeat(&mut self, request: &HeartbeatRequest) -> Result<(), LedgerError> {
+        self.heartbeat_impl(request)
+    }
+
+    fn expire_leases(&mut self, now: &str) -> Result<Vec<ExpiredLease>, LedgerError> {
+        self.expire_leases_impl(now)
+    }
+
+    fn release_lease(&mut self, request: &ReleaseRequest) -> Result<(), LedgerError> {
+        self.release_lease_impl(request)
+    }
+
+    fn get_lease(&self, variant: &VariantId) -> Result<Option<ActiveLease>, LedgerError> {
+        Ok(self.leases.get(&variant.to_string()).cloned())
+    }
+
+    fn put_attempt(&mut self, attempt: &Attempt) -> Result<(), LedgerError> {
+        self.put_attempt_impl(attempt)
+    }
+
+    fn get_attempt(&self, id: &AttemptId) -> Result<Option<Attempt>, LedgerError> {
+        Ok(self.attempts.get(&id.to_string()).cloned())
+    }
+
+    fn active_attempt(&self, package: &WorkPackageId) -> Result<Option<Attempt>, LedgerError> {
+        Ok(self
+            .attempts
+            .values()
+            .find(|attempt| attempt.work_package_id == *package && attempt.state.may_mutate())
+            .cloned())
+    }
+
+    fn list_attempts(&self, mission: &MissionId) -> Result<Vec<Attempt>, LedgerError> {
+        let Some(graph) = self.graphs.get(&mission.to_string()) else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .attempts
+            .values()
+            .filter(|attempt| {
+                graph
+                    .variants
+                    .iter()
+                    .any(|variant| variant.id == attempt.variant_id)
+            })
+            .cloned()
+            .collect())
+    }
+
+    fn put_candidate(&mut self, candidate: &Candidate) -> Result<bool, LedgerError> {
+        self.tick()?;
+        append_only(
+            &mut self.candidates,
+            candidate.id.to_string(),
+            candidate,
+            "candidate",
+        )
+    }
+
+    fn get_candidate(&self, id: &CandidateId) -> Result<Option<Candidate>, LedgerError> {
+        Ok(self.candidates.get(&id.to_string()).cloned())
+    }
+
+    fn put_evidence(&mut self, evidence: &Evidence) -> Result<bool, LedgerError> {
+        self.tick()?;
+        append_only(
+            &mut self.evidence,
+            evidence.id.to_string(),
+            evidence,
+            "evidence",
+        )
+    }
+
+    fn get_evidence(&self, id: &EvidenceId) -> Result<Option<Evidence>, LedgerError> {
+        Ok(self.evidence.get(&id.to_string()).cloned())
+    }
+
+    fn put_effect(&mut self, effect: &Effect) -> Result<bool, LedgerError> {
+        self.tick()?;
+        append_only(&mut self.effects, effect.id.to_string(), effect, "effect")
+    }
+
+    fn get_effect(&self, id: &EffectId) -> Result<Option<Effect>, LedgerError> {
+        Ok(self.effects.get(&id.to_string()).cloned())
+    }
+
+    fn append_event(&mut self, kind: &str, body: &str) -> Result<(), LedgerError> {
+        self.tick()?;
+        self.push_event(kind, body, None, None, None);
+        Ok(())
+    }
+
+    fn list_events(&self) -> Result<Vec<LedgerEvent>, LedgerError> {
+        Ok(self.events.clone())
+    }
+
+    fn list_events_after(&self, after: u64, limit: usize) -> Result<Vec<LedgerEvent>, LedgerError> {
+        Ok(self
+            .events
+            .iter()
+            .filter(|event| event.seq > after)
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    fn ready_rows(&self) -> Result<Vec<ReadyRow>, LedgerError> {
+        let mut out = Vec::new();
+        for (key, enqueued_at) in &self.ready {
+            out.push(ReadyRow {
+                work_package_id: WorkPackageId::parse(key)?,
+                enqueued_at: enqueued_at.clone(),
+            });
+        }
+        Ok(out)
+    }
+
+    fn enqueue_ready(&mut self, package: &WorkPackageId, now: &str) -> Result<(), LedgerError> {
+        self.tick()?;
+        self.ready
+            .entry(package.to_string())
+            .or_insert_with(|| now.to_string());
+        Ok(())
+    }
+
+    fn outbox_enqueue(&mut self, kind: &str, payload: &str) -> Result<u64, LedgerError> {
+        self.tick()?;
+        let seq = self.outbox.len() as u64 + 1;
+        self.outbox.push(OutboxItem {
+            seq,
+            kind: kind.to_string(),
+            payload: payload.to_string(),
+            phase: CommandPhase::Pending,
+            delivered_at: None,
+            acked_at: None,
+        });
+        Ok(seq)
+    }
+
+    fn outbox_pending(&self) -> Result<Vec<OutboxItem>, LedgerError> {
+        Ok(self
+            .outbox
+            .iter()
+            .filter(|item| matches!(item.phase, CommandPhase::Pending | CommandPhase::Applied))
+            .cloned()
+            .collect())
+    }
+
+    fn outbox_all(&self) -> Result<Vec<OutboxItem>, LedgerError> {
+        Ok(self.outbox.clone())
+    }
+
+    fn outbox_mark(&mut self, seq: u64, phase: CommandPhase, now: &str) -> Result<(), LedgerError> {
+        self.tick()?;
+        let item = self
+            .outbox
+            .iter_mut()
+            .find(|item| item.seq == seq)
+            .ok_or_else(|| LedgerError::Store(format!("unknown outbox seq {seq}")))?;
+        item.phase = phase;
+        match phase {
+            CommandPhase::Applied => item.delivered_at = Some(now.to_string()),
+            CommandPhase::Verified | CommandPhase::Unknown => {
+                item.acked_at = Some(now.to_string());
+            }
+            CommandPhase::Pending => {}
+        }
+        Ok(())
+    }
+}

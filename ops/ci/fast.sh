@@ -2,8 +2,8 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
-log "fast lane: fmt + nextest"
+log "fast lane: fmt + tests + contracts"
 cargo fmt --all --check
 run_tests fast
-python3 scripts/generate-types.py --check
+cargo run -q -p bullet -- contracts check
 log "fast lane passed"

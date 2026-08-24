@@ -1,4 +1,4 @@
-//! Domain errors. No I/O.
+//! Domain errors. No I/O. Every variant carries a stable reason code.
 
 use thiserror::Error;
 
@@ -31,4 +31,24 @@ pub enum DomainError {
     /// Graph parent digest did not match the stored graph.
     #[error("graph conflict: {0}")]
     Conflict(String),
+    /// A persisted state label is outside the machine's catalog.
+    #[error("unknown state label: {0}")]
+    UnknownState(String),
+}
+
+impl DomainError {
+    /// Stable machine-readable reason code for APIs and logs.
+    #[must_use]
+    pub fn reason_code(&self) -> &'static str {
+        match self {
+            Self::InvalidId(_) => "INVALID_ID",
+            Self::InvalidTransition { .. } => "INVALID_TRANSITION",
+            Self::StaleAuthority(_) => "STALE_AUTHORITY",
+            Self::Fence(_) => "FENCE_REUSE",
+            Self::Idempotency(_) => "IDEMPOTENCY_CONFLICT",
+            Self::Encoding(_) => "ENCODING_FAILURE",
+            Self::Conflict(_) => "GRAPH_CONFLICT",
+            Self::UnknownState(_) => "UNKNOWN_STATE",
+        }
+    }
 }

@@ -1,8 +1,8 @@
 //! Invariants A1–A7, W1–W3, and observation honesty.
 
 use bullet_domain::{
-    reject_worktree, AttemptId, AttemptState, AuthorityToken, Digest, DomainError, MissionId,
-    MissionState, Observation, WorkPackageState,
+    default_catalog, reject_worktree, AttemptId, AttemptState, AuthorityToken, CommandPhase,
+    Digest, DomainError, MissionId, MissionState, Observation, WorkPackageState,
 };
 use proptest::prelude::*;
 
@@ -59,25 +59,117 @@ fn stale_token_cannot_authorize() {
 }
 
 #[test]
-fn stale_attempt_cannot_mutate() {
-    assert!(!AttemptState::Stale.may_mutate());
-    assert!(AttemptState::Executing.may_mutate());
-    assert!(AttemptState::Executing
-        .transition(AttemptState::Stale)
+fn superseded_attempt_cannot_mutate() {
+    assert!(!AttemptState::Superseded.may_mutate());
+    assert!(!AttemptState::Crashed.may_mutate());
+    assert!(!AttemptState::Succeeded.may_mutate());
+    assert!(AttemptState::Running.may_mutate());
+    assert!(AttemptState::Running
+        .transition(AttemptState::Superseded)
         .is_ok());
-    assert!(AttemptState::Stale
-        .transition(AttemptState::Executing)
+    assert!(AttemptState::Superseded
+        .transition(AttemptState::Running)
+        .is_err());
+    assert!(AttemptState::Crashed
+        .transition(AttemptState::Running)
         .is_err());
 }
 
 #[test]
-fn work_package_does_not_complete_from_running() {
-    assert!(WorkPackageState::Running
+fn attempt_follows_spec_main_path() {
+    let mut state = AttemptState::Created;
+    for next in [
+        AttemptState::Starting,
+        AttemptState::Running,
+        AttemptState::Paused,
+        AttemptState::Running,
+        AttemptState::Checkpointing,
+        AttemptState::Preparing,
+        AttemptState::Succeeded,
+    ] {
+        state = state.transition(next).expect("legal edge");
+    }
+    assert_eq!(state, AttemptState::Succeeded);
+    assert!(state.transition(AttemptState::Running).is_err());
+}
+
+#[test]
+fn work_package_does_not_complete_from_executing() {
+    assert!(WorkPackageState::Executing
         .transition(WorkPackageState::Survived)
         .is_err());
-    assert!(WorkPackageState::Verified
+    assert!(WorkPackageState::Executing
         .transition(WorkPackageState::Integrated)
-        .is_ok());
+        .is_err());
+    let mut state = WorkPackageState::Ready;
+    for next in [
+        WorkPackageState::Leased,
+        WorkPackageState::Executing,
+        WorkPackageState::Prepared,
+        WorkPackageState::Verifying,
+        WorkPackageState::Verified,
+        WorkPackageState::Reviewing,
+        WorkPackageState::IntegrationReady,
+        WorkPackageState::Integrating,
+        WorkPackageState::Integrated,
+        WorkPackageState::Observing,
+        WorkPackageState::Survived,
+    ] {
+        state = state.transition(next).expect("legal edge");
+    }
+    assert_eq!(state, WorkPackageState::Survived);
+}
+
+#[test]
+fn lease_release_requeues_work_package() {
+    assert_eq!(
+        WorkPackageState::Leased
+            .transition(WorkPackageState::Ready)
+            .expect("release"),
+        WorkPackageState::Ready
+    );
+    assert_eq!(
+        WorkPackageState::Executing
+            .transition(WorkPackageState::Ready)
+            .expect("expiry"),
+        WorkPackageState::Ready
+    );
+}
+
+#[test]
+fn state_labels_parse_round_trip_and_fail_closed() {
+    for state in [
+        AttemptState::Created,
+        AttemptState::Starting,
+        AttemptState::Running,
+        AttemptState::Paused,
+        AttemptState::Checkpointing,
+        AttemptState::Preparing,
+        AttemptState::Succeeded,
+        AttemptState::Superseded,
+        AttemptState::Failed,
+        AttemptState::Crashed,
+        AttemptState::Cancelled,
+        AttemptState::Quarantined,
+    ] {
+        assert_eq!(AttemptState::parse(state.as_str()).expect("round"), state);
+    }
+    assert!(matches!(
+        AttemptState::parse("finished"),
+        Err(DomainError::UnknownState(_))
+    ));
+    for phase in [
+        CommandPhase::Pending,
+        CommandPhase::Applied,
+        CommandPhase::Verified,
+        CommandPhase::Unknown,
+    ] {
+        assert_eq!(CommandPhase::parse(phase.as_str()).expect("round"), phase);
+    }
+    assert!(matches!(
+        CommandPhase::parse("done"),
+        Err(DomainError::UnknownState(_))
+    ));
 }
 
 #[test]
@@ -101,6 +193,13 @@ fn unknown_worktree_is_rejected() {
 }
 
 #[test]
+fn behavior_catalog_uses_spec_rule_ids() {
+    let ids: Vec<String> = default_catalog().into_iter().map(|r| r.id).collect();
+    assert_eq!(ids, ["GT001", "CL001", "CP001", "CL002", "FS001"]);
+    assert!(default_catalog().iter().all(|rule| rule.fail_closed));
+}
+
+#[test]
 fn mission_rejects_illegal_edges() {
     assert!(MissionState::Draft
         .transition(MissionState::Survived)
@@ -110,6 +209,19 @@ fn mission_rejects_illegal_edges() {
             .transition(MissionState::Admitted)
             .unwrap(),
         MissionState::Admitted
+    );
+}
+
+#[test]
+fn reason_codes_are_stable() {
+    assert_eq!(
+        DomainError::StaleAuthority("x".into()).reason_code(),
+        "STALE_AUTHORITY"
+    );
+    assert_eq!(DomainError::Fence("x".into()).reason_code(), "FENCE_REUSE");
+    assert_eq!(
+        DomainError::UnknownState("x".into()).reason_code(),
+        "UNKNOWN_STATE"
     );
 }
 

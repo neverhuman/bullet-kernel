@@ -13,3 +13,4 @@ bullet-adapters.workspace = true
 bullet-application.workspace = true
 clap.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true

@@ -1,10 +1,13 @@
 //! Bullet Farm CLI.
 
+mod contracts;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(name = "bullet", about = "Bullet Farm CLI")]
@@ -22,6 +25,11 @@ enum Commands {
     },
     /// Run the first simulator demonstration.
     Demo,
+    /// Generated-contract tooling. The YAML is the source of truth.
+    Contracts {
+        #[command(subcommand)]
+        command: ContractsCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -30,38 +38,71 @@ enum FarmCommands {
     Init,
 }
 
+#[derive(Subcommand)]
+enum ContractsCommands {
+    /// Regenerate contracts/generated/api.ts from contracts/openapi.yaml.
+    Generate,
+    /// Fail when the generated TypeScript is stale.
+    Check,
+}
+
 fn data_dir() -> PathBuf {
     std::env::var("BULLET_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./target/demo"))
 }
 
-fn main() {
+fn run() -> Result<(), String> {
     let cli = Cli::parse();
-    let dir = data_dir();
-    fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("create data dir: {err}"));
     match cli.command {
         Commands::Farm {
             command: FarmCommands::Init,
         } => {
+            let dir = data_dir();
+            fs::create_dir_all(&dir).map_err(|err| format!("create data dir: {err}"))?;
             let path = dir.join("ledger.sqlite");
-            SqliteLedger::open(&path).unwrap_or_else(|err| panic!("init ledger: {err}"));
+            SqliteLedger::open(&path).map_err(|err| format!("init ledger: {err}"))?;
             println!("initialized {}", path.display());
+            Ok(())
         }
-        Commands::Demo => {
-            let path = dir.join("ledger.sqlite");
-            let mut ledger =
-                SqliteLedger::open(&path).unwrap_or_else(|err| panic!("open ledger: {err}"));
-            let receipt = run_demo(&mut ledger).unwrap_or_else(|err| panic!("demo failed: {err}"));
-            let json = serde_json::to_string_pretty(&receipt)
-                .unwrap_or_else(|err| panic!("encode receipt: {err}"));
-            let receipt_path = dir.join("receipts.json");
-            fs::write(&receipt_path, &json).unwrap_or_else(|err| panic!("write receipts: {err}"));
-            println!("{json}");
-            println!("receipts: {}", receipt_path.display());
-            if !receipt.stale_refused || !receipt.materialize_idempotent {
-                std::process::exit(1);
-            }
+        Commands::Demo => demo(),
+        Commands::Contracts { command } => match command {
+            ContractsCommands::Generate => contracts::generate(),
+            ContractsCommands::Check => contracts::check(),
+        },
+    }
+}
+
+fn demo() -> Result<(), String> {
+    let dir = data_dir();
+    fs::create_dir_all(&dir).map_err(|err| format!("create data dir: {err}"))?;
+    let path = dir.join("ledger.sqlite");
+    let mut ledger = SqliteLedger::open(&path).map_err(|err| format!("open ledger: {err}"))?;
+    let receipt = run_demo(&mut ledger).map_err(|err| format!("demo failed: {err}"))?;
+    let json =
+        serde_json::to_string_pretty(&receipt).map_err(|err| format!("encode receipt: {err}"))?;
+    let receipt_path = dir.join("receipts.json");
+    fs::write(&receipt_path, &json).map_err(|err| format!("write receipts: {err}"))?;
+    println!("{json}");
+    println!("receipts: {}", receipt_path.display());
+    if !receipt.stale_refused || !receipt.materialize_idempotent {
+        return Err("demo receipt failed its own safety checks".into());
+    }
+    if receipt.fence_second != receipt.fence + 1 {
+        return Err(format!(
+            "fence progression broken: {} then {}",
+            receipt.fence, receipt.fence_second
+        ));
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("bullet: {message}");
+            ExitCode::FAILURE
         }
     }
 }

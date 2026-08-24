@@ -1,4 +1,5 @@
 //! Machine-enforceable behavior catalog. Models cannot downgrade events.
+//! Rule identifiers follow the spec section 17 catalog.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +20,7 @@ pub enum Enforcement {
 /// One versioned rule.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BehaviorRule {
-    /// Stable identifier such as `CD001`.
+    /// Stable spec catalog identifier such as `GT001`.
     pub id: String,
     /// Catalog version.
     pub version: String,
@@ -31,42 +32,42 @@ pub struct BehaviorRule {
     pub fail_closed: bool,
 }
 
-/// Default first-slice catalog.
+/// Default first-slice catalog. Identifiers match spec section 17.
 #[must_use]
 pub fn default_catalog() -> Vec<BehaviorRule> {
     vec![
         BehaviorRule {
-            id: "CD001".into(),
+            id: "GT001".into(),
             version: "v1".into(),
-            title: "No writable Git worktrees".into(),
+            title: "Uses Git worktree for writable task".into(),
             action: Enforcement::Block,
             fail_closed: true,
         },
         BehaviorRule {
-            id: "CD002".into(),
+            id: "CL001".into(),
             version: "v1".into(),
-            title: "No cleanup without preservation receipt".into(),
+            title: "Deletes workspace before verified preservation".into(),
             action: Enforcement::Block,
             fail_closed: true,
         },
         BehaviorRule {
-            id: "CD003".into(),
+            id: "CP001".into(),
             version: "v1".into(),
-            title: "No completion claim without Candidate evidence".into(),
+            title: "Completion claim without exact Candidate evidence".into(),
             action: Enforcement::Block,
             fail_closed: true,
         },
         BehaviorRule {
-            id: "CD004".into(),
+            id: "CL002".into(),
             version: "v1".into(),
-            title: "Unknown destructive state blocks".into(),
+            title: "Treats failed observation as empty or clean".into(),
             action: Enforcement::Block,
             fail_closed: true,
         },
         BehaviorRule {
-            id: "CD005".into(),
+            id: "FS001".into(),
             version: "v1".into(),
-            title: "Runtime files stay outside the product repository".into(),
+            title: "Runtime files written into the product repository".into(),
             action: Enforcement::Quarantine,
             fail_closed: true,
         },

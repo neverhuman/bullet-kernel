@@ -18,7 +18,7 @@
       "purpose": "prove daemon and CLI surfaces"
     },
     "contracts/": {
-      "command": "python3 scripts/generate-types.py --check",
+      "command": "cargo run -q -p bullet -- contracts check",
       "purpose": "prove generated client matches OpenAPI"
     },
     "ops/": {

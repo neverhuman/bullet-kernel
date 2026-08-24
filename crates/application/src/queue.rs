@@ -1,10 +1,10 @@
-//! Ready queue. A package is ready only when its machine says so.
+//! Ready queue. A package is ready only when its push-maintained row says so.
 
-use crate::commands::CommandRequest;
-use crate::graph_delta::{apply_graph_delta, graph_digest, GraphDelta, GraphOp};
 use crate::leases::LeaseService;
+use crate::records::StoredGraph;
 use crate::store::{Ledger, LedgerError};
-use bullet_domain::{Attempt, AuthorityToken, MissionId, WorkPackage, WorkPackageState};
+use bullet_domain::{Attempt, AttemptId, AuthorityToken, MissionId, WorkPackage};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 /// One dispatchable package.
@@ -16,34 +16,42 @@ pub struct ReadyItem {
     pub package: WorkPackage,
 }
 
-/// Packages in `Ready` with no live writer.
+/// Packages with a live ready row, joined to their mission graphs.
 ///
 /// # Errors
 ///
 /// Returns a store error when a graph cannot be loaded.
 pub fn ready_queue<L: Ledger>(ledger: &L) -> Result<Vec<ReadyItem>, LedgerError> {
-    let mut out = Vec::new();
+    let rows = ledger.ready_rows()?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut graphs: Vec<StoredGraph> = Vec::new();
     for mission in ledger.list_missions()? {
-        let Some(graph) = ledger.get_graph(&mission.id)? else {
-            continue;
-        };
-        for package in graph.packages {
-            if package.state != WorkPackageState::Ready {
-                continue;
+        if let Some(graph) = ledger.get_graph(&mission.id)? {
+            graphs.push(graph);
+        }
+    }
+    let mut out = Vec::new();
+    for row in rows {
+        for graph in &graphs {
+            if let Some(package) = graph
+                .packages
+                .iter()
+                .find(|package| package.id == row.work_package_id)
+            {
+                out.push(ReadyItem {
+                    mission_id: graph.mission.id.clone(),
+                    package: package.clone(),
+                });
             }
-            if ledger.active_attempt(&package.id)?.is_some() {
-                continue;
-            }
-            out.push(ReadyItem {
-                mission_id: mission.id.clone(),
-                package,
-            });
         }
     }
     Ok(out)
 }
 
-/// Claim the first ready package. Same seed is idempotent.
+/// Claim the first ready package through the single-transaction lease
+/// acquisition. Same seed is idempotent.
 ///
 /// # Errors
 ///
@@ -52,14 +60,10 @@ pub fn claim_ready<L: Ledger>(
     ledger: &mut L,
     seed: &str,
 ) -> Result<Option<(Attempt, AuthorityToken)>, LedgerError> {
-    let request = CommandRequest::new(format!("claim:{seed}"), "claim_ready", &seed);
-    ledger.record_command(&request)?;
-    let attempt_id = bullet_domain::AttemptId::from_seed(seed);
+    let attempt_id = AttemptId::from_seed(seed);
     if let Some(existing) = ledger.get_attempt(&attempt_id)? {
-        return Ok(Some((
-            existing.clone(),
-            reconstruct_token(ledger, &existing, seed)?,
-        )));
+        let token = reconstruct_token(ledger, &existing)?;
+        return Ok(Some((existing, token)));
     }
     let Some(item) = ready_queue(ledger)?.into_iter().next() else {
         return Ok(None);
@@ -72,32 +76,23 @@ pub fn claim_ready<L: Ledger>(
         .iter()
         .position(|variant| variant.work_package_id == item.package.id)
         .ok_or_else(|| LedgerError::Store("variant missing".into()))?;
-    let (attempt, token) = LeaseService::open_attempt(ledger, &graph, variant_index, seed)?;
-    let delta = GraphDelta {
-        parent: graph_digest(&graph),
-        ops: vec![GraphOp::SetPackageState {
-            id: item.package.id,
-            from: WorkPackageState::Ready,
-            to: WorkPackageState::Running,
-        }],
-    };
-    apply_graph_delta(ledger, &item.mission_id, &delta)?;
+    let (attempt, token, _grant) =
+        LeaseService::acquire(ledger, &graph, variant_index, seed, Utc::now(), 60)?;
     Ok(Some((attempt, token)))
 }
 
 fn reconstruct_token<L: Ledger>(
     ledger: &L,
     attempt: &Attempt,
-    seed: &str,
 ) -> Result<AuthorityToken, LedgerError> {
     for mission in ledger.list_missions()? {
         if let Some(graph) = ledger.get_graph(&mission.id)? {
-            if let Some(index) = graph
+            if graph
                 .variants
                 .iter()
-                .position(|variant| variant.id == attempt.variant_id)
+                .any(|variant| variant.id == attempt.variant_id)
             {
-                return Ok(LeaseService::token_for(&graph, index, attempt, seed));
+                return LeaseService::token_for(&graph, attempt);
             }
         }
     }
@@ -122,6 +117,7 @@ mod tests {
                 objective: "o".into(),
                 packages: vec![("one".into(), TaskClass::MechanicalCodeEdit)],
             },
+            "2026-01-01T00:00:00.000Z",
         )
         .expect("plan");
         assert_eq!(ready_queue(&ledger).expect("q").len(), 1);
@@ -133,5 +129,7 @@ mod tests {
             .expect("replay")
             .expect("item");
         assert_eq!(first.0.id, second.0.id);
+        assert_eq!(first.0.fence, second.0.fence);
+        assert_eq!(first.1.attempt_fence, second.1.attempt_fence);
     }
 }

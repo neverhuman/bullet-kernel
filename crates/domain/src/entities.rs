@@ -3,8 +3,8 @@
 use crate::digest::Digest;
 use crate::ids::{
     AcceptanceContractId, AttemptId, CandidateId, EffectId, EvidenceId, MissionId, OrganizationId,
-    PlanRevisionId, RepositoryId, RequirementId, SelectionGroupId, VariantId, WorkPackageId,
-    WorkspaceId,
+    PlanRevisionId, RepositoryId, RequirementId, RunnerId, SelectionGroupId, VariantId,
+    WorkPackageId, WorkspaceId,
 };
 use crate::states::{AttemptState, MissionState, WorkPackageState};
 use crate::taxonomy::TaskClass;
@@ -88,10 +88,22 @@ pub struct Attempt {
     pub id: AttemptId,
     /// Variant.
     pub variant_id: VariantId,
+    /// Work package the variant writes.
+    pub work_package_id: WorkPackageId,
     /// Fence assigned at creation. Permanent.
     pub fence: u64,
+    /// Runner that holds the lease.
+    pub runner_id: RunnerId,
+    /// Runner generation.
+    pub runner_epoch: u64,
     /// Private workspace.
     pub workspace_id: WorkspaceId,
+    /// Workspace nonce bound to the lease.
+    pub workspace_nonce: [u8; 32],
+    /// Scope grant revision.
+    pub scope_revision: u64,
+    /// Context capsule revision.
+    pub context_revision: u64,
     /// Lifecycle.
     pub state: AttemptState,
 }

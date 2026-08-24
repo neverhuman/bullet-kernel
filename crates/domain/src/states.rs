@@ -23,7 +23,7 @@ pub enum MissionState {
     Rejected,
 }
 
-/// Work package lifecycle. `integrated` is repository truth, not agent exit.
+/// Work package lifecycle per spec section 24.1. Integration is repository truth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkPackageState {
@@ -31,36 +31,72 @@ pub enum WorkPackageState {
     Pending,
     /// Eligible for dispatch.
     Ready,
-    /// A fenced Attempt is writing.
-    Running,
+    /// A fenced writer lease is granted.
+    Leased,
+    /// The fenced Attempt is writing.
+    Executing,
     /// Candidate prepared, not yet verified.
     Prepared,
+    /// Independent verification is running.
+    Verifying,
     /// Independent evidence attached.
     Verified,
+    /// Semantic review of the exact Candidate.
+    Reviewing,
+    /// All gates passed; queued for integration.
+    IntegrationReady,
+    /// Landing on the protected target.
+    Integrating,
     /// Landed on the protected target.
     Integrated,
+    /// Post-integration observation window.
+    Observing,
     /// Observation passed.
     Survived,
-    /// Terminal failure.
+    /// Progress stalled; salvage evaluation running.
+    Struggling,
+    /// Escalated for replan or human decision.
+    Escalating,
+    /// Isolated pending investigation.
+    Quarantined,
+    /// Cancelled by operator or policy.
+    Cancelled,
+    /// Terminal failure after retries.
+    Failed,
+    /// Integration was reverted from the target.
+    Reverted,
+    /// Rejected by contract or policy.
     Rejected,
 }
 
-/// Attempt incarnation.
+/// Attempt incarnation per spec section 24.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttemptState {
-    /// Lease granted, not yet acknowledged.
-    Dispatched,
-    /// Structured accept received.
-    Accepted,
+    /// Row exists; lease not yet granted to a runner session.
+    Created,
+    /// Lease granted, session starting.
+    Starting,
     /// Writer is live.
-    Executing,
-    /// Preparing a Candidate.
-    Finalizing,
-    /// Incarnation finished without further writes.
-    Closed,
-    /// Superseded. Cannot act.
-    Stale,
+    Running,
+    /// Writer paused by policy or operator.
+    Paused,
+    /// Durable checkpoint in progress.
+    Checkpointing,
+    /// Preparing an exact Candidate.
+    Preparing,
+    /// Incarnation finished with a Candidate.
+    Succeeded,
+    /// A successor fence exists. Absorbing; cannot act.
+    Superseded,
+    /// Terminal failure.
+    Failed,
+    /// Runner or session died; detected by lease expiry.
+    Crashed,
+    /// Cancelled by operator or policy.
+    Cancelled,
+    /// Isolated pending investigation.
+    Quarantined,
 }
 
 /// Command acknowledgement distinct from verified effect.
@@ -88,6 +124,21 @@ impl CommandPhase {
             Self::Unknown => "unknown",
         }
     }
+
+    /// Parse a stable wire name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownState` for any label outside the catalog.
+    pub fn parse(name: &str) -> Result<Self, DomainError> {
+        match name {
+            "pending" => Ok(Self::Pending),
+            "applied" => Ok(Self::Applied),
+            "verified" => Ok(Self::Verified),
+            "unknown" => Ok(Self::Unknown),
+            other => Err(DomainError::UnknownState(format!("command phase {other}"))),
+        }
+    }
 }
 
 macro_rules! allow {
@@ -104,6 +155,10 @@ macro_rules! allow {
 
 impl MissionState {
     /// Apply one legal edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidTransition` for any edge outside the machine.
     pub fn transition(self, to: Self) -> Result<Self, DomainError> {
         use MissionState::*;
         allow!(
@@ -121,43 +176,179 @@ impl MissionState {
 
 impl WorkPackageState {
     /// Apply one legal edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidTransition` for any edge outside the machine.
     pub fn transition(self, to: Self) -> Result<Self, DomainError> {
         use WorkPackageState::*;
         allow!(
             self,
             to,
             (Pending, Ready) => Ready,
-            (Ready, Running) => Running,
-            (Running, Prepared) => Prepared,
-            (Prepared, Verified) => Verified,
-            (Verified, Integrated) => Integrated,
-            (Integrated, Survived) => Survived,
-            (Pending | Ready | Running | Prepared | Verified, Rejected) => Rejected,
+            (Ready, Pending) => Pending,
+            (Ready, Leased) => Leased,
+            (Leased, Executing) => Executing,
+            (Leased | Executing, Ready) => Ready,
+            (Executing, Prepared) => Prepared,
+            (Prepared, Verifying) => Verifying,
+            (Verifying, Verified) => Verified,
+            (Verified, Reviewing) => Reviewing,
+            (Reviewing, IntegrationReady) => IntegrationReady,
+            (IntegrationReady, Integrating) => Integrating,
+            (Integrating, Integrated) => Integrated,
+            (Integrated, Observing) => Observing,
+            (Observing, Survived) => Survived,
+            (Executing, Struggling) => Struggling,
+            (Struggling | Escalating, Executing) => Executing,
+            (Struggling, Escalating) => Escalating,
+            (Integrated | Observing, Reverted) => Reverted,
+            (
+                Pending | Ready | Leased | Executing | Prepared | Verifying | Verified
+                    | Reviewing | IntegrationReady | Integrating | Struggling | Escalating,
+                Rejected
+            ) => Rejected,
+            (
+                Pending | Ready | Leased | Executing | Prepared | Verifying | Verified
+                    | Reviewing | IntegrationReady | Integrating | Struggling | Escalating,
+                Failed
+            ) => Failed,
+            (
+                Pending | Ready | Leased | Executing | Prepared | Verifying | Verified
+                    | Reviewing | IntegrationReady | Integrating | Struggling | Escalating,
+                Cancelled
+            ) => Cancelled,
+            (
+                Pending | Ready | Leased | Executing | Prepared | Verifying | Verified
+                    | Reviewing | IntegrationReady | Integrating | Struggling | Escalating,
+                Quarantined
+            ) => Quarantined,
         )
+    }
+
+    /// Stable wire name. Matches the serde encoding.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+            Self::Leased => "leased",
+            Self::Executing => "executing",
+            Self::Prepared => "prepared",
+            Self::Verifying => "verifying",
+            Self::Verified => "verified",
+            Self::Reviewing => "reviewing",
+            Self::IntegrationReady => "integration_ready",
+            Self::Integrating => "integrating",
+            Self::Integrated => "integrated",
+            Self::Observing => "observing",
+            Self::Survived => "survived",
+            Self::Struggling => "struggling",
+            Self::Escalating => "escalating",
+            Self::Quarantined => "quarantined",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+            Self::Reverted => "reverted",
+            Self::Rejected => "rejected",
+        }
     }
 }
 
 impl AttemptState {
-    /// Apply one legal edge. Stale is absorbing for writes.
+    /// Apply one legal edge. Superseded is absorbing for writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidTransition` for any edge outside the machine.
     pub fn transition(self, to: Self) -> Result<Self, DomainError> {
         use AttemptState::*;
         allow!(
             self,
             to,
-            (Dispatched, Accepted) => Accepted,
-            (Accepted, Executing) => Executing,
-            (Executing, Finalizing) => Finalizing,
-            (Dispatched | Accepted | Executing | Finalizing, Closed) => Closed,
-            (Dispatched | Accepted | Executing | Finalizing, Stale) => Stale,
+            (Created, Starting) => Starting,
+            (Starting, Running) => Running,
+            (Running, Paused) => Paused,
+            (Paused | Checkpointing, Running) => Running,
+            (Running, Checkpointing) => Checkpointing,
+            (Running | Checkpointing, Preparing) => Preparing,
+            (Preparing, Succeeded) => Succeeded,
+            (
+                Created | Starting | Running | Paused | Checkpointing | Preparing,
+                Superseded
+            ) => Superseded,
+            (
+                Created | Starting | Running | Paused | Checkpointing | Preparing,
+                Failed
+            ) => Failed,
+            (
+                Created | Starting | Running | Paused | Checkpointing | Preparing,
+                Crashed
+            ) => Crashed,
+            (
+                Created | Starting | Running | Paused | Checkpointing | Preparing,
+                Cancelled
+            ) => Cancelled,
+            (
+                Created | Starting | Running | Paused | Checkpointing | Preparing,
+                Quarantined
+            ) => Quarantined,
         )
     }
 
-    /// Stale attempts cannot heartbeat, expand scope, or create effects.
+    /// Live incarnations may heartbeat, expand scope, or create effects.
+    /// Superseded and every other closed state cannot.
     #[must_use]
     pub fn may_mutate(self) -> bool {
         matches!(
             self,
-            Self::Dispatched | Self::Accepted | Self::Executing | Self::Finalizing
+            Self::Created
+                | Self::Starting
+                | Self::Running
+                | Self::Paused
+                | Self::Checkpointing
+                | Self::Preparing
         )
+    }
+
+    /// Stable wire name. Matches the serde encoding.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Checkpointing => "checkpointing",
+            Self::Preparing => "preparing",
+            Self::Succeeded => "succeeded",
+            Self::Superseded => "superseded",
+            Self::Failed => "failed",
+            Self::Crashed => "crashed",
+            Self::Cancelled => "cancelled",
+            Self::Quarantined => "quarantined",
+        }
+    }
+
+    /// Parse a stable wire name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownState` for any label outside the catalog.
+    pub fn parse(name: &str) -> Result<Self, DomainError> {
+        match name {
+            "created" => Ok(Self::Created),
+            "starting" => Ok(Self::Starting),
+            "running" => Ok(Self::Running),
+            "paused" => Ok(Self::Paused),
+            "checkpointing" => Ok(Self::Checkpointing),
+            "preparing" => Ok(Self::Preparing),
+            "succeeded" => Ok(Self::Succeeded),
+            "superseded" => Ok(Self::Superseded),
+            "failed" => Ok(Self::Failed),
+            "crashed" => Ok(Self::Crashed),
+            "cancelled" => Ok(Self::Cancelled),
+            "quarantined" => Ok(Self::Quarantined),
+            other => Err(DomainError::UnknownState(format!("attempt state {other}"))),
+        }
     }
 }

@@ -1,8 +1,11 @@
 //! Atomic, content-addressed graph mutations.
 
 use crate::commands::CommandRequest;
-use crate::store::{Ledger, LedgerError, StoredGraph};
-use bullet_domain::{Digest, DomainError, MissionId, VariantId, WorkPackageId, WorkPackageState};
+use crate::records::StoredGraph;
+use crate::store::{Ledger, LedgerError};
+use bullet_domain::{
+    CommandPhase, Digest, DomainError, MissionId, VariantId, WorkPackageId, WorkPackageState,
+};
 use serde::{Deserialize, Serialize};
 
 /// One graph mutation. Applied all-or-nothing.
@@ -40,10 +43,12 @@ pub struct GraphDelta {
 
 impl GraphDelta {
     /// Canonical digest of this delta.
-    #[must_use]
-    pub fn digest(&self) -> Digest {
-        let body = serde_json::to_vec(self).unwrap_or_default();
-        Digest::of(&body)
+    ///
+    /// # Errors
+    ///
+    /// Returns `Encoding` when the delta cannot be serialized.
+    pub fn digest(&self) -> Result<Digest, DomainError> {
+        Digest::of_json(self)
     }
 }
 
@@ -75,16 +80,14 @@ pub fn apply_graph_delta<L: Ledger>(
     mission: &MissionId,
     delta: &GraphDelta,
 ) -> Result<StoredGraph, LedgerError> {
-    let request = CommandRequest::new(
-        format!("delta:{}", delta.digest().to_hex()),
-        "apply_graph_delta",
-        delta,
-    );
+    let key = format!("delta:{}", delta.digest()?.to_hex());
+    let request = CommandRequest::new(&key, "apply_graph_delta", delta)?;
     ledger.record_command(&request)?;
     let graph = ledger
         .get_graph(mission)?
         .ok_or_else(|| LedgerError::Store("graph missing".into()))?;
     if already_applied(&graph, delta) {
+        ledger.set_command_phase(&key, CommandPhase::Applied, None)?;
         return Ok(graph);
     }
     if graph_digest(&graph) != delta.parent {
@@ -95,7 +98,8 @@ pub fn apply_graph_delta<L: Ledger>(
         apply_op(&mut next, op)?;
     }
     ledger.put_graph(&next)?;
-    ledger.append_event("graph_delta", &delta.digest().to_hex())?;
+    ledger.append_event("graph_delta", &delta.digest()?.to_hex())?;
+    ledger.set_command_phase(&key, CommandPhase::Applied, None)?;
     Ok(next)
 }
 
@@ -173,6 +177,7 @@ mod tests {
                 objective: "o".into(),
                 packages: vec![("p".into(), TaskClass::BoundedBugFix)],
             },
+            "2026-01-01T00:00:00.000Z",
         )
         .expect("plan");
         let pkg = graph.packages[0].clone();
@@ -181,13 +186,13 @@ mod tests {
             ops: vec![GraphOp::SetPackageState {
                 id: pkg.id.clone(),
                 from: WorkPackageState::Ready,
-                to: WorkPackageState::Running,
+                to: WorkPackageState::Leased,
             }],
         };
         let first = apply_graph_delta(&mut ledger, &graph.mission.id, &delta).expect("apply");
-        assert_eq!(first.packages[0].state, WorkPackageState::Running);
+        assert_eq!(first.packages[0].state, WorkPackageState::Leased);
         let second = apply_graph_delta(&mut ledger, &graph.mission.id, &delta).expect("replay");
-        assert_eq!(second.packages[0].state, WorkPackageState::Running);
+        assert_eq!(second.packages[0].state, WorkPackageState::Leased);
         let stale = GraphDelta {
             parent: graph_digest(&graph),
             ops: vec![GraphOp::SetPackageState {
