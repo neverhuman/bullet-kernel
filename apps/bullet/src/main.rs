@@ -1,6 +1,7 @@
 //! Bullet Farm CLI.
 
 mod contracts;
+mod demo_live;
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
@@ -25,6 +26,23 @@ enum Commands {
     },
     /// Run the first simulator demonstration.
     Demo,
+    /// Run simulator-only integration scaffolding. This is not transaction proof.
+    DemoSynthetic {
+        /// Existing origin repository instead of the generated fixture.
+        #[arg(long)]
+        target: Option<PathBuf>,
+    },
+    /// Run the end-to-end demonstration with a live provider. Refuses with
+    /// LIVE_ADMISSION_UNAVAILABLE unless the operator's explicit admission
+    /// (BULLET_LIVE_ADMISSION) is present; spend and wall caps apply.
+    DemoLive {
+        /// Provider for the council and runner: sim, claude, codex, cursor.
+        #[arg(long, default_value = "claude")]
+        provider: String,
+        /// Existing origin repository instead of the generated fixture.
+        #[arg(long)]
+        target: Option<PathBuf>,
+    },
     /// Generated-contract tooling. The YAML is the source of truth.
     Contracts {
         #[command(subcommand)]
@@ -66,6 +84,8 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Commands::Demo => demo(),
+        Commands::DemoSynthetic { target } => demo_live::run("sim", target, data_dir()),
+        Commands::DemoLive { provider, target } => demo_live::run(&provider, target, data_dir()),
         Commands::Contracts { command } => match command {
             ContractsCommands::Generate => contracts::generate(),
             ContractsCommands::Check => contracts::check(),

@@ -38,6 +38,12 @@ pub enum HarnessError {
     /// `BULLET_PROVIDER_KILL=1` is set; refusing to spawn.
     #[error("provider kill switch active")]
     KillSwitch,
+    /// Wave-0 quarantine: live execution has no signed admission validator.
+    #[error("live provider admission is unavailable for {provider}")]
+    LiveAdmissionUnavailable {
+        /// Known provider executable that was refused.
+        provider: String,
+    },
     /// The per-run invocation budget is spent.
     #[error("invocation budget exhausted: max {max}")]
     InvocationBudgetExhausted {
@@ -136,6 +142,7 @@ impl HarnessError {
             Self::ProfileUnverified { .. } => "PROFILE_UNVERIFIED",
             Self::WorktreeFlagDenied { .. } => "WORKTREE_FLAG_DENIED",
             Self::KillSwitch => "PROVIDER_KILL_ACTIVE",
+            Self::LiveAdmissionUnavailable { .. } => "LIVE_ADMISSION_UNAVAILABLE",
             Self::InvocationBudgetExhausted { .. } => "INVOCATION_BUDGET_EXHAUSTED",
             Self::CapabilityUnknown { .. } => "CAPABILITY_UNKNOWN",
             Self::CapabilityUnsupported { .. } => "CAPABILITY_UNSUPPORTED",

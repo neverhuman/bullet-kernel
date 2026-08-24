@@ -3,7 +3,7 @@
 //! environment; honors the `BULLET_PROVIDER_KILL` switch.
 
 use crate::error::HarnessError;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -43,6 +43,29 @@ where
 #[must_use]
 pub fn kill_switch_active(value: Option<&str>) -> bool {
     value == Some("1")
+}
+
+/// Environment variable carrying the operator's explicit live admission.
+pub const LIVE_ADMISSION_VAR: &str = "BULLET_LIVE_ADMISSION";
+/// The only admission value accepted this iteration (ADR 0001 live-spend
+/// rules, operator approval recorded 2026-08-24).
+pub const LIVE_ADMISSION_TOKEN: &str = "adr-0001-operator-approved-2026-08-24";
+
+/// Whether an explicit operator admission opens the live-provider gate.
+/// Absent, empty, or any value other than the exact token refuses.
+#[must_use]
+pub fn live_admission_granted(value: Option<&str>) -> bool {
+    value == Some(LIVE_ADMISSION_TOKEN)
+}
+
+/// Recognize every live-provider executable currently compiled into adapters.
+#[must_use]
+pub fn live_provider_program(program: &str) -> Option<&str> {
+    let name = Path::new(program).file_name()?.to_str()?;
+    match name {
+        "claude" | "codex" | "cursor-agent" | "agy" => Some(name),
+        _ => None,
+    }
 }
 
 /// Max-invocations counter shared across one adapter's run.
@@ -134,7 +157,8 @@ impl ArgvBuilder {
     /// # Errors
     ///
     /// `PROVIDER_KILL_ACTIVE` when the kill switch is set;
-    /// `WORKTREE_FLAG_DENIED` when any token matches the deny list.
+    /// `WORKTREE_FLAG_DENIED` when any token matches the deny list; or
+    /// `LIVE_ADMISSION_UNAVAILABLE` for a known live-provider executable.
     pub fn build(self) -> Result<PreparedInvocation, HarnessError> {
         if kill_switch_active(std::env::var(KILL_SWITCH_VAR).ok().as_deref()) {
             return Err(HarnessError::KillSwitch);
@@ -142,6 +166,14 @@ impl ArgvBuilder {
         for arg in &self.args {
             if denied_token(arg).is_some() {
                 return Err(HarnessError::WorktreeFlagDenied { token: arg.clone() });
+            }
+        }
+        if let Some(provider) = live_provider_program(&self.program) {
+            let admission = std::env::var(LIVE_ADMISSION_VAR).ok();
+            if !live_admission_granted(admission.as_deref()) {
+                return Err(HarnessError::LiveAdmissionUnavailable {
+                    provider: provider.to_owned(),
+                });
             }
         }
         let env = filter_env(std::env::vars());
@@ -215,13 +247,31 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_tokens_pass() {
-        let prep = ArgvBuilder::new("codex", "/tmp")
-            .args(["exec", "-C", "/tmp", "--sandbox", "read-only", "-o", "out"])
+    fn ordinary_non_provider_tokens_pass() {
+        let prep = ArgvBuilder::new("printf", "/tmp")
+            .args(["%s", "offline"])
             .build()
             .unwrap();
-        assert_eq!(prep.program, "codex");
+        assert_eq!(prep.program, "printf");
         assert_eq!(prep.cwd, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn live_admission_requires_the_exact_operator_token() {
+        assert!(live_admission_granted(Some(LIVE_ADMISSION_TOKEN)));
+        for wrong in [None, Some(""), Some("yes"), Some("ADR-0001")] {
+            assert!(!live_admission_granted(wrong), "{wrong:?} must refuse");
+        }
+    }
+
+    #[test]
+    fn every_known_live_provider_is_quarantined() {
+        for program in ["claude", "/opt/bin/codex", "cursor-agent", "/usr/bin/agy"] {
+            let error = ArgvBuilder::new(program, "/tmp")
+                .build()
+                .expect_err("live provider must be denied before spawn");
+            assert_eq!(error.reason_code(), "LIVE_ADMISSION_UNAVAILABLE");
+        }
     }
 
     #[test]

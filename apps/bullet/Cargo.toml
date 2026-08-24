@@ -9,8 +9,25 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 bullet-adapters.workspace = true
 bullet-application.workspace = true
+bullet-domain.workspace = true
+bullet-effects-core.workspace = true
+bullet-harness-claude.workspace = true
+bullet-harness-codex.workspace = true
+bullet-harness-core.workspace = true
+bullet-harness-cursor.workspace = true
+bullet-harness-sim.workspace = true
+bullet-runner-core.workspace = true
+bullet-verifier-core.workspace = true
+chrono.workspace = true
 clap.workspace = true
+futures.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
