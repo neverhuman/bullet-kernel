@@ -68,6 +68,35 @@ for i in 0 1 2 3; do
   fi
 done
 
+# --- Real mode: requires an absolute BULLET_POLICY_PATH and targets the resolved real binary.
+set +e
+PATH="$test_root:/usr/bin:/bin" BULLET_NIGHTLY_TEST_LOG="$log_file" BULLET_LIVE_PROVIDERS="claude" \
+  BULLET_LIVE_REAL=1 bash ops/ci/nightly.sh >/dev/null 2>&1
+code=$?
+set -e
+if [[ "$code" -ne 1 ]]; then
+  fail "real mode without BULLET_POLICY_PATH must exit 1, got $code"
+fi
+printf '{}\n' >"$test_root/policy.json"
+: >"$log_file"
+PATH="$test_root:/usr/bin:/bin" BULLET_NIGHTLY_TEST_LOG="$log_file" BULLET_LIVE_PROVIDERS="claude,agy" \
+  BULLET_LIVE_REAL=1 BULLET_POLICY_PATH="$test_root/policy.json" bash ops/ci/nightly.sh >/dev/null
+mapfile -t real_calls <"$log_file"
+if [[ "${#real_calls[@]}" -ne 4 ]]; then
+  fail "real mode: expected 4 cargo calls for two providers, got ${#real_calls[@]}"
+fi
+resolved_root="$(readlink -f "$test_root")"
+if [[ "${real_calls[1]}" != *"--executable $resolved_root/claude"* ]]; then
+  fail "real mode must target the resolved real claude binary: ${real_calls[1]}"
+fi
+if [[ "${real_calls[3]}" != *"--executable $resolved_root/agy"* ]]; then
+  fail "real mode must target the resolved real agy binary: ${real_calls[3]}"
+fi
+if [[ "${real_calls[1]}" != *"--data-dir $REPO_ROOT/target/live/claude/"* ]]; then
+  fail "real mode must keep receipts under target/live/<provider>: ${real_calls[1]}"
+fi
+rm -rf "$REPO_ROOT/target/live/claude" "$REPO_ROOT/target/live/agy"
+
 : >"$log_file"
 if PATH="$test_root:/usr/bin:/bin" \
   BULLET_NIGHTLY_TEST_LOG="$log_file" \
