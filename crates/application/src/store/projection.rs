@@ -5,11 +5,18 @@
 use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
 use crate::records::ActiveLease;
 use crate::store::LedgerError;
+use crate::ContextCapsule;
 use bullet_domain::{Attempt, Candidate, Effect, Evidence};
 
 /// Read-only projection reads. Nothing here mutates or authorizes, and a
 /// failed read is an error, never an empty list.
 pub trait ProjectionReader {
+    /// Every immutable initial Context Capsule, ordered by package and revision.
+    ///
+    /// # Errors
+    /// Store failure or corrupt persisted capsule truth.
+    fn list_context_capsules(&self) -> Result<Vec<ContextCapsule>, LedgerError>;
+
     /// The store's own clock as fixed-width RFC 3339 UTC. Lease liveness is
     /// judged against this value, never against a caller clock.
     ///

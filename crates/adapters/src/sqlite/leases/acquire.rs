@@ -1,6 +1,6 @@
 //! One-transaction lease acquisition and exact command replay.
 
-use super::super::{commands, events, from_json, graph, json, lease_time, outbox, store};
+use super::super::{commands, context, events, from_json, graph, json, lease_time, outbox, store};
 use bullet_application::{
     ActiveLease, CommandRecord, CommandRequest, LeaseGrant, LeaseRequest, LedgerError,
 };
@@ -43,7 +43,16 @@ pub(in crate::sqlite) fn acquire_lease(
         let response = existing
             .response
             .ok_or_else(|| LedgerError::Store("lease command has no stored result".into()))?;
-        return from_json(&response);
+        let grant: LeaseGrant = from_json(&response)?;
+        let graph = graph::get_graph(&tx, &req.mission_id)?
+            .ok_or_else(|| LedgerError::Store("lease replay graph missing".into()))?;
+        context::require_revision(
+            &tx,
+            &graph,
+            &grant.attempt.work_package_id,
+            grant.attempt.context_revision,
+        )?;
+        return Ok(grant);
     }
 
     let ttl_seconds = req.validated_ttl()?;
@@ -60,6 +69,12 @@ pub(in crate::sqlite) fn acquire_lease(
         .iter()
         .position(|package| package.id == stored.variants[variant_index].work_package_id)
         .ok_or_else(|| LedgerError::Store("package missing".into()))?;
+    context::require_revision(
+        &tx,
+        &stored,
+        &stored.packages[package_index].id,
+        req.context_revision,
+    )?;
     if stored.packages[package_index].state != WorkPackageState::Ready {
         return Err(DomainError::Conflict(format!(
             "package {} is {:?}, not ready",

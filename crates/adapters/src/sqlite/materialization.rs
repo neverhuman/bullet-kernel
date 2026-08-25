@@ -1,6 +1,6 @@
 //! One-transaction Mission materialization and exact command replay.
 
-use super::{commands, events, json, store};
+use super::{commands, context, events, json, store};
 use bullet_application::{
     materializer::MaterializeCommandResult, CommandRequest, LedgerError, StoredGraph,
 };
@@ -40,7 +40,9 @@ pub(super) fn materialize_plan_command(
             let response = record.response.ok_or_else(|| {
                 LedgerError::Store("applied materialization command has no stored result".into())
             })?;
-            return MaterializeCommandResult::decode(&response)?.graph_for(graph);
+            let graph = MaterializeCommandResult::decode(&response)?.graph_for(graph)?;
+            context::require_initial_set(&tx, &graph)?;
+            return Ok(graph);
         }
         CommandPhase::Failed | CommandPhase::Unknown => {
             return Err(LedgerError::Store(format!(
@@ -78,6 +80,8 @@ pub(super) fn materialize_plan_command(
         params![mission_key, json(graph)?],
     )
     .map_err(store)?;
+    step(fail_after)?;
+    context::insert_initial_set(&tx, graph, now)?;
     for variant in &graph.variants {
         step(fail_after)?;
         tx.execute(

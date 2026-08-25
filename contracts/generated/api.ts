@@ -187,6 +187,8 @@ export type EffectId = string;
 
 export type EffectReceiptId = string;
 
+export type ContextCapsuleId = string;
+
 export type LabelCount = {
   label: string;
   count: number;
@@ -259,6 +261,34 @@ export type SessionSupervisorView = {
 
 export type SessionSupervisorSnapshot = {
   data: SessionSupervisorView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
+};
+
+export type ContextCapsuleRow = {
+  schema_version: "bullet.context-capsule.initial.v1";
+  id: ContextCapsuleId;
+  mission_id: MissionId;
+  work_package_id: WorkPackageId;
+  plan_revision_id: PlanRevisionId;
+  revision: number;
+  parent_id: null;
+  task_class: string;
+  objective_digest: Digest;
+  package_title_digest: Digest;
+  content_digest: Digest;
+  compression: "none";
+  dropped_decision_digests: Digest[];
+  recorded_at: string;
+};
+
+export type ContextLineageView = {
+  capsules: ContextCapsuleRow[];
+};
+
+export type ContextLineageSnapshot = {
+  data: ContextLineageView;
   as_of_sequence: number;
   observed_at: string;
   source: "bullet-kernel/sqlite-ledger";

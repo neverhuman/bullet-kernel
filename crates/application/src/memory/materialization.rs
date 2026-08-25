@@ -24,7 +24,9 @@ impl MemoryLedger {
                             "applied materialization command has no stored result".into(),
                         )
                     })?;
-                    return MaterializeCommandResult::decode(&response)?.graph_for(graph);
+                    let graph = MaterializeCommandResult::decode(&response)?.graph_for(graph)?;
+                    self.require_initial_contexts(&graph)?;
+                    return Ok(graph);
                 }
                 CommandPhase::Failed | CommandPhase::Unknown => {
                     return Err(LedgerError::Store(format!(
@@ -51,6 +53,8 @@ impl MemoryLedger {
 
             self.tick()?;
             self.graphs.insert(key.clone(), graph.clone());
+            self.tick()?;
+            self.insert_initial_contexts(graph, now)?;
             for variant in &graph.variants {
                 self.tick()?;
                 self.fences.entry(variant.id.to_string()).or_insert(0);

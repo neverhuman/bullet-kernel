@@ -4,6 +4,7 @@ pub mod authority;
 pub mod commands;
 pub mod conformance;
 pub mod conformance_effects;
+pub mod context;
 pub mod demo;
 pub mod effect_state;
 pub mod effects;
@@ -22,6 +23,10 @@ pub mod store;
 
 pub use authority::{check_active_lease_snapshot, ActiveLeaseSubject};
 pub use commands::{CommandRecord, CommandRequest};
+pub use context::{
+    initial_context_capsules, validate_initial_context_set, ContextCapsule,
+    INITIAL_CONTEXT_CAPSULE_SCHEMA,
+};
 pub use demo::{derive_receipt, run_demo, DemoReceipt};
 pub use effect_state::EffectState;
 pub use effects::{receipt_id, EffectIntentRecord, EffectReceiptRecord, ReceiptVerdict, ZERO_OID};

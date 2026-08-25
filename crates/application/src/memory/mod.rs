@@ -4,6 +4,7 @@
 mod authority;
 mod clock;
 mod commands;
+mod context;
 mod effects;
 mod launch_grant;
 mod materialization;
@@ -20,6 +21,7 @@ use crate::records::{
     ReadyRow, ReleaseRequest, StoredGraph,
 };
 use crate::store::{Ledger, LedgerError};
+use crate::ContextCapsule;
 use bullet_domain::{
     Attempt, AttemptId, Candidate, CandidateId, CommandId, CommandPhase, DomainError, Effect,
     EffectId, Evidence, EvidenceId, Mission, MissionId, VariantId, WorkPackageId,
@@ -30,6 +32,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Default)]
 pub struct MemoryLedger {
     commands: BTreeMap<String, CommandRecord>,
+    context_capsules: BTreeMap<String, ContextCapsule>,
     graphs: BTreeMap<String, StoredGraph>,
     attempts: BTreeMap<String, Attempt>,
     candidates: BTreeMap<String, Candidate>,

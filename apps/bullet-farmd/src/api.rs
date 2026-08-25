@@ -107,6 +107,10 @@ fn build_router(db: &FsPath, auth: crate::auth::AuthState) -> Result<Router, Led
         .route("/v1/ready", get(crate::leases::next_ready))
         .route("/v1/fleet", get(crate::projections::fleet))
         .route("/v1/sessions", get(crate::projections::sessions))
+        .route(
+            "/v1/context-lineage",
+            get(crate::projections::context_lineage),
+        )
         .route("/v1/merge-rail", get(crate::projections::merge_rail))
         .route("/v1/quality-lab", get(crate::projections::quality_lab))
         .route("/v1/audit", get(crate::projections::audit))

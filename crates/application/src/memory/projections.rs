@@ -5,9 +5,22 @@ use super::MemoryLedger;
 use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
 use crate::records::ActiveLease;
 use crate::store::{LedgerError, ProjectionReader};
+use crate::ContextCapsule;
 use bullet_domain::{Attempt, Candidate, Effect, Evidence};
 
 impl ProjectionReader for MemoryLedger {
+    fn list_context_capsules(&self) -> Result<Vec<ContextCapsule>, LedgerError> {
+        self.validate_all_initial_contexts()?;
+        let mut out: Vec<_> = self.context_capsules.values().cloned().collect();
+        out.sort_by(|left, right| {
+            left.work_package_id
+                .as_str()
+                .cmp(right.work_package_id.as_str())
+                .then(left.revision.cmp(&right.revision))
+        });
+        Ok(out)
+    }
+
     fn authority_time(&self) -> Result<String, LedgerError> {
         Ok(self.simulation_time())
     }

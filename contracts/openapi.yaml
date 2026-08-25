@@ -365,6 +365,33 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /v1/context-lineage:
+    get:
+      summary: Context Lineage projection (spec 25.8) of immutable initial capsules
+      description: >
+        One atomic ledger read of exact plan-derived Context Capsule subjects.
+        This schema publishes revision-one lineage only; no provider-created,
+        compressed, or successor capsule exists in this slice.
+      responses:
+        "200":
+          description: context lineage view
+          headers:
+            X-Bullet-As-Of-Sequence:
+              description: Latest durable event sequence covered by this snapshot.
+              required: true
+              schema:
+                type: integer
+                format: uint64
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContextLineageSnapshot"
+        "500":
+          description: store failure
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/merge-rail:
     get:
       summary: Merge Rail projection (spec 25.13) of Candidates, effect intents, and receipts
@@ -779,6 +806,9 @@ components:
     EffectReceiptId:
       type: string
       pattern: '^efr_[0-9a-f]{64}$'
+    ContextCapsuleId:
+      type: string
+      pattern: '^ctx_[0-9a-f]{64}$'
     LabelCount:
       description: One catalog label with its row count; zero is explicit, never absent.
       type: object
@@ -978,6 +1008,77 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/SessionSupervisorView"
+        as_of_sequence: { type: integer }
+        observed_at: { type: string, format: date-time }
+        source: { type: string, enum: [bullet-kernel/sqlite-ledger] }
+    ContextCapsuleRow:
+      type: object
+      additionalProperties: false
+      required:
+        - schema_version
+        - id
+        - mission_id
+        - work_package_id
+        - plan_revision_id
+        - revision
+        - parent_id
+        - task_class
+        - objective_digest
+        - package_title_digest
+        - content_digest
+        - compression
+        - dropped_decision_digests
+        - recorded_at
+      properties:
+        schema_version:
+          type: string
+          enum: [bullet.context-capsule.initial.v1]
+        id:
+          $ref: "#/components/schemas/ContextCapsuleId"
+        mission_id:
+          $ref: "#/components/schemas/MissionId"
+        work_package_id:
+          $ref: "#/components/schemas/WorkPackageId"
+        plan_revision_id:
+          $ref: "#/components/schemas/PlanRevisionId"
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 1
+        parent_id:
+          type: "null"
+        task_class: { type: string }
+        objective_digest:
+          $ref: "#/components/schemas/Digest"
+        package_title_digest:
+          $ref: "#/components/schemas/Digest"
+        content_digest:
+          $ref: "#/components/schemas/Digest"
+        compression:
+          type: string
+          enum: [none]
+        dropped_decision_digests:
+          type: array
+          maxItems: 0
+          items:
+            $ref: "#/components/schemas/Digest"
+        recorded_at: { type: string, format: date-time }
+    ContextLineageView:
+      type: object
+      additionalProperties: false
+      required: [capsules]
+      properties:
+        capsules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContextCapsuleRow"
+    ContextLineageSnapshot:
+      type: object
+      additionalProperties: false
+      required: [data, as_of_sequence, observed_at, source]
+      properties:
+        data:
+          $ref: "#/components/schemas/ContextLineageView"
         as_of_sequence: { type: integer }
         observed_at: { type: string, format: date-time }
         source: { type: string, enum: [bullet-kernel/sqlite-ledger] }

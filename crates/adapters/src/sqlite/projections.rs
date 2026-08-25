@@ -2,8 +2,9 @@
 //! `SELECT` with a deterministic `ORDER BY`; callers wrap them in
 //! [`SqliteLedger::read_snapshot`] so rows and watermark share one view.
 
-use super::{effects, from_json, graph, lease_time, leases, store, SqliteLedger};
+use super::{context, effects, from_json, graph, lease_time, leases, store, SqliteLedger};
 use bullet_application::store::ProjectionReader;
+use bullet_application::ContextCapsule;
 use bullet_application::{ActiveLease, EffectIntentRecord, EffectReceiptRecord, LedgerError};
 use bullet_domain::{Attempt, Candidate, Effect, Evidence};
 use rusqlite::{Connection, Row};
@@ -43,6 +44,10 @@ where
 }
 
 impl ProjectionReader for SqliteLedger {
+    fn list_context_capsules(&self) -> Result<Vec<ContextCapsule>, LedgerError> {
+        context::list_all(&self.conn)
+    }
+
     fn authority_time(&self) -> Result<String, LedgerError> {
         lease_time::database_time(&self.conn)
     }

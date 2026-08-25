@@ -4,12 +4,14 @@
 //! catalog label is counted so a zero is explicit rather than absent.
 
 mod audit;
+mod context_lineage;
 mod fleet;
 mod merge_rail;
 mod quality_lab;
 mod sessions;
 
 pub(crate) use audit::audit;
+pub(crate) use context_lineage::context_lineage;
 pub(crate) use fleet::fleet;
 pub(crate) use merge_rail::merge_rail;
 pub(crate) use quality_lab::quality_lab;

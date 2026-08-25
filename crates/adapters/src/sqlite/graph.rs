@@ -1,7 +1,7 @@
 //! Graph snapshots, typed attempts, and append-only candidate/evidence/
 //! effect rows.
 
-use super::{commands, events, from_json, json, store};
+use super::{commands, context, events, from_json, json, store};
 use bullet_application::{
     graph_delta::{evaluate_graph_delta, GraphDeltaCommandResult},
     CommandRequest, GraphDelta, LedgerError, StoredGraph,
@@ -45,6 +45,7 @@ pub(super) fn materialize_graph(
         params![mission_key, json(graph)?],
     )
     .map_err(store)?;
+    context::insert_initial_set(&tx, graph, now)?;
     for variant in &graph.variants {
         tx.execute(
             "INSERT INTO variant_fence_counters (variant_id, next_fence) VALUES (?1, 0)

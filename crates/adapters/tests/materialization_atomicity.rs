@@ -1,4 +1,5 @@
 use bullet_adapters::SqliteLedger;
+use bullet_application::store::ProjectionReader;
 use bullet_application::{materialize_plan, LeaseService, Ledger, PlanInput, StoredGraph};
 use bullet_domain::{CommandPhase, DomainError, MissionId, TaskClass};
 use std::path::Path;
@@ -23,7 +24,7 @@ fn reopen(path: &Path) -> SqliteLedger {
 
 #[test]
 fn sqlite_failure_boundaries_reopen_to_exactly_old_or_complete_next() {
-    for fail_after in 0..=7 {
+    for fail_after in 0..=8 {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("materialize.sqlite");
         let seed = format!("sqlite-materialize-{fail_after}");
@@ -37,11 +38,15 @@ fn sqlite_failure_boundaries_reopen_to_exactly_old_or_complete_next() {
         drop(ledger);
 
         let mut recovered = reopen(&path);
-        if fail_after < 7 {
+        if fail_after < 8 {
             assert!(recovered.get_command(&key).expect("command").is_none());
             assert!(recovered.get_graph(&mission).expect("graph").is_none());
             assert!(recovered.ready_rows().expect("ready").is_empty());
             assert!(recovered.list_events().expect("events").is_empty());
+            assert!(recovered
+                .list_context_capsules()
+                .expect("contexts")
+                .is_empty());
         } else {
             let command = recovered
                 .get_command(&key)
@@ -52,6 +57,10 @@ fn sqlite_failure_boundaries_reopen_to_exactly_old_or_complete_next() {
             assert!(recovered.get_graph(&mission).expect("graph").is_some());
             assert_eq!(recovered.ready_rows().expect("ready").len(), 1);
             assert_eq!(recovered.list_events().expect("events").len(), 1);
+            assert_eq!(
+                recovered.list_context_capsules().expect("contexts").len(),
+                1
+            );
         }
 
         let graph = materialize_plan(&mut recovered, &seed, &plan(), AT).expect("recover");

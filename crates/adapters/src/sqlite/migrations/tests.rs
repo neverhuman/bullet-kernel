@@ -179,6 +179,33 @@ fn schema_seven_with_legacy_subject_is_refused_byte_for_byte() {
 }
 
 #[test]
+fn schema_ten_without_context_authority_is_refused_byte_for_byte() {
+    let (_directory, path) = database();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(CREATE_METADATA).unwrap();
+    for migration in &MIGRATIONS[..10] {
+        conn.execute_batch(migration.sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_version (version, name, checksum, applied_at)
+             VALUES (?1, ?2, ?3, 'prior-schema')",
+            params![
+                migration.version,
+                migration.name,
+                migration_checksum(migration)
+            ],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let bytes_before = std::fs::read(&path).unwrap();
+    unsupported(SqliteLedger::open(&path));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes_before);
+    assert!(!sidecar(&path, "-wal").exists());
+    assert!(!sidecar(&path, "-journal").exists());
+}
+
+#[test]
 fn altered_name_and_checksum_are_refused() {
     for statement in [
         "UPDATE schema_version SET name = 'renamed.sql' WHERE version = 2",
@@ -197,7 +224,7 @@ fn altered_name_and_checksum_are_refused() {
 fn partial_future_and_unrecognized_versions_are_refused() {
     for statement in [
         "DELETE FROM schema_version WHERE version = 9",
-        "INSERT INTO schema_version VALUES (11, 'future.sql', '00', 'future')",
+        "INSERT INTO schema_version VALUES (12, 'future.sql', '00', 'future')",
         "UPDATE schema_version SET version = 99 WHERE version = 9",
     ] {
         let (_directory, path) = database();

@@ -109,6 +109,7 @@ typed_id!(EffectId, "efi");
 typed_id!(EffectReceiptId, "efr");
 typed_id!(CommandId, "cmd");
 typed_id!(CognitiveTaskId, "cog");
+typed_id!(ContextCapsuleId, "ctx");
 typed_id!(ProfileId, "prf");
 typed_id!(RequirementId, "req");
 
@@ -139,6 +140,7 @@ mod tests {
             (EffectReceiptId::from_seed("subject").to_string(), "efr"),
             (CommandId::from_seed("subject").to_string(), "cmd"),
             (CognitiveTaskId::from_seed("subject").to_string(), "cog"),
+            (ContextCapsuleId::from_seed("subject").to_string(), "ctx"),
             (ProfileId::from_seed("subject").to_string(), "prf"),
             (RequirementId::from_seed("subject").to_string(), "req"),
         ];

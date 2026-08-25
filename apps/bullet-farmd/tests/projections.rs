@@ -14,9 +14,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{timeout, Duration};
 
-const ROUTES: [&str; 5] = [
+const ROUTES: [&str; 6] = [
     "/v1/fleet",
     "/v1/sessions",
+    "/v1/context-lineage",
     "/v1/merge-rail",
     "/v1/quality-lab",
     "/v1/audit",
@@ -151,6 +152,10 @@ async fn empty_database_projects_zero_rows_at_watermark_zero_on_every_route() {
     assert!(states.iter().all(|(_, count)| *count == 0));
     assert!(states.iter().any(|(label, _)| label == "crashed"));
 
+    let (context, as_of) = snapshot(addr, "/v1/context-lineage").await;
+    assert_eq!(as_of, 0);
+    assert_eq!(context["capsules"], Value::Array(vec![]));
+
     let (rail, as_of) = snapshot(addr, "/v1/merge-rail").await;
     assert_eq!(as_of, 0);
     for field in ["candidates", "effects", "intents", "receipts"] {
@@ -234,6 +239,17 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
         .sum();
     assert_eq!(total, attempts.len() as u64);
 
+    let (context, _) = snapshot(addr, "/v1/context-lineage").await;
+    let capsules = context["capsules"].as_array().expect("context capsules");
+    assert_eq!(capsules.len(), 2);
+    for capsule in capsules {
+        assert_eq!(capsule["revision"], 1);
+        assert_eq!(capsule["parent_id"], Value::Null);
+        assert_eq!(capsule["compression"], "none");
+        assert_eq!(capsule["dropped_decision_digests"], Value::Array(vec![]));
+        assert_eq!(capsule["content_digest"].as_str().map(str::len), Some(64));
+    }
+
     let (audit, as_of) = snapshot(addr, "/v1/audit").await;
     let events = audit["events"].as_array().expect("events");
     assert_eq!(audit["latest_sequence"], as_of);
@@ -297,6 +313,17 @@ async fn corrupt_rows_are_typed_500_problems_not_shorter_lists() {
     }
     let addr = start(&db).await;
     let raw = Connection::open(&db).expect("raw");
+    raw.execute(
+        "UPDATE context_capsules SET content_digest = ?1",
+        params!["a".repeat(64)],
+    )
+    .expect("corrupt context capsule");
+    let response = raw_get(addr, "/v1/context-lineage").await;
+    assert_eq!(status_of(&response), 500);
+    assert_eq!(body_json(&response)["code"], "STORE_FAILURE");
+    let response = raw_get(addr, "/v1/quality-lab").await;
+    assert_eq!(status_of(&response), 200, "unrelated routes stay readable");
+
     raw.execute(
         "INSERT INTO candidates (id, body) VALUES ('can_corrupt', 'not json')",
         [],

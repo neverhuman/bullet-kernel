@@ -5,6 +5,7 @@
 use super::{json, MemoryLedger};
 use crate::authority::{check_active_lease_snapshot, ActiveLeaseSubject};
 use crate::commands::{CommandRecord, CommandRequest};
+use crate::initial_context_capsules;
 use crate::records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReleaseRequest, StoredGraph,
@@ -67,7 +68,20 @@ impl MemoryLedger {
         if self.graphs.contains_key(&key) {
             return Err(DomainError::Conflict(format!("graph {key} already materialized")).into());
         }
+        let capsules = initial_context_capsules(graph, now)?;
+        if capsules.iter().any(|capsule| {
+            self.context_capsules
+                .contains_key(capsule.work_package_id.as_str())
+        }) {
+            return Err(LedgerError::Store(
+                "context capsule already exists for work package".into(),
+            ));
+        }
         self.graphs.insert(key, graph.clone());
+        for capsule in capsules {
+            self.context_capsules
+                .insert(capsule.work_package_id.to_string(), capsule);
+        }
         for variant in &graph.variants {
             self.fences.entry(variant.id.to_string()).or_insert(0);
         }
@@ -101,8 +115,18 @@ impl MemoryLedger {
                 .response
                 .as_deref()
                 .ok_or_else(|| LedgerError::Store("lease command has no stored result".into()))?;
-            return serde_json::from_str(response)
-                .map_err(|err| LedgerError::Store(err.to_string()));
+            let grant: LeaseGrant = serde_json::from_str(response)
+                .map_err(|err| LedgerError::Store(err.to_string()))?;
+            let graph = self
+                .graphs
+                .get(req.mission_id.as_str())
+                .ok_or_else(|| LedgerError::Store("lease replay graph missing".into()))?;
+            self.require_context_revision(
+                graph,
+                &grant.attempt.work_package_id,
+                grant.attempt.context_revision,
+            )?;
+            return Ok(grant);
         }
         self.tick()?;
         let ttl_seconds = req.validated_ttl()?;
@@ -123,6 +147,7 @@ impl MemoryLedger {
             .position(|package| package.id == graph.variants[vidx].work_package_id)
             .ok_or_else(|| LedgerError::Store("package missing".into()))?;
         let package = &graph.packages[pidx];
+        self.require_context_revision(&graph, &package.id, req.context_revision)?;
         if package.state != WorkPackageState::Ready {
             return Err(DomainError::Conflict(format!(
                 "package {} is {:?}, not ready",

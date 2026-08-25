@@ -1,3 +1,4 @@
+use bullet_application::store::ProjectionReader;
 use bullet_application::{
     materialize_plan, LeaseService, Ledger, MemoryLedger, PlanInput, StoredGraph,
 };
@@ -19,7 +20,7 @@ fn graph_json(graph: &StoredGraph) -> String {
 
 #[test]
 fn every_memory_failure_boundary_is_exactly_old_or_complete_next() {
-    for fail_after in 0..=7 {
+    for fail_after in 0..=8 {
         let seed = format!("memory-materialize-{fail_after}");
         let key = format!("materialize:{seed}");
         let mission = MissionId::from_seed(&seed);
@@ -29,11 +30,12 @@ fn every_memory_failure_boundary_is_exactly_old_or_complete_next() {
         let error = materialize_plan(&mut ledger, &seed, &plan(), AT).expect_err("failpoint");
         assert_eq!(error.reason_code(), "STORE_FAILURE");
 
-        if fail_after < 7 {
+        if fail_after < 8 {
             assert!(ledger.get_command(&key).expect("command").is_none());
             assert!(ledger.get_graph(&mission).expect("graph").is_none());
             assert!(ledger.ready_rows().expect("ready").is_empty());
             assert!(ledger.list_events().expect("events").is_empty());
+            assert!(ledger.list_context_capsules().expect("contexts").is_empty());
         } else {
             let command = ledger
                 .get_command(&key)
@@ -44,6 +46,7 @@ fn every_memory_failure_boundary_is_exactly_old_or_complete_next() {
             assert!(ledger.get_graph(&mission).expect("graph").is_some());
             assert_eq!(ledger.ready_rows().expect("ready").len(), 1);
             assert_eq!(ledger.list_events().expect("events").len(), 1);
+            assert_eq!(ledger.list_context_capsules().expect("contexts").len(), 1);
         }
 
         let recovered = materialize_plan(&mut ledger, &seed, &plan(), AT).expect("recover");

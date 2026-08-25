@@ -3,6 +3,7 @@
 
 mod backup;
 mod commands;
+mod context;
 mod effects;
 mod events;
 mod graph;
