@@ -247,6 +247,7 @@ dependencies = [
  "chrono",
  "libc",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
