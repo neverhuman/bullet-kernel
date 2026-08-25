@@ -99,15 +99,25 @@ fn offline_worker_is_atomic_idempotent_and_never_green() {
         .reconcile_offline_command(&pending.id, AT)
         .expect("settle");
     assert_eq!(settled.phase, CommandPhase::Unknown);
-    assert!(settled
-        .response
-        .as_deref()
-        .is_some_and(|response| { response.contains("EXECUTION_ADAPTER_UNAVAILABLE") }));
+    let response: serde_json::Value =
+        serde_json::from_str(settled.response.as_deref().expect("response")).expect("json");
+    assert_eq!(response["command_id"], pending.id.as_str());
+    assert_eq!(response["payload_digest"], request.digest().to_hex());
+    assert_eq!(response["code"], "EXECUTION_ADAPTER_UNAVAILABLE");
     let replay = ledger
         .reconcile_offline_command(&pending.id, "2027-01-01T00:00:00.000Z")
         .expect("exact replay");
     assert_eq!(replay, settled);
-    assert_eq!(ledger.list_events().expect("events").len(), 2);
+    let events = ledger.list_events().expect("events");
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[1].correlation_id.as_deref(),
+        Some(pending.id.as_str())
+    );
+    assert_eq!(
+        events[1].body,
+        settled.response.as_deref().expect("response")
+    );
     let outbox = ledger.outbox_for_command(&pending.id).expect("outbox");
     assert_eq!(outbox[0].phase, CommandPhase::Unknown);
     assert_eq!(outbox[0].acked_at.as_deref(), Some(AT));

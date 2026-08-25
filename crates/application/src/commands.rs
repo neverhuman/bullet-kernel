@@ -130,6 +130,8 @@ impl CommandRequest {
             )
         };
         let response = serde_json::to_string(&serde_json::json!({
+            "command_id": self.id(),
+            "payload_digest": self.digest().to_hex(),
             "code": code,
             "detail": detail,
             "repair": repair,

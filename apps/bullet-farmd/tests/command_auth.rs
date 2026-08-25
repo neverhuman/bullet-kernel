@@ -226,7 +226,7 @@ async fn origin_cookie_and_csrf_each_fail_closed_before_command_mutation() {
 }
 
 #[tokio::test]
-async fn command_submission_replay_conflict_and_statuses_are_durable_truth() {
+async fn command_submission_replay_and_raw_phase_writes_fail_closed() {
     let directory = tempfile::tempdir().expect("tempdir");
     let server = start(&directory.path().join("commands.sqlite")).await;
     let (cookie, csrf) = bootstrap(&server).await;
@@ -268,11 +268,11 @@ async fn command_submission_replay_conflict_and_statuses_are_durable_truth() {
         )
         .expect("outbox count");
     assert_eq!(outbox_count, 1);
-    for (phase, result, expected) in [
-        ("applied", Some(r#"{"applied":true}"#), "APPLIED"),
-        ("verified", Some(r#"{"verified":true}"#), "VERIFIED"),
-        ("failed", Some(r#"{"error":"gate"}"#), "FAILED"),
-        ("unknown", None, "UNKNOWN"),
+    for (phase, result) in [
+        ("applied", Some(r#"{"applied":true}"#)),
+        ("verified", Some(r#"{"verified":true}"#)),
+        ("failed", Some(r#"{"error":"gate"}"#)),
+        ("unknown", None),
     ] {
         connection
             .execute(
@@ -288,8 +288,8 @@ async fn command_submission_replay_conflict_and_statuses_are_durable_truth() {
             None,
         )
         .await;
-        assert_eq!(status.status, 200, "{phase}: {}", status.text);
-        assert_eq!(status.body["status"], expected);
+        assert_eq!(status.status, 500, "{phase}: {}", status.text);
+        assert_eq!(status.body["code"], "STORE_FAILURE");
     }
 }
 
@@ -458,6 +458,11 @@ async fn only_independent_worker_authority_can_reconcile_and_replay() {
     let settled = request(&server, "POST", &path, &[("Authorization", &bearer)], None).await;
     assert_eq!(settled.status, 200, "{}", settled.text);
     assert_eq!(settled.body["status"], "UNKNOWN");
+    assert_eq!(settled.body["result"]["command_id"], id);
+    assert_eq!(
+        settled.body["result"]["payload_digest"],
+        settled.body["payload_digest"]
+    );
     assert_eq!(
         settled.body["result"]["code"],
         "EXECUTION_ADAPTER_UNAVAILABLE"
