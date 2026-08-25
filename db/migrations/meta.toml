@@ -64,3 +64,7 @@ note = "ALTER TABLE active_leases ADD COLUMN ttl_seconds with a CHECK bounding i
 [[migration]]
 file = "0006_command_correlation.sql"
 note = "ALTER TABLE outbox ADD COLUMN command_id TEXT REFERENCES commands(id); additive, foreign keys verified by verify_foreign_key_integrity"
+
+[[migration]]
+file = "0013_nonce_ledger.sql"
+note = "Adds a normalized generic one-use nonce table; launch-grant and lease-transport nonce tables retain their distinct subject and expiry semantics"

@@ -180,9 +180,17 @@ fn future_schema_and_future_receipt_are_rejected() {
     drop(SqliteLedger::open(&source).unwrap());
     let receipt = create_backup(&source, &backup).unwrap();
     let conn = Connection::open(&backup).unwrap();
+    let current_version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let future_version = current_version
+        .checked_add(1)
+        .expect("migration version must have a representable successor");
     conn.execute(
-        "INSERT INTO schema_version VALUES (13, 'future.sql', '00', 'future')",
-        [],
+        "INSERT INTO schema_version VALUES (?1, 'future.sql', '00', 'future')",
+        rusqlite::params![future_version],
     )
     .unwrap();
     drop(conn);

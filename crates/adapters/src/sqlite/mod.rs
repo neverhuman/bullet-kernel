@@ -13,6 +13,7 @@ mod lease_transport;
 mod leases;
 mod materialization;
 mod migrations;
+mod nonces;
 mod outbox;
 mod projections;
 
@@ -22,9 +23,9 @@ use bullet_application::launch_grant::{
 use bullet_application::store::LeaseTransportTxn;
 use bullet_application::{
     ActiveLease, ActiveLeaseSubject, CommandRecord, CommandRequest, EffectIntentRecord,
-    EffectReceiptRecord, EffectState, ExpiredLease, GraphDelta, HeartbeatRequest, LeaseGrant,
-    LeaseRequest, Ledger, LedgerError, LedgerEvent, OutboxItem, ReadyRow, ReleaseRequest,
-    StoredGraph,
+    EffectReceiptRecord, EffectState, ExpiredLease, GraphDelta, HeartbeatRequest, IssuedNonce,
+    LeaseGrant, LeaseRequest, Ledger, LedgerError, LedgerEvent, NonceError, NonceLedger,
+    NonceState, OutboxItem, ReadyRow, ReleaseRequest, StoredGraph,
 };
 use bullet_domain::{
     Attempt, AttemptId, Candidate, CandidateId, CommandPhase, Effect, EffectId, Evidence,
@@ -471,6 +472,20 @@ impl LaunchGrantNonceStore for SqliteLedger {
         nonce: &str,
     ) -> Result<Option<StoredLaunchGrantNonce>, LedgerError> {
         launch_grants::get(&self.conn, nonce)
+    }
+}
+
+impl NonceLedger for SqliteLedger {
+    fn issue(&mut self, key: &str, digest: &str) -> Result<IssuedNonce, NonceError> {
+        nonces::issue(&mut self.conn, key, digest)
+    }
+
+    fn consume(&mut self, key: &str, digest: &str) -> Result<(), NonceError> {
+        nonces::consume(&mut self.conn, key, digest)
+    }
+
+    fn state(&self, key: &str) -> Result<Option<NonceState>, NonceError> {
+        nonces::state(&self.conn, key)
     }
 }
 

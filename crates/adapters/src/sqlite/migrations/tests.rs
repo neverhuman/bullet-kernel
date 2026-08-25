@@ -232,15 +232,16 @@ fn altered_name_and_checksum_are_refused() {
 
 #[test]
 fn partial_future_and_unrecognized_versions_are_refused() {
+    let future = MIGRATIONS.last().unwrap().version + 1;
     for statement in [
-        "DELETE FROM schema_version WHERE version = 9",
-        "INSERT INTO schema_version VALUES (13, 'future.sql', '00', 'future')",
-        "UPDATE schema_version SET version = 99 WHERE version = 9",
+        "DELETE FROM schema_version WHERE version = 9".to_string(),
+        format!("INSERT INTO schema_version VALUES ({future}, 'future.sql', '00', 'future')"),
+        "UPDATE schema_version SET version = 99 WHERE version = 9".to_string(),
     ] {
         let (_directory, path) = database();
         drop(SqliteLedger::open(&path).unwrap());
         let conn = Connection::open(&path).unwrap();
-        conn.execute(statement, []).unwrap();
+        conn.execute(&statement, []).unwrap();
         drop(conn);
         unsupported(SqliteLedger::open(path));
     }

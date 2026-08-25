@@ -49,7 +49,7 @@ pub use memory::MemoryLedger;
 pub use mutation_reservation::{
     LeaseGate, MutationReservationStore, MutationReserveRequest, OneUsePermit, ReservationError,
 };
-pub use nonce_ledger::{IssuedNonce, MemoryNonceLedger, NonceError, NonceLedger};
+pub use nonce_ledger::{IssuedNonce, MemoryNonceLedger, NonceError, NonceLedger, NonceState};
 pub use policy_snapshot::{load_policy, load_policy_from_environment, LoadedPolicy};
 pub use queue::{claim_ready, ready_queue, ReadyItem};
 pub use records::{
