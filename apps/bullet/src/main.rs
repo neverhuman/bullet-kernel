@@ -3,6 +3,7 @@
 mod contracts;
 #[path = "demo_live/mod.rs"]
 mod demo_synthetic;
+mod maintenance;
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
@@ -44,6 +45,30 @@ enum Commands {
 enum FarmCommands {
     /// Create the local ledger directory.
     Init,
+    /// Create a consistent standalone SQLite snapshot and exact receipt.
+    Backup {
+        /// Existing Kernel ledger database.
+        #[arg(long)]
+        database: PathBuf,
+        /// New standalone SQLite snapshot; must not exist.
+        #[arg(long)]
+        output: PathBuf,
+        /// New JSON receipt file; must not exist.
+        #[arg(long)]
+        receipt: PathBuf,
+    },
+    /// Restore an exact receipt-bound snapshot into quarantine.
+    Restore {
+        /// Standalone SQLite snapshot created by `farm backup`.
+        #[arg(long)]
+        backup: PathBuf,
+        /// Retained JSON receipt from `farm backup`.
+        #[arg(long)]
+        receipt: PathBuf,
+        /// New database path; must not exist.
+        #[arg(long)]
+        destination: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -63,16 +88,26 @@ fn data_dir() -> PathBuf {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Farm {
-            command: FarmCommands::Init,
-        } => {
-            let dir = data_dir();
-            fs::create_dir_all(&dir).map_err(|err| format!("create data dir: {err}"))?;
-            let path = dir.join("ledger.sqlite");
-            SqliteLedger::open(&path).map_err(|err| format!("init ledger: {err}"))?;
-            println!("initialized {}", path.display());
-            Ok(())
-        }
+        Commands::Farm { command } => match command {
+            FarmCommands::Init => {
+                let dir = data_dir();
+                fs::create_dir_all(&dir).map_err(|err| format!("create data dir: {err}"))?;
+                let path = dir.join("ledger.sqlite");
+                SqliteLedger::open(&path).map_err(|err| format!("init ledger: {err}"))?;
+                println!("initialized {}", path.display());
+                Ok(())
+            }
+            FarmCommands::Backup {
+                database,
+                output,
+                receipt,
+            } => maintenance::backup(&database, &output, &receipt),
+            FarmCommands::Restore {
+                backup,
+                receipt,
+                destination,
+            } => maintenance::restore(&backup, &receipt, &destination),
+        },
         Commands::Demo => demo(),
         Commands::DemoSynthetic { target } => demo_synthetic::run(target, data_dir()),
         Commands::Contracts { command } => match command {

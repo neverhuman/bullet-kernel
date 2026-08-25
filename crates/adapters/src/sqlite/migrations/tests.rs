@@ -145,9 +145,9 @@ fn altered_name_and_checksum_are_refused() {
 #[test]
 fn partial_future_and_unrecognized_versions_are_refused() {
     for statement in [
-        "DELETE FROM schema_version WHERE version = 6",
-        "INSERT INTO schema_version VALUES (7, 'future.sql', '00', 'future')",
-        "UPDATE schema_version SET version = 99 WHERE version = 6",
+        "DELETE FROM schema_version WHERE version = 7",
+        "INSERT INTO schema_version VALUES (8, 'future.sql', '00', 'future')",
+        "UPDATE schema_version SET version = 99 WHERE version = 7",
     ] {
         let (_directory, path) = database();
         drop(SqliteLedger::open(&path).unwrap());
@@ -155,6 +155,29 @@ fn partial_future_and_unrecognized_versions_are_refused() {
         conn.execute(statement, []).unwrap();
         drop(conn);
         unsupported(SqliteLedger::open(path));
+    }
+}
+
+#[test]
+fn corrupt_or_pending_restore_state_fails_closed() {
+    for statement in [
+        "UPDATE restore_state SET restore_epoch = 'wrong'",
+        "UPDATE restore_state SET pending_admission = 1, restore_epoch = 1,
+          source_snapshot_digest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          restored_at = '2026-08-25T00:00:00Z'",
+    ] {
+        let (_directory, path) = database();
+        drop(SqliteLedger::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "ignore_check_constraints", "ON")
+            .unwrap();
+        conn.execute(statement, []).unwrap();
+        drop(conn);
+        let error = match SqliteLedger::open(path) {
+            Ok(_) => panic!("corrupt or quarantined restore state opened"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, LedgerError::Store(_) | LedgerError::UnsupportedSchema { .. }));
     }
 }
 

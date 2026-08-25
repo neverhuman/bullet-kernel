@@ -4,4 +4,7 @@ pub mod simulators;
 pub mod sqlite;
 
 pub use simulators::{ProviderSimulator, ScmSimulator};
-pub use sqlite::SqliteLedger;
+pub use sqlite::{
+    create_backup, restore_backup, BackupReceipt, RestoreReceipt, SqliteLedger,
+    SqliteMaintenanceError,
+};

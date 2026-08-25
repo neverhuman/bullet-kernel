@@ -224,6 +224,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "libc",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -235,9 +236,11 @@ dependencies = [
 name = "bullet-adapters"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "bullet-application",
  "bullet-domain",
  "chrono",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

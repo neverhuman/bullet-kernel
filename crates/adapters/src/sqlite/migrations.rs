@@ -3,6 +3,7 @@
 use super::store;
 use bullet_application::LedgerError;
 use bullet_domain::Digest;
+use chrono::DateTime;
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, TransactionBehavior};
 
@@ -52,7 +53,18 @@ const MIGRATIONS: &[Migration] = &[
         name: "0006_command_correlation.sql",
         sql: include_str!("../../../../db/migrations/0006_command_correlation.sql"),
     },
+    Migration {
+        version: 7,
+        name: "0007_restore_epoch.sql",
+        sql: include_str!("../../../../db/migrations/0007_restore_epoch.sql"),
+    },
 ];
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct RestoreState {
+    pub(super) epoch: u64,
+    pub(super) pending_admission: bool,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct Column {
@@ -95,10 +107,7 @@ pub(super) fn enable_foreign_keys(conn: &Connection) -> Result<(), LedgerError> 
 pub(super) fn verify_or_initialize(conn: &mut Connection) -> Result<(), LedgerError> {
     verify_unclaimed_pragmas(conn)?;
     if metadata_table_exists(conn)? {
-        verify_metadata_schema(conn)?;
-        verify_applied_migrations(conn)?;
-        verify_product_schema(conn)?;
-        verify_foreign_key_integrity(conn)
+        verify_existing(conn, false).map(|_| ())
     } else if has_user_schema(conn)? {
         Err(unsupported(
             "database contains schema objects but no checksummed schema_version table",
@@ -106,6 +115,41 @@ pub(super) fn verify_or_initialize(conn: &mut Connection) -> Result<(), LedgerEr
     } else {
         initialize_fresh(conn)
     }
+}
+
+pub(super) fn verify_existing(
+    conn: &Connection,
+    allow_pending_restore: bool,
+) -> Result<RestoreState, LedgerError> {
+    verify_unclaimed_pragmas(conn)?;
+    if !metadata_table_exists(conn)? {
+        return Err(unsupported(
+            "database has no checksummed schema_version authority",
+        ));
+    }
+    verify_metadata_schema(conn)?;
+    verify_applied_migrations(conn)?;
+    verify_product_schema(conn)?;
+    verify_foreign_key_integrity(conn)?;
+    let state = read_restore_state(conn)?;
+    if state.pending_admission && !allow_pending_restore {
+        return Err(store(
+            "RESTORE_ADMISSION_REQUIRED: this physically restored database is quarantined; \
+             no production authority-admission operation exists in V1",
+        ));
+    }
+    Ok(state)
+}
+
+pub(super) fn schema_contract_digest() -> String {
+    let mut bytes = Vec::new();
+    frame(&mut bytes, b"bullet-kernel.sqlite-schema.v1");
+    for migration in MIGRATIONS {
+        frame(&mut bytes, &migration.version.to_le_bytes());
+        frame(&mut bytes, migration.name.as_bytes());
+        frame(&mut bytes, migration_checksum(migration).as_bytes());
+    }
+    Digest::of(&bytes).to_hex()
 }
 
 fn metadata_table_exists(conn: &Connection) -> Result<bool, LedgerError> {
@@ -256,6 +300,62 @@ fn verify_foreign_key_integrity(conn: &Connection) -> Result<(), LedgerError> {
     Ok(())
 }
 
+fn read_restore_state(conn: &Connection) -> Result<RestoreState, LedgerError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT singleton, restore_epoch, pending_admission,
+                    source_snapshot_digest, restored_at
+             FROM restore_state ORDER BY singleton",
+        )
+        .map_err(store)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Value>(0)?,
+                row.get::<_, Value>(1)?,
+                row.get::<_, Value>(2)?,
+                row.get::<_, Value>(3)?,
+                row.get::<_, Value>(4)?,
+            ))
+        })
+        .map_err(store)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(store)?;
+    let [row] = rows.as_slice() else {
+        return Err(unsupported(
+            "restore_state must contain exactly its singleton row",
+        ));
+    };
+    if exact_integer(&row.0, "restore_state.singleton")? != 1 {
+        return Err(unsupported("restore_state singleton is invalid"));
+    }
+    let epoch = exact_integer(&row.1, "restore_state.restore_epoch")?;
+    let pending = exact_integer(&row.2, "restore_state.pending_admission")?;
+    let epoch = u64::try_from(epoch).map_err(|_| unsupported("restore epoch is negative"))?;
+    if !matches!(pending, 0 | 1) {
+        return Err(unsupported("restore pending flag is invalid"));
+    }
+    match (&row.3, &row.4, epoch) {
+        (Value::Null, Value::Null, 0) if pending == 0 => {}
+        (Value::Text(digest), Value::Text(at), value) if value > 0 => {
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(unsupported("restore source digest is not lowercase BLAKE3"));
+            }
+            DateTime::parse_from_rfc3339(at)
+                .map_err(|_| unsupported("restore timestamp is not RFC 3339"))?;
+        }
+        _ => return Err(unsupported("restore_state row is internally inconsistent")),
+    }
+    Ok(RestoreState {
+        epoch,
+        pending_admission: pending == 1,
+    })
+}
+
 fn schema_objects(conn: &Connection) -> Result<Vec<SchemaObject>, LedgerError> {
     let mut statement = conn
         .prepare(
@@ -322,6 +422,13 @@ fn integer(value: &Value, field: &str) -> Result<i64, LedgerError> {
         _ => Err(unsupported(format!(
             "schema_version {field} has the wrong SQLite type"
         ))),
+    }
+}
+
+fn exact_integer(value: &Value, field: &str) -> Result<i64, LedgerError> {
+    match value {
+        Value::Integer(value) => Ok(*value),
+        _ => Err(unsupported(format!("{field} has the wrong SQLite type"))),
     }
 }
 

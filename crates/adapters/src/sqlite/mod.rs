@@ -1,6 +1,7 @@
 //! SQLite WAL ledger, split by table group. Migrations are embedded and
 //! applied in order through a `schema_version` table.
 
+mod backup;
 mod commands;
 mod effects;
 mod events;
@@ -24,6 +25,10 @@ use bullet_domain::{
 use rusqlite::Connection;
 use std::path::Path;
 use std::time::Duration;
+
+pub use backup::{
+    create_backup, restore_backup, BackupReceipt, RestoreReceipt, SqliteMaintenanceError,
+};
 
 struct ReadTransaction<'a> {
     conn: &'a Connection,
