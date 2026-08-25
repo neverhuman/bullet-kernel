@@ -122,6 +122,28 @@ impl LoadedPolicy {
     }
 }
 
+#[cfg(any(test, feature = "test-seams"))]
+impl LoadedPolicy {
+    /// TEST-ONLY seam: construct a validated policy directly from a snapshot,
+    /// bypassing the v1alpha1 loader. The production loader
+    /// ([`LoadedPolicy::from_bytes`]) is unchanged and still rejects any
+    /// snapshot that enables live admission (`UNSAFE_POLICY`); this seam exists
+    /// solely so tests can drive the positive live-conformance path without an
+    /// operator-ratified policy generation. It is compiled only under `test` or
+    /// the `test-seams` feature and is never used by the CLI.
+    ///
+    /// # Errors
+    ///
+    /// `POLICY_INVALID` when the snapshot cannot be canonically encoded.
+    pub fn from_snapshot_for_tests(snapshot: PolicySnapshotV1) -> Result<Self, HarnessError> {
+        let bytes = bullet_harness_core::launch_grant::canonical_json(&snapshot)
+            .map_err(|error| invalid("NON_CANONICAL_POLICY", &error.to_string()))?;
+        let digest = policy_snapshot_digest(&bytes)
+            .map_err(|error| invalid("NON_CANONICAL_POLICY", &error.to_string()))?;
+        Ok(Self { snapshot, digest })
+    }
+}
+
 /// Validate a decoded snapshot with the bullet-wire rules.
 ///
 /// # Errors

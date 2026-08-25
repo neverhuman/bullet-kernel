@@ -12,6 +12,7 @@ pub mod error;
 pub mod event;
 pub mod ids;
 pub mod launch_grant;
+pub mod live;
 pub mod probe;
 pub mod proposal;
 pub mod session;
@@ -43,6 +44,13 @@ pub use launch_grant::{
     verify_launch_grant, LaunchGrantClaims, LaunchGrantExpectation, LaunchGrantNonceLedger,
     LaunchGrantSigningKey, LaunchGrantVerificationKey, LeaseBinding, MemoryNonceLedger,
     NonceConsumption, PolicyBinding, ProviderBinding, SignedLaunchGrant, VerifiedLaunchGrant,
+};
+pub use live::{
+    capture_turn, is_pong, run_interactive, scan_events, CommandFactory, EgressBackend,
+    InteractiveReaction, LineHandler, LiveConformanceReceipt, LiveDispatcher, LiveOutcome,
+    LiveStep, LiveStepRecord, LiveTurnOutcome, LiveTurnRequest, PreparedEgress, RawCapture,
+    StepLog, StepStatus, CONFORMANCE_EXPECTED_RESPONSE, CONFORMANCE_PROMPT,
+    LIVE_CONFORMANCE_SCHEMA_VERSION,
 };
 pub use probe::{ExpectedProfile, ProbeResult, ProfileIdentity, ProfileRef};
 pub use proposal::{ChangeOp, FileChange, PatchProposal};

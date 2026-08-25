@@ -5,6 +5,7 @@
 //! Runtime probe, session creation, dispatch, interruption, and termination
 //! remain blocked until signed executable/profile admission and egress exist.
 
+pub mod dispatch;
 mod parse;
 mod protocol;
 
@@ -146,5 +147,32 @@ impl HarnessAdapter for AntigravityAdapter {
 
     fn events(&self, _session: &SessionHandle) -> HarnessEventStream {
         Box::pin(tokio_stream::empty())
+    }
+}
+
+impl bullet_harness_core::LiveDispatcher for AntigravityAdapter {
+    fn provider(&self) -> &str {
+        PROVIDER
+    }
+
+    fn descriptor(&self) -> HarnessDescriptor {
+        <Self as HarnessAdapter>::descriptor(self)
+    }
+
+    fn observed_runtime_version(&self) -> &str {
+        OBSERVED_AGY_VERSION
+    }
+
+    fn required_protocol(&self) -> bullet_harness_core::ProviderProtocol {
+        bullet_harness_core::ProviderProtocol::AntigravityHeadlessStructured
+    }
+
+    fn dispatch_live_turn(
+        &self,
+        admission: &bullet_harness_core::EvaluatedAdmission,
+        factory: &bullet_harness_core::CommandFactory<'_>,
+        request: &bullet_harness_core::LiveTurnRequest,
+    ) -> Result<bullet_harness_core::LiveTurnOutcome, HarnessError> {
+        dispatch::dispatch_live_turn(admission, factory, request)
     }
 }

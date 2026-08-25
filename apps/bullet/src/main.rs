@@ -5,6 +5,7 @@ mod contracts;
 #[path = "demo_live/mod.rs"]
 mod demo_synthetic;
 mod maintenance;
+mod provider;
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
@@ -44,6 +45,11 @@ enum Commands {
     Authority {
         #[command(subcommand)]
         command: authority::AuthorityCommands,
+    },
+    /// Provider live-conformance: mint, admit, sandbox, and one read-only turn.
+    Provider {
+        #[command(subcommand)]
+        command: provider::ProviderCommands,
     },
 }
 
@@ -91,9 +97,9 @@ fn data_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("./target/demo"))
 }
 
-fn run() -> Result<(), String> {
-    let cli = Cli::parse();
-    match cli.command {
+fn run(command: Commands) -> Result<(), String> {
+    match command {
+        Commands::Provider { .. } => unreachable!("provider is handled in main"),
         Commands::Farm { command } => match command {
             FarmCommands::Init => {
                 let dir = data_dir();
@@ -149,11 +155,15 @@ fn demo() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("bullet: {message}");
-            ExitCode::FAILURE
-        }
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Provider { command } => provider::run(command),
+        other => match run(other) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("bullet: {message}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }

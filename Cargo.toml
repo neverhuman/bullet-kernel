@@ -46,6 +46,7 @@ bullet-harness-claude = { path = "crates/harness-claude" }
 bullet-harness-codex = { path = "crates/harness-codex" }
 bullet-harness-cursor = { path = "crates/harness-cursor" }
 bullet-harness-antigravity = { path = "crates/harness-antigravity" }
+bullet-harness-egress = { path = "crates/harness-egress" }
 bullet-runner-core = { path = "crates/runner" }
 bullet-verifier-core = { path = "crates/verifier" }
 bullet-effects-core = { path = "crates/effects" }

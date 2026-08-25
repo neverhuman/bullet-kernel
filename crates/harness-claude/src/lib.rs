@@ -5,6 +5,7 @@
 //! creation, dispatch, interruption, and termination remain blocked until
 //! signed admission and provider-only egress are implemented.
 
+pub mod dispatch;
 mod parse;
 mod protocol;
 
@@ -148,5 +149,32 @@ impl HarnessAdapter for ClaudeAdapter {
 
     fn events(&self, _session: &SessionHandle) -> HarnessEventStream {
         Box::pin(tokio_stream::empty())
+    }
+}
+
+impl bullet_harness_core::LiveDispatcher for ClaudeAdapter {
+    fn provider(&self) -> &str {
+        PROVIDER
+    }
+
+    fn descriptor(&self) -> HarnessDescriptor {
+        <Self as HarnessAdapter>::descriptor(self)
+    }
+
+    fn observed_runtime_version(&self) -> &str {
+        OBSERVED_CLAUDE_SCHEMA_VERSION
+    }
+
+    fn required_protocol(&self) -> bullet_harness_core::ProviderProtocol {
+        bullet_harness_core::ProviderProtocol::ClaudeStreamJson
+    }
+
+    fn dispatch_live_turn(
+        &self,
+        admission: &bullet_harness_core::EvaluatedAdmission,
+        factory: &bullet_harness_core::CommandFactory<'_>,
+        request: &bullet_harness_core::LiveTurnRequest,
+    ) -> Result<bullet_harness_core::LiveTurnOutcome, HarnessError> {
+        dispatch::dispatch_live_turn(admission, factory, request)
     }
 }

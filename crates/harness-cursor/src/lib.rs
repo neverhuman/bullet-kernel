@@ -5,6 +5,7 @@
 //! pure protocol machine; live use remains blocked until signed admission and
 //! the Bullet typed-proposal ACP extension are independently proved.
 
+pub mod dispatch;
 mod parse;
 mod protocol;
 
@@ -135,5 +136,32 @@ impl HarnessAdapter for CursorAdapter {
 
     fn events(&self, _session: &SessionHandle) -> HarnessEventStream {
         Box::pin(tokio_stream::empty())
+    }
+}
+
+impl bullet_harness_core::LiveDispatcher for CursorAdapter {
+    fn provider(&self) -> &str {
+        PROVIDER
+    }
+
+    fn descriptor(&self) -> HarnessDescriptor {
+        <Self as HarnessAdapter>::descriptor(self)
+    }
+
+    fn observed_runtime_version(&self) -> &str {
+        dispatch::CURSOR_OBSERVED_RUNTIME_VERSION
+    }
+
+    fn required_protocol(&self) -> bullet_harness_core::ProviderProtocol {
+        bullet_harness_core::ProviderProtocol::CursorAcp
+    }
+
+    fn dispatch_live_turn(
+        &self,
+        admission: &bullet_harness_core::EvaluatedAdmission,
+        factory: &bullet_harness_core::CommandFactory<'_>,
+        request: &bullet_harness_core::LiveTurnRequest,
+    ) -> Result<bullet_harness_core::LiveTurnOutcome, HarnessError> {
+        dispatch::dispatch_live_turn(admission, factory, request)
     }
 }

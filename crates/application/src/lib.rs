@@ -10,6 +10,7 @@ pub mod effects;
 pub mod graph_delta;
 pub mod launch_grant;
 pub mod leases;
+pub mod live_conformance;
 pub mod materializer;
 pub mod memory;
 pub mod policy_snapshot;
@@ -29,6 +30,9 @@ pub use launch_grant::{
     LaunchGrantRequest, LedgerLaunchGrantIssuer, StoreNonceLedger, StoredLaunchGrantNonce,
 };
 pub use leases::LeaseService;
+pub use live_conformance::{
+    run_live_conformance, LiveConformanceError, LiveConformanceOptions, LiveConformanceRun,
+};
 pub use materializer::{materialize_plan, PlanInput};
 pub use memory::MemoryLedger;
 pub use policy_snapshot::{load_policy, load_policy_from_environment, LoadedPolicy};

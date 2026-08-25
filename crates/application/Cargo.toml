@@ -8,14 +8,21 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Enables the documented, test-only live-conformance seams (a live-admission
+# policy constructor and a no-op egress backend). Never enabled in production.
+test-seams = []
+
 [dependencies]
 bullet-domain.workspace = true
 bullet-harness-core.workspace = true
+blake3.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+bullet-harness-claude.workspace = true
 proptest.workspace = true
 tempfile.workspace = true

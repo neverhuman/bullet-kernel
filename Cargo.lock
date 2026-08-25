@@ -217,7 +217,12 @@ dependencies = [
  "bullet-application",
  "bullet-domain",
  "bullet-effects-core",
+ "bullet-harness-antigravity",
+ "bullet-harness-claude",
+ "bullet-harness-codex",
  "bullet-harness-core",
+ "bullet-harness-cursor",
+ "bullet-harness-egress",
  "bullet-harness-sim",
  "bullet-runner-core",
  "bullet-verifier-core",
@@ -259,7 +264,9 @@ dependencies = [
 name = "bullet-application"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "bullet-domain",
+ "bullet-harness-claude",
  "bullet-harness-core",
  "chrono",
  "proptest",
