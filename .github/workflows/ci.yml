@@ -3,8 +3,9 @@ name: ci
 # Thin workflow. Every job delegates to ops/ci/<lane>.sh so local runs
 # (scripts/ci-local.sh <lane>, just <lane>) and hosted CI execute the same
 # commands. Required and contract lanes are offline: no live provider, forge,
-# or network mutation. Hosted jobs provision pinned nextest, gitleaks, and
-# cargo-deny tools. Jankurai remains a fail-closed local/release gate and is not
+# or network mutation. Hosted jobs provision pinned nextest, gitleaks,
+# cargo-deny, and zizmor tools; the security lane also clones the RustSec
+# advisory database and refuses a stale one. Jankurai remains a fail-closed local/release gate and is not
 # registered here until a portable pinned distribution exists.
 # Every third-party action is pinned to a full 40-character commit SHA.
 
@@ -98,6 +99,10 @@ jobs:
         with:
           tool: cargo-deny@0.19.8
           fallback: none
+      - uses: taiki-e/install-action@81ee1d48d9194cdcab880cbdc7d36e87d39874cb # v2.62.45
+        with:
+          tool: zizmor@1.25.2
+          fallback: none
       - name: Install gitleaks 8.21.2
         env:
           GITLEAKS_SHA256: 5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
@@ -112,5 +117,5 @@ jobs:
           mkdir -p "$tools"
           tar -xzf "$archive" -C "$tools" gitleaks
           printf '%s\n' "$tools" >> "$GITHUB_PATH"
-      - name: Security (gitleaks + cargo deny bans)
+      - name: Security (gitleaks + cargo-deny licenses/advisories/bans/sources + zizmor)
         run: bash ops/ci/security.sh

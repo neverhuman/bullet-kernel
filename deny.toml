@@ -1,0 +1,125 @@
+# Supply-chain policy for the control-plane workspace, enforced by
+# `ops/ci/security.sh` (`cargo deny --locked check licenses advisories bans
+# sources`) under the pinned cargo-deny 0.19.8 that hosted CI installs.
+#
+# The allow-lists below are derived from this workspace's exact `Cargo.lock`
+# with `cargo deny list -l crate`; they are not aspirational. Every entry names
+# the crate that puts the license in the tree. `cargo-deny` rejects unknown keys
+# and unknown values, so a typo in this file fails the lane instead of silently
+# disabling a check.
+#
+# The dependency graph is deliberately the default one: every target platform is
+# scanned (no `[graph] targets` filter, so the Windows-, macOS- and WASM-only
+# crates in the lock are covered), and dev- and build-dependencies are included.
+# `[graph] all-features` is deliberately NOT set: cargo-deny would have to
+# re-resolve the lockfile, which the `--locked` lanes forbid by design.
+
+[licenses]
+# Permissive OSI licenses that are actually present in this lock. A crate whose
+# expression cannot be satisfied from this list is a hard error; there is no
+# "unlicensed" escape hatch in cargo-deny 0.19.8 (that key was removed), so a
+# crate publishing no license expression also fails.
+#
+# Deliberately absent, and never relied on, although they appear as alternatives
+# in OR expressions here: CC0-1.0 and MIT-0 (blake3, constant_time_eq),
+# Unlicense (memchr), BSL-1.0 (ryu, ryu-js), BSD-1-Clause (fiat-crypto),
+# LGPL-2.1-or-later (r-efi). Each of those crates is accepted through its
+# permissive branch below, never through the copyleft, business-source, or
+# public-domain-dedication branch.
+allow = [
+  # Load-bearing: the only allowed branch for 36 crates, among them axum,
+  # tokio, hyper, tower, tracing, rusqlite, orion, pasetors, and zmij.
+  "MIT",
+  # Load-bearing: every workspace crate (bullet-domain, bullet-farmd, …) is
+  # Apache-2.0 only, and it is the only allowed branch of constant_time_eq
+  # (CC0-1.0 OR MIT-0 OR Apache-2.0), ryu and ryu-js (Apache-2.0 OR BSL-1.0),
+  # and sync_wrapper (Apache-2.0 only).
+  "Apache-2.0",
+  # Present via blake3, rustix, linux-raw-sys, wasi, wasip2, and wit-bindgen,
+  # which offer it alongside plain Apache-2.0 or MIT. Accepted explicitly so the
+  # exception is a reviewed policy decision rather than an accident of which
+  # branch cargo-deny happens to evaluate first.
+  "Apache-2.0 WITH LLVM-exception",
+  # Load-bearing: subtle 2.6.1 is BSD-3-Clause only and matchit 0.8.4 is
+  # "MIT AND BSD-3-Clause", so this is a required conjunct there. Dropping it
+  # rejects both crates.
+  "BSD-3-Clause",
+  # Present via zerocopy 0.8.56 (BSD-2-Clause OR Apache-2.0 OR MIT), which is
+  # currently satisfied by MIT. Accepted explicitly for the same reason as the
+  # LLVM exception above.
+  "BSD-2-Clause",
+  # Present via tinyvec and tinyvec_macros, which offer it alongside MIT and
+  # Apache-2.0. Accepted explicitly for the same reason.
+  "Zlib",
+  # Load-bearing: unicode-ident 1.0.24 is "(MIT OR Apache-2.0) AND Unicode-3.0",
+  # so Unicode-3.0 is a required conjunct, not an alternative. Dropping it
+  # rejects unicode-ident.
+  "Unicode-3.0",
+]
+# Require a near-exact textual match before a license file is credited as a
+# known license; the cargo-deny default of 0.8 accepts looser matches.
+confidence-threshold = 0.9
+# An allowed license that no longer appears is policy drift, not a supply-chain
+# failure: report it so the list is re-derived, without turning an otherwise
+# clean tree red. Every genuine rejection above is an error regardless.
+unused-allowed-license = "warn"
+# Workspace members that are explicitly unpublished need no license review.
+# Inert today because no crate here sets `publish = false`; it keeps the policy
+# correct if one ever does.
+private = { ignore = true }
+# No per-crate exceptions and no clarifications: every crate in this lock
+# satisfies the list above from its own metadata.
+
+[advisories]
+# RustSec advisories are fetched into the workspace's own ignored target
+# directory, so the lane never depends on the ambient CARGO_HOME layout and
+# `ops/ci/security.sh` can prove which database it checked against.
+db-path = "target/advisory-db"
+db-urls = ["https://github.com/RustSec/advisory-db"]
+# No advisory is ignored. An exception belongs here only with the crate, the
+# advisory id, and a written reason, and only after the lane has been red.
+ignore = []
+# An ignore entry that no longer matches anything is stale policy and fails,
+# so exceptions cannot outlive the advisory they were written for.
+unused-ignored-advisory = "deny"
+# A yanked crate version in the lock fails the lane; yank status is read from
+# the crates.io index.
+yanked = "deny"
+# Unmaintained advisories fail for the whole graph, transitive crates included,
+# not only for direct workspace dependencies.
+unmaintained = "all"
+# Fail if the local database is older than this even when a fetch "succeeded".
+# This is a second line of defence only: see `ops/ci/security.sh`, which proves
+# freshness from the database's newest commit, because a failed `git fetch`
+# still rewrites FETCH_HEAD and would leave this check looking satisfied.
+maximum-db-staleness = "P14D"
+# Matches cargo-deny 0.19.8's own default backend, stated here because the lane
+# compensates for a known fail-open in it (a non-zero `git` exit is read as
+# success upstream in src/advisories/helpers/db.rs).
+git-fetch-with-cli = true
+
+[bans]
+# Duplicate versions stay a warning: this workspace has 4 today (getrandom,
+# hashbrown, r-efi, syn), all transitive and none of them this workspace's
+# choice. Making this an error would fail the lane on a graph it does not
+# control; the warning keeps the duplicates visible in every run.
+multiple-versions = "warn"
+# Internal crates are depended on by path without a version requirement, which
+# cargo-deny counts as a wildcard. `allow-wildcard-paths` does not help: it
+# exempts path dependencies only for crates marked `publish = false`, and these
+# are not. Denying wildcards here would therefore fail the lane on 21 internal
+# crates, not on a real supply-chain risk. External requirements are all exact
+# versions in `Cargo.toml`.
+wildcards = "allow"
+# No crate is banned outright and no crate is exempted from the checks above.
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+# Every one of the 174 source entries in this lock is the crates.io registry;
+# there are no git dependencies. Anything else fails the lane.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
