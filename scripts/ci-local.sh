@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+[[ "$(umask)" == "0077" ]] || {
+  printf '[ci] SECURE_UMASK_UNAVAILABLE: expected 0077, found %s\n' "$(umask)" >&2
+  exit 1
+}
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 lane="${1:-all}"
 case "$lane" in

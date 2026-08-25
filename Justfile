@@ -1,7 +1,7 @@
 default:
     @just --list
 
-setup:
+setup: preflight
     rustup component add rustfmt clippy
     cargo fetch --locked
 

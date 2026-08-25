@@ -310,6 +310,9 @@ jobs:
       SECURITY_RESULT: ${{ needs.security.result }}
       DOCS_RESULT: ${{ needs.docs.result }}
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Download atomic observations
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -317,113 +320,7 @@ jobs:
           path: .ci-artifacts/atomic
           merge-multiple: true
       - name: Reject failed, skipped, cancelled, missing, or malformed predecessors
-        run: |
-          set -euo pipefail
-          status=0
-          lanes=(preflight fast lint contract security docs)
-          results=(
-            "$PREFLIGHT_RESULT" "$FAST_RESULT" "$LINT_RESULT"
-            "$CONTRACT_RESULT" "$SECURITY_RESULT" "$DOCS_RESULT"
-          )
-          for index in "${!lanes[@]}"; do
-            lane="${lanes[$index]}"
-            result="${results[$index]}"
-            if [[ "$result" != success ]]; then
-              printf 'required predecessor %s result: %s\n' "$lane" "${result:-missing}" >&2
-              status=1
-            fi
-
-            observation=".ci-artifacts/atomic/observations/$lane.json"
-            if [[ ! -s "$observation" ]]; then
-              printf 'required predecessor %s observation: missing\n' "$lane" >&2
-              status=1
-              continue
-            fi
-            if ! jq -e --arg lane "$lane" --arg commit "$EXPECTED_COMMIT" '
-              .schema_version == "bullet.ci-observation.v1" and
-              .repository == "bullet-kernel" and
-              .commit_oid == $commit and
-              (.tree_oid | test("^[0-9a-f]{40}$")) and
-              .clean == true and
-              (.commands | type == "array" and length == 1 and all(.[]; type == "string" and length > 0)) and
-              (.tool_versions | type == "object") and
-              .outcomes == [{"lane": $lane, "status": "PASS", "exit_code": 0}] and
-              (.artifact_hashes | type == "array") and
-              .signed == false and
-              .evidence_class == "DIAGNOSTIC_ONLY" and
-              (keys | sort) == ([
-                "artifact_hashes", "clean", "commands", "commit_oid",
-                "evidence_class", "outcomes", "repository", "schema_version",
-                "signed", "tool_versions", "tree_oid"
-              ] | sort)
-            ' "$observation" >/dev/null; then
-              printf 'required predecessor %s observation: invalid\n' "$lane" >&2
-              status=1
-              continue
-            fi
-
-            expected_artifact=''
-            case "$lane" in
-              fast) expected_artifact='.ci-artifacts/junit/fast.xml' ;;
-              contract) expected_artifact='.ci-artifacts/junit/contract.xml' ;;
-            esac
-            actual_hashes="$(jq -r '.artifact_hashes | length' "$observation")"
-            expected_hashes=0
-            [[ -z "$expected_artifact" ]] || expected_hashes=1
-            if [[ "$actual_hashes" -ne "$expected_hashes" ]]; then
-              printf 'required predecessor %s artifact count: %s (expected %s)\n' \
-                "$lane" "$actual_hashes" "$expected_hashes" >&2
-              status=1
-              continue
-            fi
-            if [[ -n "$expected_artifact" ]] &&
-               [[ "$(jq -r '.[0].path' "$observation")" != "$expected_artifact" ]]; then
-              printf 'required predecessor %s artifact path: unexpected\n' "$lane" >&2
-              status=1
-              continue
-            fi
-
-            while IFS=$'\t' read -r relative expected_hash; do
-              [[ -n "$relative" ]] || continue
-              case "$relative" in
-                .ci-artifacts/*) ;;
-                *)
-                  printf 'required predecessor %s artifact path: invalid %s\n' "$lane" "$relative" >&2
-                  status=1
-                  continue
-                  ;;
-              esac
-              artifact=".ci-artifacts/atomic/${relative#.ci-artifacts/}"
-              if [[ ! -f "$artifact" ]]; then
-                printf 'required predecessor %s artifact: missing %s\n' "$lane" "$relative" >&2
-                status=1
-                continue
-              fi
-              actual_hash="$(sha256sum "$artifact" | awk '{ print $1 }')"
-              if [[ "$actual_hash" != "$expected_hash" ]]; then
-                printf 'required predecessor %s artifact: hash mismatch %s\n' "$lane" "$relative" >&2
-                status=1
-              fi
-            done < <(jq -r '.artifact_hashes[] | [.path, .sha256] | @tsv' "$observation")
-          done
-
-          expected_files="$(mktemp)"
-          actual_files="$(mktemp)"
-          trap 'rm -f -- "$expected_files" "$actual_files"' EXIT
-          printf '%s\n' \
-            junit/contract.xml \
-            junit/fast.xml \
-            observations/contract.json \
-            observations/docs.json \
-            observations/fast.json \
-            observations/lint.json \
-            observations/preflight.json \
-            observations/security.json \
-            >"$expected_files"
-          find .ci-artifacts/atomic -type f -printf '%P\n' | sort -u >"$actual_files"
-          if ! cmp -s "$expected_files" "$actual_files"; then
-            diff -u "$expected_files" "$actual_files" >&2 || true
-            printf 'required downloaded artifact inventory drifted\n' >&2
-            status=1
-          fi
-          exit "$status"
+        run: >-
+          bash ops/ci/aggregate.sh .ci-artifacts/atomic "$EXPECTED_COMMIT"
+          "$PREFLIGHT_RESULT" "$FAST_RESULT" "$LINT_RESULT"
+          "$CONTRACT_RESULT" "$SECURITY_RESULT" "$DOCS_RESULT"

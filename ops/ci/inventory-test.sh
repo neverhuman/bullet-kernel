@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove that the three nextest filters are non-empty, pairwise disjoint, cover
+# Prove that the four nextest filters are non-empty, pairwise disjoint, cover
 # the complete inventory, retain the reviewed counts, and enumerate every test
 # source that can resolve bullet-gitd.
 set -euo pipefail
@@ -19,11 +19,11 @@ list_matches() {
   local filter="${2:-}"
   local inventory="$test_root/inventory.json"
   if [[ -n "$filter" ]]; then
-    cargo nextest list --locked --workspace --message-format json -E "$filter" >"$inventory"
+    cargo nextest list --locked --workspace --run-ignored all --message-format json -E "$filter" >"$inventory"
   else
-    cargo nextest list --locked --workspace --message-format json >"$inventory"
+    cargo nextest list --locked --workspace --run-ignored all --message-format json >"$inventory"
   fi
-  jq -r '."rust-suites" | to_entries[] | .key as $binary | .value.testcases | to_entries[] | "\($binary)::\(.key)"' \
+  jq -r '."rust-suites" | to_entries[] | .key as $binary | .value.testcases | to_entries[] | select(.value["filter-match"].status == "matches") | "\($binary)::\(.key)"' \
     "$inventory" | sort -u >"$output"
 }
 
@@ -32,23 +32,52 @@ list_ignored_matches() {
   local filter="${2:-}"
   local inventory="$test_root/ignored-inventory.json"
   if [[ -n "$filter" ]]; then
-    cargo nextest list --locked --workspace --message-format json -E "$filter" >"$inventory"
+    cargo nextest list --locked --workspace --run-ignored all --message-format json -E "$filter" >"$inventory"
   else
-    cargo nextest list --locked --workspace --message-format json >"$inventory"
+    cargo nextest list --locked --workspace --run-ignored all --message-format json >"$inventory"
   fi
-  jq -r '."rust-suites" | to_entries[] | .key as $binary | .value.testcases | to_entries[] | select(.value.ignored == true) | "\($binary)::\(.key)"' \
+  jq -r '."rust-suites" | to_entries[] | .key as $binary | .value.testcases | to_entries[] | select(.value["filter-match"].status == "matches" and .value.ignored == true) | "\($binary)::\(.key)"' \
     "$inventory" | sort -u >"$output"
 }
 
 line_count() { awk 'END { print NR + 0 }' "$1"; }
+validate_count() {
+  local name="$1"
+  local actual="$2"
+  local expected="$3"
+  if [[ "$actual" -eq 0 || "$actual" -ne "$expected" ]]; then
+    refuse TEST_PARTITION_DRIFT "$name contains $actual identities; expected $expected"
+    return 1
+  fi
+}
+
 assert_count() {
   local name="$1"
   local path="$2"
   local expected="$3"
-  local actual
-  actual="$(line_count "$path")"
-  if [[ "$actual" -eq 0 || "$actual" -ne "$expected" ]]; then
-    refuse TEST_PARTITION_DRIFT "$name contains $actual identities; expected $expected"
+  validate_count "$name" "$(line_count "$path")" "$expected" || exit 1
+}
+
+expect_count_rejection() {
+  local name="$1"
+  local actual="$2"
+  local expected="$3"
+  local output code
+  set +e
+  output="$(validate_count "$name" "$actual" "$expected" 2>&1)"
+  code=$?
+  set -e
+  if [[ "$code" -ne 1 || "$output" != *TEST_PARTITION_DRIFT* ]]; then
+    refuse TEST_PARTITION_HOSTILE_FAILED "$name code=$code output=$output"
+    exit 1
+  fi
+}
+
+assert_empty() {
+  local name="$1"
+  local path="$2"
+  if [[ -s "$path" ]]; then
+    refuse TEST_PARTITION_DRIFT "$name must contain zero identities"
     exit 1
   fi
 }
@@ -65,37 +94,45 @@ assert_digest() {
   fi
 }
 
+expect_count_rejection inventory-zero 0 "$EXPECTED_TOTAL_TESTS"
+expect_count_rejection inventory-minus-one "$((EXPECTED_TOTAL_TESTS - 1))" "$EXPECTED_TOTAL_TESTS"
+expect_count_rejection inventory-plus-one "$((EXPECTED_TOTAL_TESTS + 1))" "$EXPECTED_TOTAL_TESTS"
+
 list_matches "$test_root/all"
 list_matches "$test_root/standalone" "$STANDALONE_FILTER"
+list_matches "$test_root/egress" "$EGRESS_FILTER"
 list_matches "$test_root/contract" "$CONTRACT_FILTER"
 list_matches "$test_root/family" "$FAMILY_FILTER"
 list_ignored_matches "$test_root/all-ignored"
 list_ignored_matches "$test_root/standalone-ignored" "$STANDALONE_FILTER"
-comm -23 "$test_root/standalone" "$test_root/standalone-ignored" >"$test_root/standalone-executed"
+list_ignored_matches "$test_root/egress-ignored" "$EGRESS_FILTER"
 
 assert_count all "$test_root/all" "$EXPECTED_TOTAL_TESTS"
 assert_count standalone "$test_root/standalone" "$EXPECTED_STANDALONE_TESTS"
-assert_count standalone-executed "$test_root/standalone-executed" "$EXPECTED_STANDALONE_EXECUTED_TESTS"
-assert_count standalone-ignored "$test_root/standalone-ignored" "$EXPECTED_STANDALONE_IGNORED_TESTS"
-assert_count all-ignored "$test_root/all-ignored" "$EXPECTED_STANDALONE_IGNORED_TESTS"
+assert_empty standalone-ignored "$test_root/standalone-ignored"
+assert_count egress "$test_root/egress" "$EXPECTED_EGRESS_TESTS"
+assert_count egress-ignored "$test_root/egress-ignored" "$EXPECTED_EGRESS_TESTS"
+assert_count all-ignored "$test_root/all-ignored" "$EXPECTED_EGRESS_TESTS"
 assert_count contract "$test_root/contract" "$EXPECTED_CONTRACT_TESTS"
 assert_count family "$test_root/family" "$EXPECTED_FAMILY_TESTS"
 assert_digest all "$test_root/all" "$EXPECTED_ALL_IDENTITIES_SHA256"
 assert_digest standalone "$test_root/standalone" "$EXPECTED_STANDALONE_IDENTITIES_SHA256"
+assert_digest egress "$test_root/egress" "$EXPECTED_EGRESS_IDENTITIES_SHA256"
 assert_digest contract "$test_root/contract" "$EXPECTED_CONTRACT_IDENTITIES_SHA256"
 assert_digest family "$test_root/family" "$EXPECTED_FAMILY_IDENTITIES_SHA256"
 
-if [[ $((EXPECTED_STANDALONE_TESTS + EXPECTED_CONTRACT_TESTS + EXPECTED_FAMILY_TESTS)) -ne "$EXPECTED_TOTAL_TESTS" ]]; then
+if [[ $((EXPECTED_STANDALONE_TESTS + EXPECTED_EGRESS_TESTS + EXPECTED_CONTRACT_TESTS + EXPECTED_FAMILY_TESTS)) -ne "$EXPECTED_TOTAL_TESTS" ]]; then
   refuse TEST_PARTITION_DECLARATION_INVALID "declared partition counts do not sum to total"
   exit 1
 fi
 
-if [[ $((EXPECTED_STANDALONE_EXECUTED_TESTS + EXPECTED_STANDALONE_IGNORED_TESTS)) -ne "$EXPECTED_STANDALONE_TESTS" ]]; then
-  refuse TEST_PARTITION_DECLARATION_INVALID "standalone executed and ignored counts do not sum to standalone total"
-  exit 1
-fi
-
-for pair in 'standalone contract' 'standalone family' 'contract family'; do
+for pair in \
+  'standalone egress' \
+  'standalone contract' \
+  'standalone family' \
+  'egress contract' \
+  'egress family' \
+  'contract family'; do
   read -r left right <<<"$pair"
   if [[ -n "$(comm -12 "$test_root/$left" "$test_root/$right")" ]]; then
     refuse TEST_PARTITION_OVERLAP "$left and $right select the same test identity"
@@ -103,7 +140,11 @@ for pair in 'standalone contract' 'standalone family' 'contract family'; do
   fi
 done
 
-sort -u "$test_root/standalone" "$test_root/contract" "$test_root/family" >"$test_root/union"
+sort -u \
+  "$test_root/standalone" \
+  "$test_root/egress" \
+  "$test_root/contract" \
+  "$test_root/family" >"$test_root/union"
 if ! cmp -s "$test_root/all" "$test_root/union"; then
   diff -u "$test_root/all" "$test_root/union" >&2 || true
   refuse TEST_PARTITION_GAP "partition union differs from the complete nextest inventory"
@@ -117,15 +158,38 @@ if ! cmp -s "$test_root/expected-family" "$test_root/family"; then
   exit 1
 fi
 
-
-printf '%s\n' "${STANDALONE_IGNORED_TEST_IDENTITIES[@]}" | sort -u >"$test_root/expected-ignored"
-for actual_ignored in "$test_root/all-ignored" "$test_root/standalone-ignored"; do
-  if ! cmp -s "$test_root/expected-ignored" "$actual_ignored"; then
-    diff -u "$test_root/expected-ignored" "$actual_ignored" >&2 || true
-    refuse IGNORED_TEST_INVENTORY_DRIFT "ignored test identities changed"
+printf '%s\n' "${EGRESS_TEST_IDENTITIES[@]}" | sort -u >"$test_root/expected-egress"
+for actual_egress in "$test_root/egress" "$test_root/egress-ignored" "$test_root/all-ignored"; do
+  if ! cmp -s "$test_root/expected-egress" "$actual_egress"; then
+    diff -u "$test_root/expected-egress" "$actual_egress" >&2 || true
+    refuse EGRESS_TEST_INVENTORY_DRIFT "egress or ignored test identities changed"
     exit 1
   fi
 done
+
+rg -Fxq 'selected="$(partition_count "$EGRESS_FILTER")"' ops/ci/egress.sh \
+  || { refuse EGRESS_PARTITION_COUNT_GUARD_MISSING ops/ci/egress.sh; exit 1; }
+rg -Fxq 'cargo nextest run --locked --workspace --run-ignored all --no-tests fail -E "$EGRESS_FILTER"' \
+  ops/ci/egress.sh \
+  || { refuse EGRESS_EXECUTION_POLICY_MISSING ops/ci/egress.sh; exit 1; }
+mapfile -t ignored_runners < <(
+  rg -l --glob '*.sh' --glob '!inventory-test.sh' -- 'cargo nextest run .*--run-ignored' \
+    ops/ci scripts | sort -u
+)
+if [[ "${#ignored_runners[@]}" -ne 1 ]]; then
+  refuse EGRESS_RUNNER_DRIFT "ignored tests must have exactly one runner; found ${#ignored_runners[@]}"
+  exit 1
+fi
+if [[ "${ignored_runners[0]}" != ops/ci/egress.sh ]]; then
+  refuse EGRESS_RUNNER_DRIFT "ignored tests must run only through ops/ci/egress.sh"
+  exit 1
+fi
+rg -Fxq 'bash ops/ci/inventory-test.sh' ops/ci/lint.sh \
+  || { refuse INVENTORY_REQUIRED_ROUTING_MISSING ops/ci/lint.sh; exit 1; }
+rg -Fxq 'bash ops/ci/lint.sh' ops/ci/required.sh \
+  || { refuse INVENTORY_REQUIRED_ROUTING_MISSING ops/ci/required.sh; exit 1; }
+rg -Fq 'bash scripts/ci-local.sh lint' .github/workflows/ci.yml \
+  || { refuse INVENTORY_HOSTED_ROUTING_MISSING .github/workflows/ci.yml; exit 1; }
 
 
 for standalone_lane in ops/ci/fast.sh ops/ci/contract.sh ops/ci/coverage.sh; do
@@ -135,6 +199,11 @@ done
 deny_sibling_gitd
 [[ "$BULLET_GITD_BIN" == /* && ! -e "$BULLET_GITD_BIN" && ! -L "$BULLET_GITD_BIN" ]] \
   || { refuse SIBLING_GITD_GUARD_INVALID "$BULLET_GITD_BIN"; exit 1; }
+
+family_wrapper="$(<ops/ci/family.sh)"
+[[ "$family_wrapper" == *'BULLET_GITD_SHA256_REQUIRED'* \
+  && "$(grep -Fc 'sha256_file' ops/ci/family.sh)" -eq 2 ]] \
+  || { refuse FAMILY_DAEMON_DIGEST_GUARD_MISSING ops/ci/family.sh; exit 1; }
 
 search_roots=()
 for candidate in apps/*/tests crates/*/tests tests; do
@@ -149,4 +218,4 @@ if ! cmp -s "$test_root/expected-family-sources" "$test_root/actual-family-sourc
   exit 1
 fi
 
-log "inventory passed: 545 total = 502 standalone (499 executed + 3 ignored) + 34 contract + 9 family"
+log "inventory passed: 549 total = 503 standalone + 3 egress + 34 contract + 9 family; fast has zero ignored tests"

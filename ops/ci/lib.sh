@@ -115,8 +115,11 @@ partition_count() {
   local filter="$1"
   require_tool cargo-nextest || return 1
   require_tool jq || return 1
-  cargo nextest list --locked --workspace --message-format json -E "$filter" \
-    | jq -er '."test-count"'
+  cargo nextest list --locked --workspace --run-ignored all --message-format json -E "$filter" \
+    | jq -er '[
+        ."rust-suites" | to_entries[] | .value.testcases | to_entries[] |
+        select(.value["filter-match"].status == "matches")
+      ] | length'
 }
 
 sanitize_junit() {

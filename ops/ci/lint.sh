@@ -20,6 +20,8 @@ mapfile -t shell_files < <(rg --files -g '*.sh' | sort)
 [[ "${#shell_files[@]}" -gt 0 ]] || { refuse SHELL_INVENTORY_EMPTY "no shell files found"; exit 1; }
 shellcheck -x -P ops/ci "${shell_files[@]}"
 bash ops/ci/workflow-policy.sh
+bash ops/ci/required-test.sh
+bash ops/ci/aggregate-test.sh
 bash ops/ci/inventory-test.sh
 bash ops/ci/junit-test.sh
 bash ops/ci/observation-test.sh

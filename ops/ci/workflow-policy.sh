@@ -26,6 +26,7 @@ while IFS= read -r use_line; do
   fi
 done < <(rg '^[[:space:]]*-[[:space:]]+uses:[[:space:]]+' "${existing_workflows[@]}")
 
+literal_dollar='$'
 required_patterns=(
   '^name: CI$'
   '^  pull_request:'
@@ -39,13 +40,10 @@ required_patterns=(
   'needs: \[preflight, fast, lint, contract, security, docs\]'
   'uses: actions/download-artifact@[0-9a-f]{40}'
   'pattern: kernel-\*-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}'
-  "observation=\"\.ci-artifacts/atomic/observations/\\\$lane\.json\""
-  "\.commit_oid == \\\$commit"
-  "\.outcomes == \[\{\"lane\": \\\$lane, \"status\": \"PASS\", \"exit_code\": 0\}\]"
-  "sha256sum \"\\\$artifact\""
-  'junit/contract\.xml'
-  'observations/security\.json'
-  'find \.ci-artifacts/atomic -type f'
+  'bash ops/ci/aggregate\.sh'
+  "\"\\${literal_dollar}EXPECTED_COMMIT\""
+  "\"\\${literal_dollar}PREFLIGHT_RESULT\""
+  "\"\\${literal_dollar}DOCS_RESULT\""
 )
 for pattern in "${required_patterns[@]}"; do
   rg -q "$pattern" .github/workflows/ci.yml \
@@ -71,15 +69,48 @@ noncancelled_lane_count="$(rg -c '^[[:space:]]{8}if:.*!cancelled\(\)' "${existin
 [[ "$lane_step_count" -eq "$noncancelled_lane_count" && "$lane_step_count" -gt 0 ]] \
   || { refuse LANE_SETUP_FAILURE_POLICY "every lane command must run after setup failure unless cancelled"; exit 1; }
 
-[[ "$(rg -c '^\[\[job\]\]$' ci.toml)" -eq 5 ]] \
-  || { refuse JERYU_JOB_INVENTORY_DRIFT "ci.toml must contain exactly five atomic jobs"; exit 1; }
-for lane in fast lint contract security docs; do
-  rg -Fq "run = [\"bash scripts/ci-local.sh $lane\"]" ci.toml \
-    || { refuse JERYU_COMMAND_DRIFT "$lane does not invoke its local lane script"; exit 1; }
+toml_job_block() {
+  local job="$1"
+  awk -v target="id = \"$job\"" '
+    $0 == "[[job]]" { if (found) { exit }; block=$0 ORS; next }
+    { block=block $0 ORS; if ($0 == target) { found=1 } }
+    END { if (found) { printf "%s", block } }
+  ' ci.toml
+}
+
+[[ "$(rg -c '^\[\[job\]\]$' ci.toml)" -eq 8 ]] \
+  || { refuse JERYU_JOB_INVENTORY_DRIFT "ci.toml must contain eight prepared jobs"; exit 1; }
+[[ "$(rg -c '^cache_mounts = \[\]$' ci.toml)" -eq 8 ]] \
+  || { refuse JERYU_CACHE_POLICY_DRIFT "all prepared jobs must be cache-free"; exit 1; }
+for job in activation preflight fast lint contract security docs required; do
+  block="$(toml_job_block "$job")"
+  [[ -n "$block" ]] || { refuse JERYU_JOB_MISSING "$job"; exit 1; }
+  [[ "$block" == *'run = ["bash ops/ci/jeryu-activation-gate.sh"'* ]] \
+    || { refuse JERYU_ACTIVATION_GATE_MISSING "$job"; exit 1; }
 done
-if rg -n 'cache_mounts|path = "\.\./' ci.toml; then
-  refuse JERYU_POLICY_VIOLATION "explicit caches and sibling path dependencies are forbidden"
+preflight_block="$(toml_job_block preflight)"
+[[ "$preflight_block" == *'needs = ["activation"]'* &&
+   "$preflight_block" == *'"bash scripts/ci-local.sh preflight"'* ]] \
+  || { refuse JERYU_SOURCE_ADMISSION_INVALID "preflight"; exit 1; }
+for lane in fast lint contract security docs; do
+  block="$(toml_job_block "$lane")"
+  [[ "$block" == *'needs = ["preflight"]'* &&
+     "$block" == *"\"bash scripts/ci-local.sh $lane\""* ]] \
+    || { refuse JERYU_COMMAND_DRIFT "$lane"; exit 1; }
+done
+required_block="$(toml_job_block required)"
+[[ "$required_block" == *'needs = ["preflight", "fast", "lint", "contract", "security", "docs"]'* ]] \
+  || { refuse JERYU_REQUIRED_CONVERGENCE_INVALID "required"; exit 1; }
+if rg -n 'path = "\.\./|artifact_paths = \["\.ci-artifacts"\]' ci.toml; then
+  refuse JERYU_POLICY_VIOLATION "sibling paths and broad artifact roots are forbidden"
   exit 1
 fi
+
+set +e
+jeryu_refusal="$(bash ops/ci/jeryu-activation-gate.sh 2>&1)"
+jeryu_code=$?
+set -e
+[[ "$jeryu_code" -eq 78 && "$jeryu_refusal" == *'JERYU_CI_NOT_RATIFIED'* ]] \
+  || { refuse JERYU_ACTIVATION_REFUSAL_INVALID "code=$jeryu_code"; exit 1; }
 
 log "workflow policy passed"
