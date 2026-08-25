@@ -21,7 +21,6 @@ use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::time::Duration;
@@ -97,17 +96,45 @@ fn wait_for(path: &Path, tries: u32) -> Result<(), String> {
     Err(fail(format!("timed out waiting for {}", path.display())))
 }
 
-fn free_port() -> Result<u16, String> {
-    Ok(TcpListener::bind("127.0.0.1:0")
-        .map_err(|err| fail(err.to_string()))?
-        .local_addr()
-        .map_err(|err| fail(err.to_string()))?
-        .port())
+struct FarmdGuard(Option<Child>);
+
+impl FarmdGuard {
+    fn new(child: Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn stop(mut self) -> Result<(), String> {
+        stop_child(self.0.take().expect("farmd child is owned"))
+    }
 }
 
-fn wait_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+impl Drop for FarmdGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.take() {
+            let _ = stop_child(child);
+        }
+    }
+}
+
+fn stop_child(mut child: Child) -> Result<(), String> {
+    let kill_error = if child
+        .try_wait()
+        .map_err(|err| fail(format!("inspect farmd: {err}")))?
+        .is_none()
+    {
+        child.kill().err()
+    } else {
+        None
+    };
+    match child.wait() {
+        Ok(_) => Ok(()),
+        Err(wait_error) => match kill_error {
+            Some(kill_error) => Err(fail(format!(
+                "kill farmd: {kill_error}; wait for farmd: {wait_error}"
+            ))),
+            None => Err(fail(format!("wait for farmd: {wait_error}"))),
+        },
+    }
 }
 
 fn sh(dir: &Path, script: &str) -> Result<(), String> {
@@ -144,7 +171,7 @@ fn init_source(root: &Path) -> Result<(PathBuf, String), String> {
     Ok((src, format!("sha1:{hex}")))
 }
 
-fn spawn_farmd(data: &Path, socket: &Path, port: u16) -> Result<Child, String> {
+fn spawn_farmd(data: &Path, socket: &Path) -> Result<FarmdGuard, String> {
     let bin = kernel_bin("bullet-farmd");
     if !bin.is_file() {
         return Err(fail(format!(
@@ -152,18 +179,19 @@ fn spawn_farmd(data: &Path, socket: &Path, port: u16) -> Result<Child, String> {
             bin.display()
         )));
     }
-    Command::new(bin)
+    let child = Command::new(bin)
         .arg("--data-dir")
         .arg(data)
         .arg("--bind")
-        .arg(format!("127.0.0.1:{port}"))
+        .arg("127.0.0.1:0")
         .arg("--lease-transport-socket")
         .arg(socket)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|err| fail(format!("spawn farmd: {err}")))
+        .map_err(|err| fail(format!("spawn farmd: {err}")))?;
+    Ok(FarmdGuard::new(child))
 }
 
 fn run_verifier(
@@ -228,8 +256,11 @@ fn content_id(label: &str) -> String {
 }
 
 async fn run() -> Result<(), String> {
-    let pid = std::process::id();
-    let scratch = private_dir(&PathBuf::from(format!("/tmp/bullet-txn-{pid}")))?;
+    let scratch_guard = tempfile::Builder::new()
+        .prefix("bullet-txn.")
+        .tempdir()
+        .map_err(|err| fail(format!("create private scratch: {err}")))?;
+    let scratch = private_dir(scratch_guard.path())?;
     let data = match std::env::var_os("BULLET_DATA_DIR") {
         Some(path) => private_dir(&PathBuf::from(path))?,
         None => private_dir(&scratch.join("data"))?,
@@ -268,12 +299,8 @@ async fn run() -> Result<(), String> {
     drop(ledger);
 
     let socket = data.join("lease-transport.sock");
-    let port = free_port()?;
-    let mut farmd = spawn_farmd(&data, &socket, port)?;
-    if let Err(error) = wait_for(&socket, 80) {
-        wait_child(&mut farmd);
-        return Err(error);
-    }
+    let farmd = spawn_farmd(&data, &socket)?;
+    wait_for(&socket, 80)?;
 
     let runner = RunnerId::from_seed("txn-demo-runner");
     let client = SignedLeaseRpcClient::new(socket, runner.clone(), 1);
@@ -288,13 +315,9 @@ async fn run() -> Result<(), String> {
         .await
     {
         Ok(grant) => grant,
-        Err(error) => {
-            wait_child(&mut farmd);
-            return Err(fail(error.to_string()));
-        }
+        Err(error) => return Err(fail(error.to_string())),
     };
     if first.attempt.fence != 1 {
-        wait_child(&mut farmd);
         return Err(fail(format!(
             "first fence was {}, expected 1",
             first.attempt.fence
@@ -303,7 +326,6 @@ async fn run() -> Result<(), String> {
 
     let fixture_bin = gitd_fixture_binary();
     if !fixture_bin.is_file() {
-        wait_child(&mut farmd);
         return Err(fail(format!(
             "bullet-gitd-fixture missing at {} (build --features fixture-authority)",
             fixture_bin.display()
@@ -311,24 +333,15 @@ async fn run() -> Result<(), String> {
     }
     let (source, base) = match init_source(&scratch) {
         Ok(source) => source,
-        Err(error) => {
-            wait_child(&mut farmd);
-            return Err(error);
-        }
+        Err(error) => return Err(error),
     };
     let fixture_root = match private_dir(&scratch.join("farm")) {
         Ok(root) => root,
-        Err(error) => {
-            wait_child(&mut farmd);
-            return Err(error);
-        }
+        Err(error) => return Err(error),
     };
     let token = match serde_json::to_value(&first.authority_token) {
         Ok(token) => token,
-        Err(error) => {
-            wait_child(&mut farmd);
-            return Err(fail(error.to_string()));
-        }
+        Err(error) => return Err(fail(error.to_string())),
     };
     let permit = mint_fixture_permit(FixturePermitClaims {
         schema_version: "v1".into(),
@@ -342,7 +355,6 @@ async fn run() -> Result<(), String> {
         &permit_path,
         serde_json::to_vec(&permit).map_err(|err| fail(err.to_string()))?,
     ) {
-        wait_child(&mut farmd);
         return Err(fail(error.to_string()));
     }
     let mut gitd = match GitdSession::spawn_with(
@@ -360,10 +372,7 @@ async fn run() -> Result<(), String> {
     .await
     {
         Ok(session) => session,
-        Err(error) => {
-            wait_child(&mut farmd);
-            return Err(fail(error.to_string()));
-        }
+        Err(error) => return Err(fail(error.to_string())),
     };
 
     let workspace = match gitd
@@ -373,7 +382,6 @@ async fn run() -> Result<(), String> {
         Ok(workspace) => workspace,
         Err(error) => {
             let _ = gitd.kill().await;
-            wait_child(&mut farmd);
             return Err(fail(error.to_string()));
         }
     };
@@ -403,7 +411,6 @@ async fn run() -> Result<(), String> {
         Ok(applied) => applied,
         Err(error) => {
             let _ = gitd.kill().await;
-            wait_child(&mut farmd);
             return Err(fail(error.to_string()));
         }
     };
@@ -444,7 +451,6 @@ async fn run() -> Result<(), String> {
         Ok(prepare) => prepare,
         Err(error) => {
             let _ = gitd.kill().await;
-            wait_child(&mut farmd);
             return Err(fail(format!("prepare_candidate: {error}")));
         }
     };
@@ -555,7 +561,6 @@ async fn run() -> Result<(), String> {
     .map_err(|err| fail(err.to_string()))?;
     if unknown != bullet_application::EffectState::OutcomeUnknown {
         let _ = gitd.kill().await;
-        wait_child(&mut farmd);
         return Err(fail(format!("lost response was {unknown:?}, not UNKNOWN")));
     }
     let adopted = reconcile(
@@ -569,7 +574,6 @@ async fn run() -> Result<(), String> {
     .map_err(|err| fail(err.to_string()))?;
     if adopted != ReconcileOutcome::Adopted {
         let _ = gitd.kill().await;
-        wait_child(&mut farmd);
         return Err(fail(format!("expected Adopted, got {adopted:?}")));
     }
     let settled = effects
@@ -581,7 +585,6 @@ async fn run() -> Result<(), String> {
     let preserve_to = scratch.join("preserve");
     if let Err(error) = gitd.preserve(&preserve_to).await {
         let _ = gitd.kill().await;
-        wait_child(&mut farmd);
         return Err(fail(format!("preserve: {error}")));
     }
     gitd.kill().await.map_err(|err| fail(err.to_string()))?;
@@ -594,7 +597,6 @@ async fn run() -> Result<(), String> {
         })
         .await
     {
-        wait_child(&mut farmd);
         return Err(fail(error.to_string()));
     }
     let second = match client
@@ -608,13 +610,9 @@ async fn run() -> Result<(), String> {
         .await
     {
         Ok(grant) => grant,
-        Err(error) => {
-            wait_child(&mut farmd);
-            return Err(fail(error.to_string()));
-        }
+        Err(error) => return Err(fail(error.to_string())),
     };
     if second.attempt.fence != 2 {
-        wait_child(&mut farmd);
         return Err(fail(format!(
             "successor fence was {}, expected 2",
             second.attempt.fence
@@ -633,11 +631,9 @@ async fn run() -> Result<(), String> {
         .await;
     let stale_refused = stale.is_err();
     if !stale_refused {
-        wait_child(&mut farmd);
         return Err(fail("stale fence heartbeat was accepted"));
     }
     if !writer_proof_refused {
-        wait_child(&mut farmd);
         return Err(fail(format!("writer proof was not refused: {writer_body}")));
     }
 
@@ -670,7 +666,10 @@ async fn run() -> Result<(), String> {
     fs::write(&proof_path, &proof_json).map_err(|err| fail(err.to_string()))?;
     println!("{proof_json}");
     println!("COMPONENT_PROOF: {}", proof_path.display());
-    wait_child(&mut farmd);
+    farmd.stop()?;
+    scratch_guard
+        .close()
+        .map_err(|err| fail(format!("remove private scratch: {err}")))?;
     Ok(())
 }
 

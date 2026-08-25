@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
+const TRANSACTION_DEMO_SOURCE: &str = include_str!("../src/bin/transaction_demo.rs");
+
 fn subject() -> TransactionComponentSubject {
     TransactionComponentSubject {
         schema_version: TRANSACTION_COMPONENT_SCHEMA_VERSION.into(),
@@ -39,6 +41,14 @@ fn signed_transaction_component_roundtrip() {
         TransactionComponentSigningKey::generate("kernel-demo", "txn-component-1").expect("key");
     let proof = key.sign(&subject()).expect("sign");
     verify_transaction_component(&proof).expect("verify");
+
+    assert!(TRANSACTION_DEMO_SOURCE.contains("tempfile::Builder::new()"));
+    assert!(TRANSACTION_DEMO_SOURCE.contains(".prefix(\"bullet-txn.\")"));
+    assert!(!TRANSACTION_DEMO_SOURCE.contains("std::process::id()"));
+    assert!(!TRANSACTION_DEMO_SOURCE.contains("fn free_port("));
+    assert!(TRANSACTION_DEMO_SOURCE.contains(".arg(\"127.0.0.1:0\")"));
+    assert!(TRANSACTION_DEMO_SOURCE.contains("impl Drop for FarmdGuard"));
+    assert!(TRANSACTION_DEMO_SOURCE.contains("farmd.stop()?"));
 }
 
 #[test]
