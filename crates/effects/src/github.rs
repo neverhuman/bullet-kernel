@@ -1,5 +1,4 @@
-//! Quarantined Jeryu boundary scaffold. Wave 0 permits no credential lookup,
-//! network probe, or forge mutation until signed admission exists.
+//! GitHub App adapter. Live dispatch stays refused until OD-C.
 
 use crate::error::EffectsError;
 use crate::forge::{require_candidate_ref, ForgeDescriptor, ForgeEffects, PushRequest};
@@ -8,41 +7,34 @@ use crate::integration::{
     IntegrationSubject, IntegrationSubjectRequest, MergeGroupSubject, ProtectionState,
 };
 
-/// Default Jeryu base URL from ADR 0002.
-pub const JERYU_BASE_URL: &str = "http://127.0.0.1:8787";
-/// Provider label for intents targeting Jeryu.
-pub const JERYU_PROVIDER: &str = "jeryu";
-/// Forge adapter placeholder. Construction performs no credential or network
-/// access, and every operation is unconditionally refused.
-pub struct JeryuForge {
-    base_url: String,
-}
+/// Provider label.
+pub const GITHUB_PROVIDER: &str = "github";
 
-impl JeryuForge {
-    /// Construct the quarantined boundary without reading environment, HOME,
-    /// credential stores, or the network.
+/// Quarantined GitHub App boundary. Construction performs no network I/O.
+#[derive(Clone, Debug, Default)]
+pub struct GitHubForge;
+
+impl GitHubForge {
+    /// Construct without reading credentials or the network.
     #[must_use]
-    pub fn quarantined(base_url: &str) -> Self {
-        Self {
-            base_url: base_url.to_string(),
-        }
+    pub const fn quarantined() -> Self {
+        Self
     }
 
     fn refuse(&self, method: &str) -> EffectsError {
         EffectsError::LiveAdmissionUnavailable(format!(
-            "{method} against {} is quarantined until signed admission is implemented",
-            self.base_url
+            "{method} against GitHub is quarantined until a ratified App test repository exists"
         ))
     }
 }
 
-impl ForgeEffects for JeryuForge {
+impl ForgeEffects for GitHubForge {
     fn descriptor(&self) -> ForgeDescriptor {
         ForgeDescriptor {
-            provider: JERYU_PROVIDER.into(),
+            provider: GITHUB_PROVIDER.into(),
             authenticated: false,
             can_push_candidate_ref: false,
-            notes: "Wave-0 quarantine: credential and network access unavailable".into(),
+            notes: "github-adapter-v1: App credentials and live effect are operator-blocked".into(),
         }
     }
 
@@ -57,17 +49,19 @@ impl ForgeEffects for JeryuForge {
     }
 }
 
-impl ForgeIntegration for JeryuForge {
+impl ForgeIntegration for GitHubForge {
     fn integration_descriptor(&self) -> IntegrationDescriptor {
         IntegrationDescriptor {
-            exact_oid_cas: Capability::Supported,
-            protected_refs: Capability::Supported,
-            check_runs: Capability::SupportedWithLimitations(
-                "PATCH check-runs and proof_root are Jeryu-family work",
+            exact_oid_cas: Capability::SupportedWithLimitations("client-side --force-with-lease"),
+            protected_refs: Capability::SupportedWithLimitations(
+                "rulesets cannot bind a proof root",
             ),
-            merge_group: Capability::Unsupported,
+            check_runs: Capability::SupportedWithLimitations(
+                "proof root is transported in check output only",
+            ),
+            merge_group: Capability::SupportedWithLimitations("composed SHA is opaque"),
             exact_oid_readback: Capability::Supported,
-            third_party_credential: Capability::Unsupported,
+            third_party_credential: Capability::Supported,
         }
     }
 
@@ -94,8 +88,8 @@ impl ForgeIntegration for JeryuForge {
         &self,
         _subject: &IntegrationSubject,
     ) -> Result<Option<MergeGroupSubject>, EffectsError> {
-        Err(EffectsError::UnsupportedByAdapter(
-            "Jeryu has no merge queue today".into(),
+        Err(EffectsError::MergeGroupOpaque(
+            "GitHub merge queue does not disclose the composed SHA".into(),
         ))
     }
 

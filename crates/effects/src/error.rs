@@ -54,6 +54,24 @@ pub enum EffectsError {
     /// Ledger failure (typed pass-through).
     #[error(transparent)]
     Ledger(#[from] LedgerError),
+    /// Adapter structurally cannot perform the operation.
+    #[error("unsupported by adapter: {0}")]
+    UnsupportedByAdapter(String),
+    /// Observed protection does not match the authorized policy.
+    #[error("protection mismatch: {0}")]
+    ProtectionMismatch(String),
+    /// Read-back check names a different SHA or proof root.
+    #[error("check subject mismatch: {0}")]
+    CheckSubjectMismatch(String),
+    /// More than one open subject matches (base, head, target).
+    #[error("integration subject ambiguous: {0}")]
+    IntegrationSubjectAmbiguous(String),
+    /// Adapter has a merge queue but will not disclose the composed SHA.
+    #[error("merge group opaque: {0}")]
+    MergeGroupOpaque(String),
+    /// Target could not be read after integration.
+    #[error("target read-back unavailable: {0}")]
+    TargetReadbackUnavailable(String),
 }
 
 impl EffectsError {
@@ -73,6 +91,12 @@ impl EffectsError {
             Self::IllegalPhase { .. } => "ILLEGAL_EFFECT_PHASE",
             Self::RetryWithoutReconcile(_) => "RETRY_WITHOUT_RECONCILE",
             Self::Ledger(err) => err.reason_code(),
+            Self::UnsupportedByAdapter(_) => "UNSUPPORTED_BY_ADAPTER",
+            Self::ProtectionMismatch(_) => "PROTECTION_MISMATCH",
+            Self::CheckSubjectMismatch(_) => "CHECK_SUBJECT_MISMATCH",
+            Self::IntegrationSubjectAmbiguous(_) => "INTEGRATION_SUBJECT_AMBIGUOUS",
+            Self::MergeGroupOpaque(_) => "MERGE_GROUP_OPAQUE",
+            Self::TargetReadbackUnavailable(_) => "TARGET_READBACK_UNAVAILABLE",
         }
     }
 }

@@ -7,6 +7,9 @@ pub mod broker;
 pub mod error;
 pub mod forge;
 pub mod git_env;
+pub mod github;
+pub mod gitlab;
+pub mod integration;
 pub mod jeryu;
 pub mod local;
 pub mod lost;
@@ -19,6 +22,13 @@ pub use error::EffectsError;
 pub use forge::{
     is_create, require_candidate_ref, require_oid, ForgeDescriptor, ForgeEffects, PushRequest,
     CANDIDATE_REF_PREFIX,
+};
+pub use github::{GitHubForge, GITHUB_PROVIDER};
+pub use gitlab::{GitLabForge, GITLAB_PROVIDER};
+pub use integration::{
+    require_probed, Capability, CheckPublication, CheckReceipt, ForgeIntegration,
+    IntegrationDescriptor, IntegrationSubject, IntegrationSubjectRequest, MergeGroupSubject,
+    ProtectionState,
 };
 pub use jeryu::{JeryuForge, JERYU_BASE_URL, JERYU_PROVIDER};
 pub use local::{LocalBareForge, LOCAL_PROVIDER};
