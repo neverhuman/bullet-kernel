@@ -16,12 +16,21 @@ use std::time::Duration;
 const SESSION: &str = "kernel-session-1";
 const INVOCATION: &str = "kernel-invocation-1";
 const CWD: &str = "/private/readonly";
-const GATE: &str = "repo.gate.v1";
+const GATE: &str = "gat_8888888888888888888888888888888888888888888888888888888888888888";
 
 fn proposal() -> Value {
     json!({
+        "schema_version": 1,
+        "proposal_id": format!("cnt_{}", "1".repeat(64)),
+        "producing_attempt_id": format!("atm_{}", "2".repeat(64)),
+        "base_checkpoint_id": format!("ckp_{}", "3".repeat(64)),
+        "base_checkpoint_digest": "4".repeat(64),
         "intent_summary": "write fixture",
-        "changes": [{"path": "PONG.txt", "op": "create", "contents": "PONG\n"}],
+        "operations": [{
+            "path": "PONG.txt",
+            "preimage": {"kind": "absent"},
+            "mutation": {"kind": "write", "content_utf8": "PONG\n"}
+        }],
         "gate_ids": [GATE],
         "claims": [],
         "uncertainties": [],
@@ -315,8 +324,8 @@ fn free_text_smuggling_gate_mutation_unknown_fields_and_replay_fail_closed() {
         }))
         .expect("JSON"),
         result_line(proposal()).replacen(
-            r#""gate_ids":["repo.gate.v1"]"#,
-            r#""gate_ids":["different.gate"],"gate_ids":["repo.gate.v1"]"#,
+            r#""gate_ids":["gat_8888888888888888888888888888888888888888888888888888888888888888"]"#,
+            r#""gate_ids":["gat_7777777777777777777777777777777777777777777777777777777777777777"],"gate_ids":["gat_8888888888888888888888888888888888888888888888888888888888888888"]"#,
             1,
         ),
         result_line(wrong_gates),

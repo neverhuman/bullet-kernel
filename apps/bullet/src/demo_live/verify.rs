@@ -197,7 +197,7 @@ mod tests {
     fn record_frame() -> Vec<u8> {
         let mut raw = serde_json::json!({
             "tier": "E2",
-            "gate_id": "repo.gate.v1",
+            "gate_id": bullet_domain::REPOSITORY_GATE_ID,
             "outcome": "PASS",
             "reason": null,
             "detail": null,

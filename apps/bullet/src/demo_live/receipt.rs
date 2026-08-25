@@ -298,7 +298,7 @@ mod tests {
             }),
             gate: Some(GateOut {
                 writer_outcome: "PASS".into(),
-                gate_ids: vec!["repo.gate.v1".into()],
+                gate_ids: vec![bullet_domain::REPOSITORY_GATE_ID.into()],
                 argv: vec![vec![
                     "/usr/bin/grep".into(),
                     "-qx".into(),

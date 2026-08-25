@@ -2,10 +2,10 @@ use bullet_domain::{Observation, ProfileId};
 use bullet_harness_core::{
     descriptor_digest, executable_digest, AdmissionBlocker, AgentEvent, AgentEventKind,
     AgentSessionId, ArgvBuilder, CanarySecrets, Capability, CapabilityMatrix, CapabilityState,
-    ChangeOp, ConformanceEvidence, CredentialGrant, EventNormalizer, ExpectedProfile, FileChange,
-    HarnessDescriptor, NativeMeta, PatchProposal, ProbeResult, ProfileIdentity, ProfileRef,
-    PromotionStage, ProviderAdmission, ProviderAdmissionPolicy, ProviderProtocol,
-    RuntimeProbeSnapshot,
+    ConformanceEvidence, CredentialGrant, EventNormalizer, ExpectedProfile, HarnessDescriptor,
+    NativeMeta, PatchMutation, PatchOperation, PatchProposal, Preimage, ProbeResult,
+    ProfileIdentity, ProfileRef, PromotionStage, ProviderAdmission, ProviderAdmissionPolicy,
+    ProviderProtocol, RuntimeProbeSnapshot,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::json;
@@ -146,13 +146,20 @@ fn hostile_environment() -> Vec<(String, String)> {
 
 fn proposal(contents: &str) -> PatchProposal {
     PatchProposal {
+        schema_version: 1,
+        proposal_id: format!("cnt_{}", "1".repeat(64)),
+        producing_attempt_id: format!("atm_{}", "2".repeat(64)),
+        base_checkpoint_id: format!("ckp_{}", "3".repeat(64)),
+        base_checkpoint_digest: "4".repeat(64),
         intent_summary: "write an offline fixture".into(),
-        changes: vec![FileChange {
+        operations: vec![PatchOperation {
             path: "PONG.txt".into(),
-            op: ChangeOp::Create,
-            contents: Some(contents.into()),
+            preimage: Preimage::Absent,
+            mutation: PatchMutation::Write {
+                content_utf8: contents.into(),
+            },
         }],
-        gate_ids: vec!["repo.gate.v1".into()],
+        gate_ids: vec![bullet_domain::REPOSITORY_GATE_ID.into()],
         claims: vec![],
         uncertainties: vec![],
         done: true,
@@ -366,7 +373,9 @@ fn canaries_are_refused_on_every_captured_or_accepted_surface() {
                 (b"".as_slice(), b"".as_slice())
             }
             "accepted_patch" => {
-                patch.changes[0].contents = Some(CANARY.into());
+                patch.operations[0].mutation = PatchMutation::Write {
+                    content_utf8: CANARY.into(),
+                };
                 (b"".as_slice(), b"".as_slice())
             }
             _ => unreachable!(),

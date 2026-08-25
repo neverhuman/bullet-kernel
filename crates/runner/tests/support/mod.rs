@@ -80,10 +80,27 @@ pub fn seeded_ledger(seed: &str) -> (Arc<Mutex<MemoryLedger>>, WorkPackageId) {
 
 /// A complete done=true proposal wrapping the given change entries.
 pub fn proposal_with_changes(intent: &str, changes: Value) -> Value {
+    let operations = changes
+        .as_array()
+        .expect("test changes")
+        .iter()
+        .map(|change| {
+            serde_json::json!({
+                "path": change["path"],
+                "preimage": {"kind": "absent"},
+                "mutation": {"kind": "write", "content_utf8": change["contents"]}
+            })
+        })
+        .collect::<Vec<_>>();
     serde_json::json!({
+        "schema_version": 1,
+        "proposal_id": format!("cnt_{}", "1".repeat(64)),
+        "producing_attempt_id": format!("atm_{}", "2".repeat(64)),
+        "base_checkpoint_id": format!("ckp_{}", "3".repeat(64)),
+        "base_checkpoint_digest": "4".repeat(64),
         "intent_summary": intent,
-        "changes": changes,
-        "gate_ids": ["repo.gate.v1"],
+        "operations": operations,
+        "gate_ids": [bullet_runner_core::REPOSITORY_GATE_ID],
         "claims": [],
         "uncertainties": [],
         "done": true
@@ -93,11 +110,20 @@ pub fn proposal_with_changes(intent: &str, changes: Value) -> Value {
 /// A proposal whose path is outside every test scope grant.
 pub fn out_of_scope_proposal() -> Value {
     serde_json::json!({
+        "schema_version": 1,
+        "proposal_id": format!("cnt_{}", "1".repeat(64)),
+        "producing_attempt_id": format!("atm_{}", "2".repeat(64)),
+        "base_checkpoint_id": format!("ckp_{}", "3".repeat(64)),
+        "base_checkpoint_digest": "4".repeat(64),
         "intent_summary": "write a secret outside the granted scope",
-        "changes": [
-            { "path": "secrets/key.txt", "op": "create", "contents": "nope\n" }
+        "operations": [
+            {
+                "path": "secrets/key.txt",
+                "preimage": {"kind": "absent"},
+                "mutation": {"kind": "write", "content_utf8": "nope\n"}
+            }
         ],
-        "gate_ids": ["repo.gate.v1"],
+        "gate_ids": [bullet_runner_core::REPOSITORY_GATE_ID],
         "claims": [],
         "uncertainties": [],
         "done": true
@@ -218,7 +244,17 @@ impl HarnessAdapter for ScriptedSim {
         Box::pin(self.inner.events(session).map(move |mut event| {
             if event.kind == AgentEventKind::TurnCompleted {
                 if let Some(proposal) = overrides.get(&completed) {
-                    event.payload["proposal"] = proposal.clone();
+                    let mut proposal = proposal.clone();
+                    for field in [
+                        "schema_version",
+                        "proposal_id",
+                        "producing_attempt_id",
+                        "base_checkpoint_id",
+                        "base_checkpoint_digest",
+                    ] {
+                        proposal[field] = event.payload["proposal"][field].clone();
+                    }
+                    event.payload["proposal"] = proposal;
                 }
                 completed += 1;
             }

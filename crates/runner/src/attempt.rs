@@ -75,11 +75,14 @@ impl AttemptConfig {
         }
     }
 
-    fn capsule(&self) -> Capsule {
+    fn capsule(&self, grant: &AcquireGrant, workspace: &WorkspaceInfo) -> Capsule {
         Capsule {
             objective: self.objective.clone(),
             scope_prefixes: self.scope_prefixes.clone(),
             base_sha: self.base_sha.clone(),
+            producing_attempt_id: grant.attempt.id.to_string(),
+            base_checkpoint_id: workspace.base_checkpoint_id.clone(),
+            base_checkpoint_digest: workspace.base_checkpoint_digest.clone(),
             admitted_gate_ids: self.admitted_gate_ids.clone(),
         }
     }
@@ -262,7 +265,7 @@ async fn drive_and_finish(
     heartbeat: &HeartbeatHandle,
     session: &SessionHandle,
 ) -> Result<AttemptOutcome, RunnerError> {
-    let capsule = config.capsule();
+    let capsule = config.capsule(grant, ws);
     let (gates, rounds) = session_loop(
         adapter, gitd, ws, &capsule, config, journal, heartbeat, session,
     )
@@ -303,6 +306,7 @@ async fn session_loop(
     heartbeat: &HeartbeatHandle,
     session: &SessionHandle,
 ) -> Result<(Vec<GateReport>, u32), RunnerError> {
+    let mut capsule = capsule.clone();
     let mut prompt = capsule.initial_prompt();
     let mut rounds: u32 = 0;
     loop {
@@ -323,15 +327,15 @@ async fn session_loop(
             ),
         );
         let proposal = latest_proposal(adapter, session).await?;
-        if let Some(refusal) = pre_apply_refusal(capsule, &proposal) {
+        if let Some(refusal) = pre_apply_refusal(&capsule, &proposal) {
             journal.record(refusal.stage, &refusal.detail);
             spend_repair_round(&mut rounds, config)?;
             prompt = refusal.prompt;
             continue;
         }
         check_freeze(heartbeat)?;
-        let applied = match gitd.apply_change(&proposal.changes).await {
-            Ok(count) => count,
+        let receipt = match gitd.apply_proposal(&proposal).await {
+            Ok(receipt) => receipt,
             Err(err) => {
                 let Some(detail) = err.path_absent_detail().map(String::from) else {
                     return Err(err);
@@ -342,7 +346,8 @@ async fn session_loop(
                 continue;
             }
         };
-        journal.record("patch_applied", &format!("{applied} paths"));
+        journal.record("patch_applied", &format!("{} paths", receipt.applied));
+        capsule.advance_checkpoint(receipt.checkpoint.id, receipt.checkpoint.digest);
         let mut gates = Vec::with_capacity(config.admitted_gate_ids.len());
         for gate_id in &config.admitted_gate_ids {
             let report = run_gate(&ws.repo_dir, gate_id).await?;
@@ -359,10 +364,7 @@ async fn session_loop(
                 break;
             }
         }
-        if gates.len() == config.admitted_gate_ids.len()
-            && gates.iter().all(GateReport::passed)
-            && proposal.done
-        {
+        if gates.len() == config.admitted_gate_ids.len() && gates.iter().all(GateReport::passed) {
             return Ok((gates, rounds));
         }
         spend_repair_round(&mut rounds, config)?;
@@ -393,6 +395,28 @@ struct Refusal {
 /// entries are scope-checked exactly like writes; a delete of a missing file
 /// is refused by the daemon at apply as `PATH_ABSENT`.
 fn pre_apply_refusal(capsule: &Capsule, proposal: &PatchProposal) -> Option<Refusal> {
+    let binding_mismatch = if proposal.producing_attempt_id != capsule.producing_attempt_id {
+        Some(format!(
+            "producing_attempt_id {} does not equal active {}",
+            proposal.producing_attempt_id, capsule.producing_attempt_id
+        ))
+    } else if proposal.base_checkpoint_id != capsule.base_checkpoint_id {
+        Some(format!(
+            "base_checkpoint_id {} does not equal active {}",
+            proposal.base_checkpoint_id, capsule.base_checkpoint_id
+        ))
+    } else if proposal.base_checkpoint_digest != capsule.base_checkpoint_digest {
+        Some("base_checkpoint_digest does not equal the active checkpoint digest".into())
+    } else {
+        None
+    };
+    if let Some(detail) = binding_mismatch {
+        return Some(Refusal {
+            stage: "proposal_binding_refused",
+            prompt: capsule.binding_refusal_prompt(&detail),
+            detail,
+        });
+    }
     if let Err(RunnerError::ScopeDenied { path }) =
         scope::validate_proposal(&capsule.scope_prefixes, proposal)
     {
@@ -475,4 +499,68 @@ async fn cleanup_failure(
         &format!("failed requeue=true ok={}", released.is_ok()),
     );
     journal.record("terminated", err.reason_code());
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+    use bullet_harness_core::{PatchMutation, PatchOperation, Preimage};
+
+    fn bound_capsule() -> Capsule {
+        Capsule {
+            objective: "test".into(),
+            scope_prefixes: vec!["PONG.txt".into()],
+            base_sha: "a".repeat(40),
+            producing_attempt_id: format!("atm_{}", "2".repeat(64)),
+            base_checkpoint_id: format!("ckp_{}", "3".repeat(64)),
+            base_checkpoint_digest: "4".repeat(64),
+            admitted_gate_ids: vec![crate::gate::REPOSITORY_GATE_ID.into()],
+        }
+    }
+
+    fn proposal() -> PatchProposal {
+        let capsule = bound_capsule();
+        PatchProposal {
+            schema_version: 1,
+            proposal_id: format!("cnt_{}", "1".repeat(64)),
+            producing_attempt_id: capsule.producing_attempt_id,
+            base_checkpoint_id: capsule.base_checkpoint_id,
+            base_checkpoint_digest: capsule.base_checkpoint_digest,
+            operations: vec![PatchOperation {
+                path: "PONG.txt".into(),
+                preimage: Preimage::Absent,
+                mutation: PatchMutation::Write {
+                    content_utf8: "PONG\n".into(),
+                },
+            }],
+            gate_ids: vec![crate::gate::REPOSITORY_GATE_ID.into()],
+            intent_summary: String::new(),
+            claims: vec![],
+            uncertainties: vec![],
+            done: true,
+        }
+    }
+
+    #[test]
+    fn stale_binding_is_refused_before_the_workspace_port() {
+        let capsule = bound_capsule();
+        let mut stale = proposal();
+        stale.base_checkpoint_digest = "5".repeat(64);
+        let refusal = pre_apply_refusal(&capsule, &stale).expect("binding refusal");
+        assert_eq!(refusal.stage, "proposal_binding_refused");
+        assert!(refusal.prompt.contains("Nothing was applied"));
+    }
+
+    #[test]
+    fn exact_binding_and_sealed_gate_reach_the_workspace_boundary() {
+        assert!(pre_apply_refusal(&bound_capsule(), &proposal()).is_none());
+        let mut wrong_gate = proposal();
+        wrong_gate.gate_ids = vec![format!("gat_{}", "7".repeat(64))];
+        assert_eq!(
+            pre_apply_refusal(&bound_capsule(), &wrong_gate)
+                .expect("gate refusal")
+                .stage,
+            "gate_selection_refused"
+        );
+    }
 }

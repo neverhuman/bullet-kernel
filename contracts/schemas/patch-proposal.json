@@ -2,34 +2,63 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://bullet.farm/schemas/patch-proposal.json",
   "title": "PatchProposal",
-  "description": "The only structured output the kernel accepts from a provider turn. Full-file contents per changed path so application is deterministic and order-independent.",
+  "description": "A schema-1, attempt- and checkpoint-bound whole-file proposal. Model narrative is non-authoritative and is omitted from BulletGit requests.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["intent_summary", "changes", "gate_ids", "claims", "uncertainties", "done"],
+  "required": ["schema_version", "proposal_id", "producing_attempt_id", "base_checkpoint_id", "base_checkpoint_digest", "operations", "gate_ids"],
   "properties": {
-    "intent_summary": {
-      "type": "string",
-      "description": "One-paragraph summary of what this proposal intends."
-    },
-    "changes": {
+    "schema_version": { "const": 1 },
+    "proposal_id": { "type": "string", "pattern": "^cnt_[0-9a-f]{64}$" },
+    "producing_attempt_id": { "type": "string", "pattern": "^atm_[0-9a-f]{64}$" },
+    "base_checkpoint_id": { "type": "string", "pattern": "^ckp_[0-9a-f]{64}$" },
+    "base_checkpoint_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "operations": {
       "type": "array",
-      "description": "Whole-file changes. contents is the complete new file body, or null for delete.",
+      "minItems": 1,
+      "maxItems": 1024,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "op", "contents"],
+        "required": ["path", "preimage", "mutation"],
         "properties": {
-          "path": {
-            "type": "string",
-            "description": "Repository-relative path. No leading slash, no '..' segments."
+          "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "preimage": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind"],
+                "properties": { "kind": { "const": "absent" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "digest"],
+                "properties": {
+                  "kind": { "const": "digest" },
+                  "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                }
+              }
+            ]
           },
-          "op": {
-            "type": "string",
-            "enum": ["create", "modify", "delete"]
-          },
-          "contents": {
-            "type": ["string", "null"],
-            "description": "Full new file contents; null if and only if op is delete."
+          "mutation": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "content_utf8"],
+                "properties": {
+                  "kind": { "const": "write" },
+                  "content_utf8": { "type": "string", "maxLength": 1048576 }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind"],
+                "properties": { "kind": { "const": "delete" } }
+              }
+            ]
           }
         }
       }
@@ -39,27 +68,11 @@
       "minItems": 1,
       "maxItems": 16,
       "uniqueItems": true,
-      "items": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 64,
-        "pattern": "^[a-z][a-z0-9._-]*$"
-      },
-      "description": "Ordered gate identifiers admitted by policy. They are never commands or argv."
+      "items": { "type": "string", "pattern": "^gat_[0-9a-f]{64}$" }
     },
-    "claims": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "What the provider asserts is true after the change. Claims are never evidence."
-    },
-    "uncertainties": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "What the provider is unsure about."
-    },
-    "done": {
-      "type": "boolean",
-      "description": "Provider's completion claim. Not authoritative; the gate decides."
-    }
+    "intent_summary": { "type": "string", "maxLength": 4096, "description": "Non-authoritative model narrative." },
+    "claims": { "type": "array", "maxItems": 128, "items": { "type": "string", "maxLength": 4096 }, "description": "Non-authoritative model claims; never evidence." },
+    "uncertainties": { "type": "array", "maxItems": 128, "items": { "type": "string", "maxLength": 4096 }, "description": "Non-authoritative model uncertainty." },
+    "done": { "type": "boolean", "description": "Non-authoritative model opinion; gates decide." }
   }
 }

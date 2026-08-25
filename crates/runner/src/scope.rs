@@ -11,10 +11,10 @@ use bullet_harness_core::PatchProposal;
 ///
 /// Returns typed `SCOPE_DENIED` carrying the offending path.
 pub fn validate_proposal(prefixes: &[String], proposal: &PatchProposal) -> Result<(), RunnerError> {
-    for change in &proposal.changes {
-        if !path_in_scope(prefixes, &change.path) {
+    for operation in &proposal.operations {
+        if !path_in_scope(prefixes, &operation.path) {
             return Err(RunnerError::ScopeDenied {
-                path: change.path.clone(),
+                path: operation.path.clone(),
             });
         }
     }
@@ -89,11 +89,18 @@ mod tests {
     #[test]
     fn validate_names_the_offending_path() {
         let proposal = PatchProposal {
+            schema_version: 1,
+            proposal_id: format!("cnt_{}", "1".repeat(64)),
+            producing_attempt_id: format!("atm_{}", "2".repeat(64)),
+            base_checkpoint_id: format!("ckp_{}", "3".repeat(64)),
+            base_checkpoint_digest: "4".repeat(64),
             intent_summary: "x".into(),
-            changes: vec![bullet_harness_core::FileChange {
+            operations: vec![bullet_harness_core::PatchOperation {
                 path: "secrets/key.txt".into(),
-                op: bullet_harness_core::ChangeOp::Create,
-                contents: Some("k".into()),
+                preimage: bullet_harness_core::Preimage::Absent,
+                mutation: bullet_harness_core::PatchMutation::Write {
+                    content_utf8: "k".into(),
+                },
             }],
             gate_ids: vec![crate::gate::REPOSITORY_GATE_ID.into()],
             claims: vec![],

@@ -5,7 +5,7 @@
 
 use crate::error::RunnerError;
 use bullet_domain::AuthorityToken;
-use bullet_harness_core::{ChangeOp, FileChange};
+use bullet_harness_core::PatchProposal;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -43,6 +43,30 @@ pub struct WorkspaceInfo {
     pub branch: String,
     /// Exact base commit.
     pub base_sha: String,
+    /// Daemon-issued checkpoint identity for the exact initial generation.
+    pub base_checkpoint_id: String,
+    /// Full BLAKE3 digest of the exact initial checkpoint.
+    pub base_checkpoint_digest: String,
+}
+
+/// Exact checkpoint binding returned after a successful proposal.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CheckpointBinding {
+    /// Full-width checkpoint identity.
+    pub id: String,
+    /// Full BLAKE3 checkpoint digest.
+    pub digest: String,
+}
+
+/// Receipt for one versioned proposal application.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApplyProposalReceipt {
+    /// Echo of the admitted proposal identity.
+    pub proposal_id: String,
+    /// Number of operations applied atomically.
+    pub applied: u64,
+    /// Exact post-apply checkpoint used by the next proposal.
+    pub checkpoint: CheckpointBinding,
 }
 
 /// Exact candidate receipt from `prepare_candidate` (subset of the
@@ -219,8 +243,13 @@ impl GitdSession {
             "commit_date": now.to_rfc3339(),
         });
         let ok = self.call("clone", params).await?;
-        serde_json::from_value(ok)
-            .map_err(|err| RunnerError::Protocol(format!("clone result: {err}")))
+        let workspace: WorkspaceInfo = serde_json::from_value(ok)
+            .map_err(|err| RunnerError::Protocol(format!("clone result: {err}")))?;
+        validate_checkpoint_binding(
+            &workspace.base_checkpoint_id,
+            &workspace.base_checkpoint_digest,
+        )?;
+        Ok(workspace)
     }
 
     /// Tracked paths of the clone.
@@ -234,34 +263,37 @@ impl GitdSession {
             .map_err(|err| RunnerError::Protocol(format!("read_tree result: {err}")))
     }
 
-    /// Apply whole-file changes all-or-nothing. Writes keep the exact v1
-    /// wire shape; deletes are forwarded as `{"path", "op": "delete"}` per
-    /// the additive protocol in bullet-git docs/architecture.md.
+    /// Apply one exact versioned provider proposal without flattening it into
+    /// legacy daemon patches.
     ///
     /// # Errors
     ///
-    /// Typed daemon refusal — `PATH_ABSENT` when a delete target is not an
-    /// existing regular file — or IO failure.
-    pub async fn apply_change(&mut self, changes: &[FileChange]) -> Result<u64, RunnerError> {
-        let mut patches = Vec::with_capacity(changes.len());
-        for change in changes {
-            if change.op == ChangeOp::Delete {
-                patches.push(json!({ "path": change.path, "op": "delete" }));
-                continue;
-            }
-            let contents = change.contents.as_deref().unwrap_or_default();
-            patches.push(json!({
-                "path": change.path,
-                "contents_hex": hex::encode(contents.as_bytes()),
-            }));
+    /// Typed daemon refusal or IO failure. Provider proposals never reach the
+    /// legacy `apply_change` method.
+    pub async fn apply_proposal(
+        &mut self,
+        proposal: &PatchProposal,
+    ) -> Result<ApplyProposalReceipt, RunnerError> {
+        let params = apply_proposal_params(proposal)?;
+        let ok = self.call("apply_proposal", params).await?;
+        let receipt: ApplyProposalReceipt = serde_json::from_value(ok)
+            .map_err(|error| RunnerError::Protocol(format!("apply_proposal result: {error}")))?;
+        if receipt.proposal_id != proposal.proposal_id {
+            return Err(RunnerError::Protocol(format!(
+                "apply_proposal echoed proposal {} for {}",
+                receipt.proposal_id, proposal.proposal_id
+            )));
         }
-        let ok = self
-            .call("apply_change", json!({ "patches": patches }))
-            .await?;
-        Ok(ok
-            .get("applied")
-            .and_then(Value::as_u64)
-            .unwrap_or_default())
+        let expected = u64::try_from(proposal.operations.len())
+            .map_err(|error| RunnerError::Protocol(error.to_string()))?;
+        if receipt.applied != expected {
+            return Err(RunnerError::Protocol(format!(
+                "apply_proposal reported {} operations; expected {expected}",
+                receipt.applied
+            )));
+        }
+        validate_checkpoint_binding(&receipt.checkpoint.id, &receipt.checkpoint.digest)?;
+        Ok(receipt)
     }
 
     /// Durable salvage checkpoint (never touches the live index).
@@ -311,5 +343,88 @@ impl GitdSession {
             }),
         )
         .await
+    }
+}
+
+fn apply_proposal_params(proposal: &PatchProposal) -> Result<Value, RunnerError> {
+    let authoritative = proposal.authoritative_value()?;
+    Ok(json!({ "proposal": authoritative }))
+}
+
+fn validate_checkpoint_binding(id: &str, digest: &str) -> Result<(), RunnerError> {
+    let id_body = id.strip_prefix("ckp_");
+    let lower_hex = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    if !id_body.is_some_and(lower_hex) || !lower_hex(digest) {
+        return Err(RunnerError::Protocol(
+            "checkpoint binding must use ckp_<64 lowercase hex> and a 64-lowercase-hex digest"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+    use bullet_harness_core::{PatchMutation, PatchOperation, Preimage};
+
+    #[test]
+    fn provider_proposal_is_nested_exactly_once_without_legacy_flattening() {
+        let proposal = PatchProposal {
+            schema_version: 1,
+            proposal_id: format!("cnt_{}", "1".repeat(64)),
+            producing_attempt_id: format!("atm_{}", "2".repeat(64)),
+            base_checkpoint_id: format!("ckp_{}", "3".repeat(64)),
+            base_checkpoint_digest: "4".repeat(64),
+            operations: vec![PatchOperation {
+                path: "PONG.txt".into(),
+                preimage: Preimage::Absent,
+                mutation: PatchMutation::Write {
+                    content_utf8: "PONG\n".into(),
+                },
+            }],
+            gate_ids: vec![crate::gate::REPOSITORY_GATE_ID.into()],
+            intent_summary: "model narrative".into(),
+            claims: vec!["not evidence".into()],
+            uncertainties: vec![],
+            done: true,
+        };
+        let params = apply_proposal_params(&proposal).unwrap();
+        assert_eq!(params.as_object().unwrap().len(), 1);
+        let wire = &params["proposal"];
+        assert_eq!(wire["operations"][0]["mutation"]["kind"], "write");
+        for forbidden in [
+            "patches",
+            "changes",
+            "contents_hex",
+            "intent_summary",
+            "claims",
+            "uncertainties",
+            "done",
+        ] {
+            assert!(params.get(forbidden).is_none());
+            assert!(wire.get(forbidden).is_none());
+        }
+    }
+
+    #[test]
+    fn malformed_daemon_checkpoint_bindings_fail_closed() {
+        assert!(
+            validate_checkpoint_binding(&format!("ckp_{}", "a".repeat(64)), &"b".repeat(64))
+                .is_ok()
+        );
+        for (id, digest) in [
+            (format!("ckp_{}", "A".repeat(64)), "b".repeat(64)),
+            (format!("ckp_{}", "a".repeat(63)), "b".repeat(64)),
+            (format!("bad_{}", "a".repeat(64)), "b".repeat(64)),
+            (format!("ckp_{}", "a".repeat(64)), "b".repeat(63)),
+        ] {
+            assert!(validate_checkpoint_binding(&id, &digest).is_err());
+        }
     }
 }

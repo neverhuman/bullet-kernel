@@ -11,11 +11,11 @@ use bullet_harness_core::launch_grant::{
 use bullet_harness_core::{
     descriptor_digest, executable_digest, AdmissionBlocker, AgentEvent, AgentEventKind,
     AgentSessionId, ArgvBuilder, CanarySecrets, Capability, CapabilityMatrix, CapabilityState,
-    ChangeOp, ConformanceEvidence, EgressIsolationEvidence, EgressProbe, EgressProbeOutcome,
-    EvaluatedAdmission, EventNormalizer, ExpectedProfile, FileChange, HarnessDescriptor,
-    NativeMeta, PatchProposal, ProbeResult, ProfileIdentity, ProfileRef, PromotionStage,
-    ProviderAdmission, ProviderAdmissionPolicy, ProviderConformanceReceipt, ProviderProtocol,
-    RuntimeProbeSnapshot,
+    ConformanceEvidence, EgressIsolationEvidence, EgressProbe, EgressProbeOutcome,
+    EvaluatedAdmission, EventNormalizer, ExpectedProfile, HarnessDescriptor, NativeMeta,
+    PatchMutation, PatchOperation, PatchProposal, Preimage, ProbeResult, ProfileIdentity,
+    ProfileRef, PromotionStage, ProviderAdmission, ProviderAdmissionPolicy,
+    ProviderConformanceReceipt, ProviderProtocol, RuntimeProbeSnapshot,
 };
 use chrono::{TimeZone, Utc};
 use serde_json::json;
@@ -102,13 +102,20 @@ fn evaluated() -> Fixture {
         ),
     ];
     let proposal = PatchProposal {
+        schema_version: 1,
+        proposal_id: format!("cnt_{}", "1".repeat(64)),
+        producing_attempt_id: format!("atm_{}", "2".repeat(64)),
+        base_checkpoint_id: format!("ckp_{}", "3".repeat(64)),
+        base_checkpoint_digest: "4".repeat(64),
         intent_summary: "offline".into(),
-        changes: vec![FileChange {
+        operations: vec![PatchOperation {
             path: "PONG.txt".into(),
-            op: ChangeOp::Create,
-            contents: Some("PONG\n".into()),
+            preimage: Preimage::Absent,
+            mutation: PatchMutation::Write {
+                content_utf8: "PONG\n".into(),
+            },
         }],
-        gate_ids: vec!["repo.gate.v1".into()],
+        gate_ids: vec![bullet_domain::REPOSITORY_GATE_ID.into()],
         claims: vec![],
         uncertainties: vec![],
         done: true,

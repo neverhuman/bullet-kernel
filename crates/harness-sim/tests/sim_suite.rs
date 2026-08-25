@@ -94,7 +94,7 @@ async fn simple_turn_yields_a_patch_proposal() {
     .await
     .expect("simple turn");
     let proposal = proposal.expect("structured proposal");
-    assert_eq!(proposal.changes[0].path, "PONG.txt");
+    assert_eq!(proposal.operations[0].path, "PONG.txt");
     assert!(proposal.done);
     let events = adapter.events(&handle).collect::<Vec<_>>().await;
     let raw = events

@@ -35,7 +35,8 @@ use std::time::Duration;
 
 /// Lexical gate id bound into the structured proposal contract (distinct from
 /// the launch-grant `gat_` gate namespace).
-pub const PROPOSAL_GATE_ID: &str = "bullet.conformance.pong";
+pub const PROPOSAL_GATE_ID: &str =
+    "gat_9999999999999999999999999999999999999999999999999999999999999999";
 
 /// Run the full ordered path. On success every step is `Pass` (or `PongMatch`
 /// is `Failed` when the response was not `PONG`); on failure the offending
@@ -391,11 +392,18 @@ fn conformance_events(provider: &str) -> Vec<AgentEvent> {
 
 fn conformance_proposal() -> PatchProposal {
     PatchProposal {
+        schema_version: 1,
+        proposal_id: format!("cnt_{}", "1".repeat(64)),
+        producing_attempt_id: format!("atm_{}", "2".repeat(64)),
+        base_checkpoint_id: format!("ckp_{}", "3".repeat(64)),
+        base_checkpoint_digest: "4".repeat(64),
         intent_summary: "live conformance admission subject".into(),
-        changes: vec![bullet_harness_core::FileChange {
+        operations: vec![bullet_harness_core::PatchOperation {
             path: "PONG.txt".into(),
-            op: bullet_harness_core::ChangeOp::Create,
-            contents: Some("PONG\n".into()),
+            preimage: bullet_harness_core::Preimage::Absent,
+            mutation: bullet_harness_core::PatchMutation::Write {
+                content_utf8: "PONG\n".into(),
+            },
         }],
         gate_ids: vec![PROPOSAL_GATE_ID.to_string()],
         claims: vec![],

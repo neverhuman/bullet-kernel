@@ -208,7 +208,10 @@ mod tests {
     async fn unknown_or_command_shaped_ids_never_execute() {
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("PWNED");
-        let malicious = format!("repo.gate.v1;/usr/bin/touch{}", marker.to_string_lossy());
+        let malicious = format!(
+            "{REPOSITORY_GATE_ID};/usr/bin/touch{}",
+            marker.to_string_lossy()
+        );
         let error = run_gate(directory.path(), &malicious).await.unwrap_err();
         assert_eq!(error.reason_code(), "GATE_SELECTION_REFUSED");
         assert!(!marker.exists());

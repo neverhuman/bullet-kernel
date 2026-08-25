@@ -10,6 +10,7 @@ const RUNTIME: &str = "2026.08.11-e8db854";
 const SUBJECT: &str = "blake3:0000000000000000000000000000000000000000000000000000000000000000";
 const CWD: &str = "/private/bullet/workspace-7";
 const NATIVE_SESSION: &str = "cursor-session-7";
+const GATE: &str = "gat_8888888888888888888888888888888888888888888888888888888888888888";
 
 fn line(value: Value) -> String {
     serde_json::to_string(&value).expect("fixture serializes")
@@ -17,9 +18,18 @@ fn line(value: Value) -> String {
 
 fn proposal() -> Value {
     json!({
+        "schema_version": 1,
+        "proposal_id": format!("cnt_{}", "1".repeat(64)),
+        "producing_attempt_id": format!("atm_{}", "2".repeat(64)),
+        "base_checkpoint_id": format!("ckp_{}", "3".repeat(64)),
+        "base_checkpoint_digest": "4".repeat(64),
         "intent_summary": "create fixture",
-        "changes": [{"path": "PONG.txt", "op": "create", "contents": "PONG\n"}],
-        "gate_ids": ["repo.gate.v1"],
+        "operations": [{
+            "path": "PONG.txt",
+            "preimage": {"kind": "absent"},
+            "mutation": {"kind": "write", "content_utf8": "PONG\n"}
+        }],
+        "gate_ids": [GATE],
         "claims": [],
         "uncertainties": [],
         "done": true
@@ -33,7 +43,7 @@ fn machine() -> CursorAcpTranscript {
         "0.1.0",
         RUNTIME,
         SUBJECT,
-        vec!["repo.gate.v1".into()],
+        vec![GATE.into()],
     )
     .expect("machine")
 }
@@ -127,7 +137,7 @@ fn establish(machine: &mut CursorAcpTranscript) {
     );
     assert_eq!(
         prompt["params"]["_meta"]["bullet.farm"]["gateIds"],
-        json!(["repo.gate.v1"])
+        json!([GATE])
     );
     assert!(prompt["params"]["_meta"]["bullet.farm"]["proposalSchema"].is_object());
 }
@@ -198,8 +208,8 @@ fn exact_acp_transcript_yields_only_a_writer_proposal() {
     assert_eq!(events[0].kind, AgentEventKind::TurnCompleted);
     assert_eq!(events[0].payload["verified"], false);
     let CursorAcpOutcome::Proposal(actual) = machine.outcome().expect("outcome");
-    assert_eq!(actual.gate_ids, ["repo.gate.v1"]);
-    assert_eq!(actual.changes[0].path, "PONG.txt");
+    assert_eq!(actual.gate_ids, [GATE]);
+    assert_eq!(actual.operations[0].path, "PONG.txt");
 }
 
 #[test]
@@ -348,7 +358,7 @@ fn every_resource_dimension_is_bounded() {
         "client",
         RUNTIME,
         "sha1:not-a-subject",
-        vec!["repo.gate.v1".into()]
+        vec![GATE.into()]
     )
     .is_err());
     assert!(CursorAcpTranscript::new(
@@ -357,7 +367,7 @@ fn every_resource_dimension_is_bounded() {
         "client",
         RUNTIME,
         SUBJECT,
-        vec!["repo.gate.v1".into(), "repo.gate.v1".into()]
+        vec![GATE.into(), GATE.into()]
     )
     .is_err());
 

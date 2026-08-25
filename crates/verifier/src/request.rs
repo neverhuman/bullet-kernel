@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn unknown_gate_and_empty_fields_are_refused() {
         let mut bad = request();
-        bad.gate_id = GateId::parse("unknown.gate.v1").unwrap();
+        bad.gate_id = GateId::parse(&format!("gat_{}", "7".repeat(64))).unwrap();
         assert!(bad.validate().is_err());
         let mut empty = request();
         empty.author_attempt_id.clear();
@@ -120,7 +120,8 @@ mod tests {
         assert!(serde_json::from_value::<VerifierRequest>(legacy).is_err());
 
         let mut malicious = value;
-        malicious["gate_id"] = serde_json::json!("repo.gate.v1;touch-PWNED");
+        malicious["gate_id"] =
+            serde_json::json!(format!("{};touch-PWNED", bullet_domain::REPOSITORY_GATE_ID));
         assert!(serde_json::from_value::<VerifierRequest>(malicious).is_err());
     }
 }

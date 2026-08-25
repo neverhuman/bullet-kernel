@@ -14,8 +14,17 @@ use std::sync::Arc;
 
 fn proposal(gate_ids: Value) -> Value {
     json!({
+        "schema_version": 1,
+        "proposal_id": format!("cnt_{}", "1".repeat(64)),
+        "producing_attempt_id": format!("atm_{}", "2".repeat(64)),
+        "base_checkpoint_id": format!("ckp_{}", "3".repeat(64)),
+        "base_checkpoint_digest": "4".repeat(64),
         "intent_summary": "gate authority probe",
-        "changes": [],
+        "operations": [{
+            "path": "PONG.txt",
+            "preimage": {"kind": "absent"},
+            "mutation": {"kind": "write", "content_utf8": "PONG\n"}
+        }],
         "gate_ids": gate_ids,
         "claims": [],
         "uncertainties": [],
@@ -37,7 +46,7 @@ fn proposal_rejects_unknown_fields_legacy_commands_and_bounds() {
     for invalid in [
         json!([]),
         json!([REPOSITORY_GATE_ID, REPOSITORY_GATE_ID]),
-        json!(["repo.gate.v1;touch-PWNED"]),
+        json!([format!("{REPOSITORY_GATE_ID};touch-PWNED")]),
         json!(["a".repeat(65)]),
         Value::Array(
             (0..17)
@@ -123,7 +132,7 @@ async fn provider_text_and_repository_script_cannot_supply_argv() {
     assert!(report.passed());
     assert!(!marker.exists());
 
-    let command_text = format!("repo.gate.v1;/usr/bin/touch{}", marker.display());
+    let command_text = format!("{REPOSITORY_GATE_ID};/usr/bin/touch{}", marker.display());
     assert!(run_gate(directory.path(), &command_text).await.is_err());
     assert!(!marker.exists());
 }

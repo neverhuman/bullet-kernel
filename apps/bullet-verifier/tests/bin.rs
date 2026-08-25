@@ -42,7 +42,7 @@ fn fixture(dir: &Path) -> serde_json::Value {
         "base_sha": git_out(dir, &["rev-parse", "HEAD~1"]),
         "head_sha": git_out(dir, &["rev-parse", "HEAD"]),
         "tree_sha": git_out(dir, &["rev-parse", "HEAD^{tree}"]),
-        "gate_id": "repo.gate.v1",
+        "gate_id": "gat_8888888888888888888888888888888888888888888888888888888888888888",
         "author_attempt_id": concat!(
             "atm_",
             "0000000000000000000000000000000000000000000000000000000000000000"
@@ -105,7 +105,10 @@ fn stdin_round_trip_emits_typed_e2_record() {
     assert_eq!(record["produced_by"], "bullet-verifier");
     assert_eq!(record["subject"]["head_sha"], request["head_sha"]);
     assert_eq!(record["author_attempt_id"], request["author_attempt_id"]);
-    assert_eq!(record["gate_id"], "repo.gate.v1");
+    assert_eq!(
+        record["gate_id"],
+        "gat_8888888888888888888888888888888888888888888888888888888888888888"
+    );
     assert_eq!(
         record["argv"],
         serde_json::json!(["/usr/bin/grep", "-qx", "PONG", "PONG.txt"])
@@ -181,7 +184,10 @@ fn legacy_shell_timeout_and_unknown_ids_fail_without_artifacts() {
     assert!(out.stdout.is_empty());
     assert!(!marker.exists());
 
-    for gate_id in ["unknown.gate.v1", "repo.gate.v1;touch-PWNED"] {
+    for gate_id in [
+        "unknown.gate.v1",
+        "gat_8888888888888888888888888888888888888888888888888888888888888888;touch-PWNED",
+    ] {
         let mut hostile = request.clone();
         hostile["gate_id"] = serde_json::json!(gate_id);
         let out = run_binary(&hostile, &[]);

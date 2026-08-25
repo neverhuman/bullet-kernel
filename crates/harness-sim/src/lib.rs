@@ -180,7 +180,7 @@ impl HarnessAdapter for SimAdapter {
         if condition == SimCondition::LongTurn {
             return self.run_long_turn(&session_id, invocation_id).await;
         }
-        self.ingest(&session_id, &scenario::script(condition))?;
+        self.ingest(&session_id, &scenario::script(condition, &turn.prompt))?;
         match condition {
             SimCondition::AuthExpiry => Err(HarnessError::AuthRequired {
                 provider: PROVIDER.to_string(),

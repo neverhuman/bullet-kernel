@@ -2,6 +2,7 @@
 //! s33.2. Each condition compiles to raw provider lines that the simulator
 //! parses exactly the way a real adapter parses a CLI stream.
 
+use bullet_domain::Digest;
 use serde_json::json;
 
 /// The 18 simulated conditions (spec s33.2 bullet list, one variant each).
@@ -108,15 +109,51 @@ impl SimCondition {
 #[must_use]
 pub fn sample_proposal() -> serde_json::Value {
     json!({
+        "schema_version": 1,
+        "proposal_id": format!("cnt_{}", "1".repeat(64)),
+        "producing_attempt_id": format!("atm_{}", "2".repeat(64)),
+        "base_checkpoint_id": format!("ckp_{}", "3".repeat(64)),
+        "base_checkpoint_digest": "4".repeat(64),
         "intent_summary": "create PONG.txt containing PONG",
-        "changes": [
-            { "path": "PONG.txt", "op": "create", "contents": "PONG\n" }
+        "operations": [
+            {
+                "path": "PONG.txt",
+                "preimage": { "kind": "absent" },
+                "mutation": { "kind": "write", "content_utf8": "PONG\n" }
+            }
         ],
-        "gate_ids": ["repo.gate.v1"],
+        "gate_ids": [bullet_domain::REPOSITORY_GATE_ID],
         "claims": ["PONG.txt exists after apply"],
         "uncertainties": [],
         "done": true
     })
+}
+
+fn prompt_value(prompt: &str, label: &str) -> Option<String> {
+    prompt
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(label).map(str::to_owned))
+}
+
+fn sample_proposal_for(prompt: &str) -> serde_json::Value {
+    let mut proposal = sample_proposal();
+    proposal["proposal_id"] = format!("cnt_{}", Digest::of(prompt.as_bytes()).to_hex()).into();
+    for (field, label) in [
+        ("producing_attempt_id", "Producing attempt ID: "),
+        ("base_checkpoint_id", "Base checkpoint ID: "),
+        ("base_checkpoint_digest", "Base checkpoint digest: "),
+    ] {
+        if let Some(value) = prompt_value(prompt, label) {
+            proposal[field] = value.into();
+        }
+    }
+    if let Some(start) = prompt.find("gat_") {
+        let end = start.saturating_add(68);
+        if let Some(gate) = prompt.get(start..end) {
+            proposal["gate_ids"] = json!([gate]);
+        }
+    }
+    proposal
 }
 
 fn line(kind: &str, payload: serde_json::Value) -> String {
@@ -127,9 +164,9 @@ fn line_native(kind: &str, payload: serde_json::Value, id: &str, seq: u64) -> St
     json!({ "kind": kind, "payload": payload, "native_id": id, "native_seq": seq }).to_string()
 }
 
-fn closing(proposal: bool) -> Vec<String> {
+fn closing(proposal: bool, prompt: &str) -> Vec<String> {
     let body = if proposal {
-        json!({ "proposal": sample_proposal(), "text": "done" })
+        json!({ "proposal": sample_proposal_for(prompt), "text": "done" })
     } else {
         json!({ "proposal": null, "text": "done" })
     };
@@ -145,7 +182,7 @@ fn closing(proposal: bool) -> Vec<String> {
 /// Raw provider lines for one condition. `LongTurn` is generated in the
 /// adapter loop instead so it can observe interrupts.
 #[must_use]
-pub fn script(condition: SimCondition) -> Vec<String> {
+pub fn script(condition: SimCondition, prompt: &str) -> Vec<String> {
     let start = line("turn.started", json!({}));
     match condition {
         SimCondition::Streaming | SimCondition::ResumeFailure | SimCondition::LongTurn => {
@@ -155,7 +192,7 @@ pub fn script(condition: SimCondition) -> Vec<String> {
                 line("turn.delta", json!({ "text": "PO" })),
                 line("turn.delta", json!({ "text": "NG" })),
             ];
-            lines.extend(closing(true));
+            lines.extend(closing(true, prompt));
             lines
         }
         SimCondition::ToolCall => {
@@ -172,7 +209,7 @@ pub fn script(condition: SimCondition) -> Vec<String> {
                 ),
                 line("turn.delta", json!({ "text": "read it" })),
             ];
-            lines.extend(closing(true));
+            lines.extend(closing(true, prompt));
             lines
         }
         SimCondition::PermissionPrompt => vec![
@@ -193,7 +230,7 @@ pub fn script(condition: SimCondition) -> Vec<String> {
                     json!({ "input_tokens": 500, "output_tokens": 100, "cost_usd": 0.002 }),
                 ),
             ];
-            lines.extend(closing(true));
+            lines.extend(closing(true, prompt));
             lines
         }
         SimCondition::ContextReport => {
@@ -204,7 +241,7 @@ pub fn script(condition: SimCondition) -> Vec<String> {
                     json!({ "tokens_used": 12_000, "context_window": 200_000 }),
                 ),
             ];
-            lines.extend(closing(true));
+            lines.extend(closing(true, prompt));
             lines
         }
         SimCondition::AuthExpiry => vec![
@@ -238,7 +275,7 @@ pub fn script(condition: SimCondition) -> Vec<String> {
                     json!({ "dimension": "requests", "remaining": 500, "reset": true }),
                 ),
             ];
-            lines.extend(closing(true));
+            lines.extend(closing(true, prompt));
             lines
         }
         SimCondition::EventAnomalies => {
@@ -250,12 +287,12 @@ pub fn script(condition: SimCondition) -> Vec<String> {
                 "this line is not json {".to_string(),
                 line_native("turn.delta", json!({ "text": "b" }), "n4", 4),
             ];
-            lines.extend(closing(true));
+            lines.extend(closing(true, prompt));
             lines
         }
         SimCondition::DelayedStaleEvent => {
             let mut lines = vec![start];
-            lines.extend(closing(true));
+            lines.extend(closing(true, prompt));
             lines.push(line("turn.delta", json!({ "text": "stale straggler" })));
             lines
         }
@@ -301,7 +338,7 @@ pub fn script(condition: SimCondition) -> Vec<String> {
                 line("session.started", json!({ "binary_version": "sim-9.9.9" })),
                 start,
             ];
-            lines.extend(closing(true));
+            lines.extend(closing(true, prompt));
             lines
         }
     }

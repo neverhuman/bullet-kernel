@@ -10,7 +10,7 @@ pub const OBJECTIVE: &str = "Create PONG.txt containing exactly PONG";
 
 const README: &str =
     "# synthetic integration fixture\n\nObjective: Create PONG.txt containing exactly \
-PONG.\nThe writer gate is the sealed `repo.gate.v1` registry entry.\n";
+PONG.\nThe writer gate is the sealed full-width `gat_` registry entry.\n";
 
 /// A prepared origin repository.
 #[derive(Clone, Debug)]

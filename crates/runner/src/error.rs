@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn path_absent_detail_is_extracted() {
         let refused = RunnerError::Gitd {
-            method: "apply_change".into(),
+            method: "apply_proposal".into(),
             code: "PATH_ABSENT".into(),
             message: "no regular file to delete at: z".into(),
         };

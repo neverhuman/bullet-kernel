@@ -13,9 +13,10 @@ use std::str::FromStr;
 /// Maximum gates in one policy selection.
 pub const MAX_GATE_IDS: usize = 16;
 /// Maximum UTF-8 bytes in one gate identifier.
-pub const MAX_GATE_ID_BYTES: usize = 64;
+pub const MAX_GATE_ID_BYTES: usize = 68;
 /// Fixed gate used by the credential-free repository fixture.
-pub const REPOSITORY_GATE_ID: &str = "repo.gate.v1";
+pub const REPOSITORY_GATE_ID: &str =
+    "gat_8888888888888888888888888888888888888888888888888888888888888888";
 
 /// A lexically valid gate identifier. This type is not authority by itself;
 /// [`gate_definition`] performs sealed-catalog admission.
@@ -29,18 +30,15 @@ impl GateId {
     ///
     /// Returns `INVALID_ID` for empty, oversized, or command-shaped values.
     pub fn parse(value: &str) -> Result<Self, DomainError> {
-        let admitted_shape = !value.is_empty()
-            && value.len() <= MAX_GATE_ID_BYTES
-            && value.as_bytes()[0].is_ascii_lowercase()
-            && value.bytes().all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || matches!(byte, b'.' | b'_' | b'-')
-            });
+        let admitted_shape = value.strip_prefix("gat_").is_some_and(|body| {
+            body.len() == 64
+                && body
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        });
         if !admitted_shape {
             return Err(DomainError::InvalidId(format!(
-                "gate_id must match [a-z][a-z0-9._-]{{0,{}}}: {value:?}",
-                MAX_GATE_ID_BYTES - 1
+                "gate_id must be gat_ followed by 64 lowercase hexadecimal characters: {value:?}"
             )));
         }
         Ok(Self(value.to_owned()))
@@ -423,15 +421,18 @@ mod tests {
     #[test]
     fn gate_ids_are_strict_serde_values_not_commands() {
         let gate_id = GateId::parse(REPOSITORY_GATE_ID).expect("gate id");
-        assert_eq!(serde_json::to_string(&gate_id).unwrap(), "\"repo.gate.v1\"");
         assert_eq!(
-            serde_json::from_str::<GateId>("\"repo.gate.v1\"").unwrap(),
+            serde_json::to_string(&gate_id).unwrap(),
+            format!("\"{REPOSITORY_GATE_ID}\"")
+        );
+        assert_eq!(
+            serde_json::from_str::<GateId>(&format!("\"{REPOSITORY_GATE_ID}\"")).unwrap(),
             gate_id
         );
         for invalid in [
             "",
             "Repo.gate.v1",
-            "repo.gate.v1;touch-PWNED",
+            "gat_8888888888888888888888888888888888888888888888888888888888888888;touch-PWNED",
             "repo/gate/v1",
             "repo gate v1",
         ] {
@@ -456,7 +457,7 @@ mod tests {
 
         assert!(parse_gate_ids(&[]).is_err());
         assert!(parse_gate_ids(&[REPOSITORY_GATE_ID.into(), REPOSITORY_GATE_ID.into()]).is_err());
-        let unknown = GateId::parse("unknown.gate.v1").unwrap();
+        let unknown = GateId::parse(&format!("gat_{}", "7".repeat(64))).unwrap();
         assert!(gate_definition(&unknown).is_none());
     }
 }

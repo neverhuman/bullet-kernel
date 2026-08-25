@@ -49,7 +49,7 @@ fn build() -> Result<CouncilOutcome, String> {
     let plan_b = PlanProposal {
         steps: vec![
             "Write the single line PONG into PONG.txt".into(),
-            "Echo the admitted repo.gate.v1 gate ID".into(),
+            "Echo the admitted full-width gate ID".into(),
         ],
         risks: vec!["Scope is limited to PONG.txt".into()],
     };
@@ -87,7 +87,7 @@ fn fused_plan() -> FusedPlan {
                 from: "both".into(),
             },
             FusedItem {
-                text: "Request the admitted repo.gate.v1 gate".into(),
+                text: "Request the admitted full-width gate".into(),
                 from: "B".into(),
             },
         ],

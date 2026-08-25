@@ -7,10 +7,11 @@ mod harness;
 mod orchestration;
 
 use super::*;
+use crate::gitd::{ApplyProposalReceipt, CheckpointBinding};
 use crate::{DirectLeaseClient, MemoryJournal, MonotonicClock, REPOSITORY_GATE_ID};
 use bullet_application::{materialize_plan, MemoryLedger, PlanInput};
 use bullet_domain::{Digest, RunnerId, TaskClass, WorkPackageId};
-use bullet_harness_core::{ChangeOp, FileChange};
+use bullet_harness_core::{PatchMutation, PatchProposal, Preimage};
 use harness::ScriptedSim;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -21,6 +22,9 @@ struct SimWorkspace {
     repo_dir: Option<PathBuf>,
     runtime_dir: Option<PathBuf>,
     base_sha: String,
+    checkpoint_id: String,
+    checkpoint_digest: String,
+    generation: u64,
 }
 
 impl SimWorkspace {
@@ -30,6 +34,9 @@ impl SimWorkspace {
             repo_dir: None,
             runtime_dir: None,
             base_sha: String::new(),
+            checkpoint_id: String::new(),
+            checkpoint_digest: String::new(),
+            generation: 0,
         }
     }
 
@@ -98,28 +105,78 @@ impl SimWorkspace {
         self.repo_dir = Some(repo.clone());
         self.runtime_dir = Some(runtime.clone());
         self.base_sha = base_sha.to_string();
+        self.checkpoint_digest = Digest::of(format!("TEST_ONLY:{base_sha}:0").as_bytes()).to_hex();
+        self.checkpoint_id = format!("ckp_{}", self.checkpoint_digest);
         self.git(&["checkout", "-q", "--detach", base_sha])?;
         Ok(WorkspaceInfo {
             repo_dir: repo,
             runtime_dir: runtime,
             branch: "test-only/simulator".into(),
             base_sha: base_sha.to_string(),
+            base_checkpoint_id: self.checkpoint_id.clone(),
+            base_checkpoint_digest: self.checkpoint_digest.clone(),
         })
     }
 }
 
 #[async_trait::async_trait]
 impl WorkspaceSession for SimWorkspace {
-    async fn apply_change(&mut self, changes: &[FileChange]) -> Result<u64, RunnerError> {
+    async fn apply_proposal(
+        &mut self,
+        proposal: &PatchProposal,
+    ) -> Result<ApplyProposalReceipt, RunnerError> {
+        if proposal.producing_attempt_id != self.attempt_id.as_str()
+            || proposal.base_checkpoint_id != self.checkpoint_id
+            || proposal.base_checkpoint_digest != self.checkpoint_digest
+        {
+            return Err(RunnerError::Gitd {
+                method: "apply_proposal".into(),
+                code: "STALE_CHECKPOINT".into(),
+                message: "TEST_ONLY simulator binding mismatch".into(),
+            });
+        }
         let repo = self.repo()?.to_path_buf();
-        for change in changes {
-            let path = repo.join(&change.path);
-            if change.op == ChangeOp::Delete {
+        for operation in &proposal.operations {
+            let path = repo.join(&operation.path);
+            match &operation.preimage {
+                Preimage::Absent if path.exists() => {
+                    return Err(RunnerError::Gitd {
+                        method: "apply_proposal".into(),
+                        code: "PREIMAGE_MISMATCH".into(),
+                        message: format!("expected absent path: {}", operation.path),
+                    });
+                }
+                Preimage::Digest { digest } => {
+                    if !path.is_file() {
+                        return Err(RunnerError::Gitd {
+                            method: "apply_proposal".into(),
+                            code: "PATH_ABSENT".into(),
+                            message: format!("no regular file at: {}", operation.path),
+                        });
+                    }
+                    let bytes = std::fs::read(&path).map_err(|error| RunnerError::Io {
+                        context: "test simulator preimage".into(),
+                        reason: error.to_string(),
+                    })?;
+                    if Digest::of(&bytes).to_hex() != *digest {
+                        return Err(RunnerError::Gitd {
+                            method: "apply_proposal".into(),
+                            code: "PREIMAGE_MISMATCH".into(),
+                            message: format!("stale preimage: {}", operation.path),
+                        });
+                    }
+                }
+                Preimage::Absent => {}
+            }
+        }
+        for operation in &proposal.operations {
+            let path = repo.join(&operation.path);
+            if matches!(operation.mutation, PatchMutation::Delete) {
                 if !path.is_file() {
                     return Err(RunnerError::Gitd {
-                        method: "apply_change".into(),
+                        method: "apply_proposal".into(),
                         code: "PATH_ABSENT".into(),
-                        message: format!("no regular file to delete at: {}", change.path),
+                        message: format!("no regular file to delete at: {}", operation.path),
                     });
                 }
                 std::fs::remove_file(&path).map_err(|error| RunnerError::Io {
@@ -134,14 +191,33 @@ impl WorkspaceSession for SimWorkspace {
                     reason: error.to_string(),
                 })?;
             }
-            std::fs::write(&path, change.contents.as_deref().unwrap_or_default()).map_err(
-                |error| RunnerError::Io {
-                    context: "test simulator write".into(),
-                    reason: error.to_string(),
-                },
-            )?;
+            let PatchMutation::Write { content_utf8 } = &operation.mutation else {
+                unreachable!("delete handled above")
+            };
+            std::fs::write(&path, content_utf8).map_err(|error| RunnerError::Io {
+                context: "test simulator write".into(),
+                reason: error.to_string(),
+            })?;
         }
-        u64::try_from(changes.len()).map_err(|error| RunnerError::Protocol(error.to_string()))
+        self.generation += 1;
+        self.checkpoint_digest = Digest::of(
+            format!(
+                "TEST_ONLY:{}:{}:{}",
+                self.base_sha, self.generation, proposal.proposal_id
+            )
+            .as_bytes(),
+        )
+        .to_hex();
+        self.checkpoint_id = format!("ckp_{}", self.checkpoint_digest);
+        Ok(ApplyProposalReceipt {
+            proposal_id: proposal.proposal_id.clone(),
+            applied: u64::try_from(proposal.operations.len())
+                .map_err(|error| RunnerError::Protocol(error.to_string()))?,
+            checkpoint: CheckpointBinding {
+                id: self.checkpoint_id.clone(),
+                digest: self.checkpoint_digest.clone(),
+            },
+        })
     }
 
     async fn checkpoint(&mut self) -> Result<Value, RunnerError> {
@@ -211,14 +287,54 @@ fn proposal(changes: Value) -> Value {
 }
 
 fn proposal_with_gates(changes: Value, gate_ids: Value) -> Value {
+    let operations = changes
+        .as_array()
+        .expect("test changes")
+        .iter()
+        .map(|change| {
+            let path = change["path"].as_str().expect("test path");
+            let op = change["op"].as_str().expect("test op");
+            let preimage = match (op, path) {
+                ("create", _) => serde_json::json!({ "kind": "absent" }),
+                ("modify", "PONG.txt") => serde_json::json!({
+                    "kind": "digest", "digest": Digest::of(b"WRONG\n").to_hex()
+                }),
+                ("delete", "OLD.txt") => serde_json::json!({
+                    "kind": "digest", "digest": Digest::of(b"old\n").to_hex()
+                }),
+                _ => serde_json::json!({ "kind": "digest", "digest": "0".repeat(64) }),
+            };
+            let mutation = if op == "delete" {
+                serde_json::json!({ "kind": "delete" })
+            } else {
+                serde_json::json!({
+                    "kind": "write",
+                    "content_utf8": change["contents"].as_str().expect("test contents")
+                })
+            };
+            serde_json::json!({ "path": path, "preimage": preimage, "mutation": mutation })
+        })
+        .collect::<Vec<_>>();
     serde_json::json!({
+        "schema_version": 1,
+        "proposal_id": format!("cnt_{}", "1".repeat(64)),
+        "producing_attempt_id": format!("atm_{}", "2".repeat(64)),
+        "base_checkpoint_id": format!("ckp_{}", "3".repeat(64)),
+        "base_checkpoint_digest": "4".repeat(64),
         "intent_summary": "test-only runner simulation",
-        "changes": changes,
+        "operations": operations,
         "gate_ids": gate_ids,
         "claims": [],
         "uncertainties": [],
         "done": true
     })
+}
+
+fn prompt_subject(prompt: &str, label: &str) -> String {
+    prompt
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(label).map(str::to_owned))
+        .unwrap_or_else(|| panic!("missing {label} in prompt"))
 }
 
 #[tokio::test]
@@ -231,7 +347,7 @@ async fn unadmitted_provider_gate_is_refused_before_apply() {
             serde_json::json!([
                 { "path": "PWNED", "op": "create", "contents": "wrong gate applied\n" }
             ]),
-            serde_json::json!(["attacker.gate.v1"]),
+            serde_json::json!([format!("gat_{}", "7".repeat(64))]),
         ),
     );
     adapter.override_proposal(
@@ -249,7 +365,7 @@ async fn unadmitted_provider_gate_is_refused_before_apply() {
     )
     .await;
 
-    assert_eq!(outcome.repair_rounds, 1);
+    assert_eq!(outcome.repair_rounds, 1, "{:?}", journal.stages());
     assert!(!repo.join("PWNED").exists());
     assert!(repo.join("PONG.txt").is_file());
     assert!(adapter.prompts()[1].contains("GATE_SELECTION_REFUSED"));
@@ -380,11 +496,17 @@ async fn scope_refusal_repairs_only_in_test_simulator() {
         vec![REPOSITORY_GATE_ID.into()],
     )
     .await;
-    assert_eq!(outcome.repair_rounds, 1);
+    assert_eq!(outcome.repair_rounds, 1, "{:?}", journal.stages());
     assert_eq!(outcome.candidate.prepared_at, "TEST_ONLY_SIMULATOR");
     assert!(!repo.join("secrets").exists());
     assert!(repo.join("PONG.txt").is_file());
     assert!(adapter.prompts()[1].contains("SCOPE_DENIED"));
+    let prompts = adapter.prompts();
+    assert_eq!(
+        prompt_subject(&prompts[0], "Base checkpoint ID: "),
+        prompt_subject(&prompts[1], "Base checkpoint ID: "),
+        "a pre-apply refusal must retain the current checkpoint"
+    );
     assert!(journal.stages().contains(&"scope_denied".to_string()));
 }
 
@@ -412,7 +534,7 @@ async fn missing_delete_repairs_only_in_test_simulator() {
         vec![REPOSITORY_GATE_ID.into()],
     )
     .await;
-    assert_eq!(outcome.repair_rounds, 1);
+    assert_eq!(outcome.repair_rounds, 1, "{:?}", journal.stages());
     assert!(repo.join("PONG.txt").is_file());
     assert!(adapter.prompts()[1].contains("PATH_ABSENT"));
     assert!(journal.stages().contains(&"path_absent".to_string()));
@@ -439,7 +561,7 @@ async fn gate_delete_repairs_only_in_test_simulator() {
     let (outcome, _journal, repo) = run_simulated(
         dir.path(),
         "delete-repair",
-        adapter,
+        adapter.clone(),
         vec!["PONG.txt".into(), "OLD.txt".into()],
         vec![REPOSITORY_GATE_ID.into()],
     )
@@ -448,4 +570,10 @@ async fn gate_delete_repairs_only_in_test_simulator() {
     assert_eq!(outcome.candidate.actual_scope, vec!["PONG.txt"]);
     assert!(repo.join("PONG.txt").is_file());
     assert!(!repo.join("OLD.txt").exists());
+    let prompts = adapter.prompts();
+    assert_ne!(
+        prompt_subject(&prompts[0], "Base checkpoint ID: "),
+        prompt_subject(&prompts[1], "Base checkpoint ID: "),
+        "an applied proposal must chain the daemon-issued next checkpoint"
+    );
 }

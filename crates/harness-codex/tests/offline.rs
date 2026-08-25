@@ -6,14 +6,15 @@ use bullet_harness_core::{
 };
 use serde_json::{json, Value};
 use std::time::Duration;
-const PROPOSAL: &str = r#"{"intent_summary":"write fixture","changes":[{"path":"PONG.txt","op":"create","contents":"PONG\n"}],"gate_ids":["repo.gate.v1"],"claims":[],"uncertainties":[],"done":true}"#;
+const GATE: &str = "gat_8888888888888888888888888888888888888888888888888888888888888888";
+const PROPOSAL: &str = r#"{"schema_version":1,"proposal_id":"cnt_1111111111111111111111111111111111111111111111111111111111111111","producing_attempt_id":"atm_2222222222222222222222222222222222222222222222222222222222222222","base_checkpoint_id":"ckp_3333333333333333333333333333333333333333333333333333333333333333","base_checkpoint_digest":"4444444444444444444444444444444444444444444444444444444444444444","operations":[{"path":"PONG.txt","preimage":{"kind":"absent"},"mutation":{"kind":"write","content_utf8":"PONG\n"}}],"gate_ids":["gat_8888888888888888888888888888888888888888888888888888888888888888"],"intent_summary":"write fixture","claims":[],"uncertainties":[],"done":true}"#;
 fn machine() -> CodexAppServerTranscript {
     CodexAppServerTranscript::new(
         AgentSessionId::new("session-1"),
         InvocationId::new("invocation-1"),
         "0.1.0-test",
         "0.149.1",
-        vec!["repo.gate.v1".into()],
+        vec![GATE.into()],
     )
     .expect("machine")
 }
@@ -169,8 +170,8 @@ fn stable_correlated_lifecycle_yields_only_exact_admitted_proposal() {
     let AppServerOutcome::Proposal(proposal) = machine.outcome().expect("outcome") else {
         panic!("expected proposal");
     };
-    assert_eq!(proposal.gate_ids, ["repo.gate.v1"]);
-    assert_eq!(proposal.changes[0].path, "PONG.txt");
+    assert_eq!(proposal.gate_ids, [GATE]);
+    assert_eq!(proposal.operations[0].path, "PONG.txt");
 }
 
 #[test]
@@ -376,11 +377,14 @@ fn proposal_and_gate_mismatches_never_complete() {
         InvocationId::new("invocation-order"),
         "0.1.0-test",
         "0.149.1",
-        vec!["repo.gate.v1".into(), "repo.gate.v2".into()],
+        vec![GATE.into(), format!("gat_{}", "9".repeat(64))],
     )
     .unwrap();
     establish(&mut ordered);
-    let reversed = PROPOSAL.replace("\"repo.gate.v1\"", "\"repo.gate.v2\",\"repo.gate.v1\"");
+    let reversed = PROPOSAL.replace(
+        &format!("\"{GATE}\""),
+        &format!("\"gat_{}\",\"{GATE}\"", "9".repeat(64)),
+    );
     ordered
         .ingest_line(&line(json!({"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","startedAtMs":10,"item":{"id":"item-1","type":"agentMessage"}}})))
         .unwrap();

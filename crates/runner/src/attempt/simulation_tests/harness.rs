@@ -147,7 +147,17 @@ impl HarnessAdapter for ScriptedSim {
                 .scan(0usize, move |completed, mut event| {
                     if event.kind == AgentEventKind::TurnCompleted {
                         if let Some(proposal) = overrides.get(completed) {
-                            event.payload["proposal"] = proposal.clone();
+                            let mut proposal = proposal.clone();
+                            for field in [
+                                "schema_version",
+                                "proposal_id",
+                                "producing_attempt_id",
+                                "base_checkpoint_id",
+                                "base_checkpoint_digest",
+                            ] {
+                                proposal[field] = event.payload["proposal"][field].clone();
+                            }
+                            event.payload["proposal"] = proposal;
                         }
                         *completed += 1;
                     }

@@ -18,12 +18,22 @@ const INIT_EVENT: &str = "00000000-0000-4000-8000-000000000002";
 const ASSISTANT_EVENT: &str = "00000000-0000-4000-8000-000000000003";
 const RESULT_EVENT: &str = "00000000-0000-4000-8000-000000000004";
 const CWD: &str = "/private/readonly";
+const GATE: &str = "gat_8888888888888888888888888888888888888888888888888888888888888888";
 
 fn proposal() -> Value {
     json!({
+        "schema_version": 1,
+        "proposal_id": format!("cnt_{}", "1".repeat(64)),
+        "producing_attempt_id": format!("atm_{}", "2".repeat(64)),
+        "base_checkpoint_id": format!("ckp_{}", "3".repeat(64)),
+        "base_checkpoint_digest": "4".repeat(64),
         "intent_summary": "write fixture",
-        "changes": [{"path": "PONG.txt", "op": "create", "contents": "PONG\n"}],
-        "gate_ids": ["repo.gate.v1"],
+        "operations": [{
+            "path": "PONG.txt",
+            "preimage": {"kind": "absent"},
+            "mutation": {"kind": "write", "content_utf8": "PONG\n"}
+        }],
+        "gate_ids": [GATE],
         "claims": [],
         "uncertainties": [],
         "done": true,
@@ -36,7 +46,7 @@ fn machine() -> ClaudeStreamTranscript {
         InvocationId::new(INVOCATION),
         CWD,
         OBSERVED_CLAUDE_SCHEMA_VERSION,
-        vec!["repo.gate.v1".into()],
+        vec![GATE.into()],
     )
     .expect("machine")
 }
@@ -229,8 +239,8 @@ fn exact_correlated_terminal_yields_only_the_structured_admitted_proposal() {
     let ClaudeStreamOutcome::Proposal(proposal) = machine.outcome().expect("outcome") else {
         panic!("expected proposal")
     };
-    assert_eq!(proposal.gate_ids, ["repo.gate.v1"]);
-    assert_eq!(proposal.changes[0].path, "PONG.txt");
+    assert_eq!(proposal.gate_ids, [GATE]);
+    assert_eq!(proposal.operations[0].path, "PONG.txt");
     assert!(events.iter().all(|event| {
         event.session_id.as_str() == KERNEL_SESSION
             && event.invocation_id.as_ref().map(InvocationId::as_str) == Some(INVOCATION)
@@ -315,8 +325,8 @@ fn malformed_duplicate_wrong_subject_and_late_frames_poison_permanently() {
         .ingest_line(&line(assistant_event(ASSISTANT_EVENT, "done")))
         .unwrap();
     let terminal = line(success_result(RESULT_EVENT, proposal())).replacen(
-        r#""gate_ids":["repo.gate.v1"]"#,
-        r#""gate_ids":["other.gate"],"gate_ids":["repo.gate.v1"]"#,
+        r#""gate_ids":["gat_8888888888888888888888888888888888888888888888888888888888888888"]"#,
+        r#""gate_ids":["gat_7777777777777777777777777777777777777777777777777777777777777777"],"gate_ids":["gat_8888888888888888888888888888888888888888888888888888888888888888"]"#,
         1,
     );
     assert!(nested.ingest_line(&terminal).is_err());
@@ -359,7 +369,7 @@ fn version_tools_and_every_provider_id_are_fail_closed() {
         InvocationId::new(INVOCATION),
         CWD,
         OBSERVED_CLAUDE_SCHEMA_VERSION,
-        vec!["repo.gate.v1".into()],
+        vec![GATE.into()],
     )
     .is_err());
     assert!(ClaudeStreamTranscript::new(
@@ -367,7 +377,7 @@ fn version_tools_and_every_provider_id_are_fail_closed() {
         InvocationId::new(INVOCATION),
         CWD,
         "2.1.241",
-        vec!["repo.gate.v1".into()],
+        vec![GATE.into()],
     )
     .is_err());
     for mutation in [

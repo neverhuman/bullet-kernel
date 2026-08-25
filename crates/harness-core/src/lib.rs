@@ -60,7 +60,7 @@ pub use live::{
     LIVE_CONFORMANCE_SCHEMA_VERSION,
 };
 pub use probe::{ExpectedProfile, ProbeResult, ProfileIdentity, ProfileRef};
-pub use proposal::{ChangeOp, FileChange, PatchProposal};
+pub use proposal::{PatchMutation, PatchOperation, PatchProposal, Preimage};
 pub use session::SessionState;
 pub use spawnrun::{
     kill_process_group, run_supervised, run_to_completion, PidSlot, RunOutcome, RunStop,
