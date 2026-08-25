@@ -4,5 +4,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
 log "required lane: fast + clippy"
 bash ops/ci/fast.sh
+bash ops/ci/nightly-test.sh
 cargo clippy --locked --workspace --all-targets -- -D warnings
 log "required lane passed"

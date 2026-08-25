@@ -13,6 +13,17 @@ re-exports them), and the demo. `crates/adapters` owns SQLite (WAL,
 `Ledger`, runs no conformance, and reports `NotConfigured` without
 `DATABASE_URL`.
 
+The current `AuthorityToken` is an unsigned legacy in-process value, never a
+mutation capability. Kernel IDs still use legacy prefix-plus-32-hex subjects,
+while the frozen wire authority contract requires full 256-bit IDs and different
+prefixes for some subjects. Lease and Attempt rows also lack durable graph/workspace/config/
+policy/routing/provider generations plus authority epoch and freeze generation;
+the legacy token still contains placeholder configuration, policy, and routing
+digests. Kernel has no admitted PASETO v4.public verifier. V1-S1 wire
+consumption and normalized durable subject truth must land before a positive
+signed mint or final-authority decision can exist. Until then, the online
+active-lease check is an observation only and unsigned authority stays refused.
+
 SQLite maintenance is an offline boundary. `bullet farm backup` uses SQLite's
 online backup API, validates exact schema, foreign keys, and integrity, then
 publishes an absent snapshot; the CLI separately writes an absent unsigned
