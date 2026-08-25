@@ -1,0 +1,38 @@
+# Inactive Jeryu-native mirror of the five local atomic lanes. This file does
+# not register runners or create a required check; activation waits for forge
+# ratification and API read-back of the protected context.
+
+[[job]]
+id = "fast"
+name = "fast"
+runner_class = "native-rust-clean"
+run = ["bash scripts/ci-local.sh fast"]
+artifact_paths = [".ci-artifacts"]
+
+[[job]]
+id = "lint"
+name = "lint"
+runner_class = "native-rust-clean"
+run = ["bash scripts/ci-local.sh lint"]
+artifact_paths = [".ci-artifacts"]
+
+[[job]]
+id = "contract"
+name = "contract"
+runner_class = "native-rust-clean"
+run = ["bash scripts/ci-local.sh contract"]
+artifact_paths = [".ci-artifacts"]
+
+[[job]]
+id = "security"
+name = "security"
+runner_class = "native-rust-clean"
+run = ["bash scripts/ci-local.sh security"]
+artifact_paths = [".ci-artifacts"]
+
+[[job]]
+id = "docs"
+name = "docs"
+runner_class = "native-rust-clean"
+run = ["bash scripts/ci-local.sh docs"]
+artifact_paths = [".ci-artifacts"]

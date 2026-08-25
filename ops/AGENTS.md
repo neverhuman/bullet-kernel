@@ -6,13 +6,16 @@ the same file.
 
 | Lane | Script | Hosted (`.github/workflows/ci.yml`) | Exit contract |
 | --- | --- | --- | --- |
-| `fast` | `ops/ci/fast.sh` | yes | fmt, nextest `fast`, `contracts check` |
-| `required` | `ops/ci/required.sh` | yes | fast + `ops/ci/nightly-test.sh` + clippy `-D warnings` |
-| `contract` | `ops/ci/contract.sh` | yes | nextest `contract` + `bullet-test-simulation`; offline |
+| `fast` | `ops/ci/fast.sh` | yes, atomic | digest-bound 496-test standalone partition (493 executed, three exact ignored); nonexistent daemon sentinel prevents sibling fallback |
+| `lint` | `ops/ci/lint.sh` | yes, atomic | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow/inventory/observation/nightly meta-tests |
+| `contract` | `ops/ci/contract.sh` | yes, atomic | exact 34-test offline provider-contract/simulation partition; never resolves `bullet-gitd` |
 | `security` | `ops/ci/security.sh` | yes | gitleaks; `cargo deny fetch db` then a lane-side freshness proof of the RustSec database; `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails |
+| `docs` | `ops/ci/docs.sh` | yes, atomic | generated-contract drift, rustdoc, repository-relative links |
+| `required` | `ops/ci/required.sh` | local only | fast + lint + contract + security + docs, sequentially and exactly once |
+| `family` | `ops/ci/family.sh` | no | exact four family tests; requires an existing executable canonical absolute `BULLET_GITD_BIN`; no sibling fallback |
 | `audit` | `ops/ci/audit.sh` | no (local) | Jankurai, ratchet floor `AUDIT_FLOOR`; missing auditor fails |
 | `egress` | `ops/ci/egress.sh` | no (local) | live namespace/nft/proxy proofs; 78 neutral when tools or user namespaces are missing |
-| `nightly` | `ops/ci/nightly.sh` | no (local) | per-provider refusal test + positive half; 78 when `BULLET_LIVE_PROVIDERS` is unset; real mode needs `BULLET_LIVE_REAL=1` and an absolute `BULLET_POLICY_PATH` |
+| `nightly` | `ops/ci/nightly.sh` | no (local) | per-provider refusal test + positive half; all PONG is 0, any neutral refusal without failure is 78, any failure is 1; real mode needs `BULLET_LIVE_REAL=1` and an absolute `BULLET_POLICY_PATH` |
 
 ## Security lane policy
 
@@ -39,7 +42,9 @@ stale-action-refs, ref-version-mismatch) and prints that it is doing so; the
 offline audits still fail the lane on a finding. Do not add a token to make the
 online audits run from a proof lane.
 
-`ops/ci/lib.sh` supplies `log`, `require_tool`, and `run_tests <profile>`;
-`ops/ci/nightly-test.sh` is the meta-test that pins the nightly wrapper's exact
-`cargo` calls and both modes. Edits under `ops/` are routed to `just check` by
-`agent/test-map.json`. Lane semantics are documented in `README.md#lanes`.
+`ops/ci/inventory.sh` is the single filter/count declaration;
+`ops/ci/inventory-test.sh` proves its nonzero, union, disjointness, complete
+identity digests, exact family/ignored identities, daemon sentinel, and source
+inventory. `ops/ci/nightly-test.sh` pins the nightly wrapper's exact
+calls and exit precedence. Edits under `ops/` are routed to `just check` by
+`agent/test-map.json`. Full lane semantics live in `docs/testing.md`.

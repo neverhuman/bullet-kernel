@@ -5,3 +5,4 @@
 *.sqlite-shm
 .DS_Store
 .jankurai/
+.ci-artifacts/

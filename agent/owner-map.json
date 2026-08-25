@@ -6,6 +6,7 @@
     "README.md": "docs",
     "LICENSE": "workspace",
     "Justfile": "ops",
+    "ci.toml": "ops",
     "Cargo.toml": "workspace",
     "Cargo.lock": "workspace",
     "agent/": "agent",

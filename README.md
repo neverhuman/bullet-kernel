@@ -1,7 +1,9 @@
 # bullet-kernel
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
-Last reviewed 2026-08-25 against HEAD `ca380bc`. Evidence classes follow
+Product-surface claims were last reviewed 2026-08-25 against `ca380bc`; the CI
+lane and test-inventory section was reviewed against product subject `107c5cd`.
+Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.
 
@@ -66,7 +68,7 @@ committed `SignedLeaseService` is in-process only.
 ```bash
 just setup
 just fast
-BULLET_DATA_DIR=./target/demo cargo run -p bullet -- demo
+BULLET_DATA_DIR=./target/demo cargo run -p bullet --bin bullet -- demo
 ```
 
 The demo receipt is re-derived from ledger rows on every run and proves the
@@ -79,11 +81,11 @@ The portal is a projection of this API. It is never an authority source.
 ## Offline maintenance
 
 ```bash
-cargo run -p bullet -- farm backup \
+cargo run -p bullet --bin bullet -- farm backup \
   --database ./target/demo/ledger.sqlite \
   --output ./backup.sqlite \
   --receipt ./backup.receipt.json
-cargo run -p bullet -- farm restore \
+cargo run -p bullet --bin bullet -- farm restore \
   --backup ./backup.sqlite \
   --receipt ./backup.receipt.json \
   --destination ./restored.sqlite
@@ -108,20 +110,24 @@ Every lane is one script under `ops/ci/`, reachable as `just <lane>` or
 
 | Lane | Command | Contents | Evidence class |
 | --- | --- | --- | --- |
-| fast | `just fast` | fmt check, nextest `fast` profile, `contracts check` | `COMPONENT_PROOF` |
-| required | `just check` | fast, then `ops/ci/nightly-test.sh` (meta-test pinning the nightly wrapper's exact `cargo` calls in both modes against a logging stub), then clippy `-D warnings` | `COMPONENT_PROOF` |
-| contract | `just contract` | nextest `contract` profile plus harness tapes and simulators; offline | `COMPONENT_PROOF` / `SYNTHETIC_PROOF` |
+| fast | `just fast` | digest-bound 496-test standalone partition: 493 execute and three exact live-egress cases stay explicitly ignored; a checked nonexistent daemon sentinel prevents sibling fallback | `COMPONENT_PROOF` |
+| lint | `just lint` | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, and inventory/workflow/observation/nightly meta-tests | hygiene gate; no evidence class |
+| contract | `just contract` | exactly 34 offline provider-protocol and simulation tests, executed once; no sibling daemon | `COMPONENT_PROOF` / `SYNTHETIC_PROOF` |
 | security | `just security` | gitleaks (no-git); `cargo deny fetch db` plus a lane-side freshness proof of the RustSec advisory database (refuses at 14 days); `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails | hygiene gate; no evidence class |
+| docs | `just docs` | generated-contract drift, workspace rustdoc, and repository-relative Markdown links | hygiene gate; no evidence class |
+| required | `just check` | fast, lint, contract, security, and docs sequentially, exactly once | unsigned component observation only |
+| family | `BULLET_GITD_BIN=/canonical/absolute/bullet-gitd just family` | exactly four connected family tests; missing, relative, non-canonical, or non-executable daemon paths fail before nextest | family observation only; not registered until immutable family provisioning exists |
 | audit | `just audit` | Jankurai audit against the committed ratchet floor (`AUDIT_FLOOR=57`, may only rise); artifacts under `.jankurai/`; a missing auditor fails | hygiene gate; no evidence class |
 | egress | `just egress` | the three `#[ignore]` live proofs in `crates/harness-egress/tests/sandbox.rs` (namespace, uplink, nftables, CONNECT proxy, receipt, teardown); exits 78 (neutral) when any of `unshare nsenter slirp4netns nft curl cat kill` or unprivileged user namespaces is missing; never green without running the probes | `COMPONENT_PROOF` on a Linux host |
-| nightly | `just nightly` | for each provider in `BULLET_LIVE_PROVIDERS` (comma list from `claude,codex,cursor,agy`): (a) the feature-gated refusal test `cargo test -p <crate> --features live --test live -- <exact test> --exact`, then (b) the positive half `bullet provider live-conformance`. Default mode points the positive half at a marker script, never the real binary, accepts only exit 0 (PONG) or 78 (policy refusal), and fails if the marker records any spawn. Real mode (`BULLET_LIVE_REAL=1` plus an absolute `BULLET_POLICY_PATH` to an operator-ratified policy) targets the symlink-resolved real binary and keeps receipts under `target/live/<provider>/<utc>/`. Unset `BULLET_LIVE_PROVIDERS` exits 78. Under the checked-in v1alpha1 policy every provider refuses at `POLICY_LIVE_ADMISSION_DISABLED` | default: `COMPONENT_PROOF` of refusal without spawn; a real-mode `PONG` receipt is one read-only turn, not `LIVE_PROOF` |
-| toolchain-msrv | `just toolchain-msrv` | builds and tests the whole workspace under rustup toolchain 1.95.0, the family MSRV named by the Hub release contract, while `rust-toolchain.toml` and hosted CI stay pinned to 1.97.1. Runs the exact receipt argv from the Hub MSRV schema (`cargo build --workspace --all-targets --locked`, then `cargo test --workspace --all-targets --locked --no-fail-fast` with `CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUSTC=<absolute 1.95.0 rustc> RUSTUP_TOOLCHAIN=1.95.0`) in the isolated `target/toolchain-1.95.0/`, then writes the machine-local observation `.bullet-family/toolchain-1.95.0-bullet-kernel.json` (ignored) plus the two raw output logs beside it. A missing rustup toolchain, `b3sum` 1.8.2, or `jq` is a typed refusal (exit 1), never a skip; a red build or test fails the lane after the observation is written. Like `fast`, the runner and `bullet` suites need the sibling `bullet-git/target/debug/bullet-gitd` (or `BULLET_GITD_BIN`) | `COMPONENT_PROOF` under the MSRV; the observation is an input for the operator-signed `release.rust-msrv-1-95` receipt, not a receipt, and clears nothing |
+| nightly | `just nightly` | per selected provider: exact live-feature refusal test plus positive live-conformance half. All PONG is 0; any policy refusal without a hard failure is neutral 78; any test, execution, or spawn failure is 1. Default mode uses marker executables and the checked-in policy, never a real provider | default: `COMPONENT_PROOF` of refusal without spawn; not `LIVE_PROOF` |
+| toolchain-msrv | `just toolchain-msrv` | release-schema observation under Rust 1.95.0; separate from standalone required CI and still family-bound while its frozen receipt argv tests all targets | `COMPONENT_PROOF`; unsigned input to a future release receipt only |
 
-`.github/workflows/ci.yml` runs only `fast`, `required`, `contract`, and
-`security`, each by calling the same `ops/ci/<lane>.sh`. `audit`, `egress`,
-`nightly`, and `toolchain-msrv` are local lanes with no hosted job. Hosted runners provision pinned
-`cargo-nextest`, `gitleaks`, `cargo-deny`, and `zizmor` 1.25.2; `jankurai` and the egress tools
-are local-only.
+`.github/workflows/ci.yml` scans source and lockfiles before dependency work,
+then runs the five atomic lanes in parallel and converges on exact context
+`CI / required`. Scheduled diagnostics cover external links, advisories,
+coverage, full-history secrets, and macOS/Windows compile plus typed refusal.
+All hosted observations are unsigned `DIAGNOSTIC_ONLY`, not Evidence or release
+receipts. See [CI and test inventory](docs/testing.md).
 
 ## Readiness
 

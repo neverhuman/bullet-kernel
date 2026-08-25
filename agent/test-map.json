@@ -41,13 +41,25 @@
       "command": "just check",
       "purpose": "verify local CI parity"
     },
+    "scripts/": {
+      "command": "bash scripts/ci-local.sh lint",
+      "purpose": "verify local and hosted entrypoints, observation schema, and ShellCheck policy"
+    },
+    "docs/": {
+      "command": "bash scripts/ci-local.sh docs",
+      "purpose": "verify contract drift, rustdoc, and repository-relative documentation links"
+    },
+    "ci.toml": {
+      "command": "bash ops/ci/workflow-policy.sh",
+      "purpose": "verify inactive Jeryu jobs stay forge-neutral and route to local lane scripts"
+    },
     "tests/": {
       "command": "cargo test -p bullet-test-simulation",
       "purpose": "prove harness tapes stay non-authoritative"
     },
     ".github/": {
-      "command": "bash scripts/ci-local.sh required",
-      "purpose": "prove hosted lanes match local scripts"
+      "command": "bash scripts/ci-local.sh lint",
+      "purpose": "prove hosted lanes, immutable action pins, triggers, and protected aggregation policy"
     },
     "crates/harness-core/": {
       "command": "cargo test -p bullet-harness-core -p bullet-harness-sim",

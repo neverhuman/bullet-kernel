@@ -33,15 +33,24 @@ if [[ -n "${BULLET_NIGHTLY_FAIL_CRATE:-}" && "$*" == *"-p ${BULLET_NIGHTLY_FAIL_
 fi
 # The positive live-conformance half refuses (78) under the v1alpha1 policy.
 if [[ "$*" == *"provider live-conformance"* ]]; then
-  exit 78
+  if [[ -n "${BULLET_NIGHTLY_PONG_PROVIDER:-}" && "$*" == *"--provider ${BULLET_NIGHTLY_PONG_PROVIDER} "* ]]; then
+    exit 0
+  fi
+  exit "${BULLET_NIGHTLY_POSITIVE_CODE:-78}"
 fi
 EOF
 chmod 700 "$test_root/cargo"
 
+set +e
 PATH="$test_root:/usr/bin:/bin" \
   BULLET_NIGHTLY_TEST_LOG="$log_file" \
   BULLET_LIVE_PROVIDERS="claude,codex,cursor,agy" \
   bash ops/ci/nightly.sh
+neutral_code=$?
+set -e
+if [[ "$neutral_code" -ne 78 ]]; then
+  fail "four policy refusals must return neutral 78, got $neutral_code"
+fi
 
 mapfile -t calls <"$log_file"
 providers=(claude codex cursor agy)
@@ -60,7 +69,7 @@ for i in 0 1 2 3; do
   if [[ "$refusal_line" != "${refusal[$i]}" ]]; then
     fail "refusal call $i mismatch: $refusal_line"
   fi
-  if [[ "$positive_line" != "run --locked -q -p bullet -- provider live-conformance "* ]]; then
+  if [[ "$positive_line" != "run --locked -q -p bullet --bin bullet -- provider live-conformance "* ]]; then
     fail "positive call $i is not a live-conformance run: $positive_line"
   fi
   if [[ "$positive_line" != *"--provider ${providers[$i]} "* ]]; then
@@ -79,8 +88,14 @@ if [[ "$code" -ne 1 ]]; then
 fi
 printf '{}\n' >"$test_root/policy.json"
 : >"$log_file"
+set +e
 PATH="$test_root:/usr/bin:/bin" BULLET_NIGHTLY_TEST_LOG="$log_file" BULLET_LIVE_PROVIDERS="claude,agy" \
   BULLET_LIVE_REAL=1 BULLET_POLICY_PATH="$test_root/policy.json" bash ops/ci/nightly.sh >/dev/null
+real_code=$?
+set -e
+if [[ "$real_code" -ne 78 ]]; then
+  fail "real-mode policy refusals must return neutral 78, got $real_code"
+fi
 mapfile -t real_calls <"$log_file"
 if [[ "${#real_calls[@]}" -ne 4 ]]; then
   fail "real mode: expected 4 cargo calls for two providers, got ${#real_calls[@]}"
@@ -97,6 +112,21 @@ if [[ "${real_calls[1]}" != *"--data-dir $REPO_ROOT/target/live/claude/"* ]]; th
 fi
 rm -rf "$REPO_ROOT/target/live/claude" "$REPO_ROOT/target/live/agy"
 
+# Every positive half must be PONG for green; one refusal keeps a mixed run neutral.
+: >"$log_file"
+PATH="$test_root:/usr/bin:/bin" BULLET_NIGHTLY_TEST_LOG="$log_file" \
+  BULLET_NIGHTLY_POSITIVE_CODE=0 BULLET_LIVE_PROVIDERS="claude,codex" \
+  bash ops/ci/nightly.sh >/dev/null
+set +e
+PATH="$test_root:/usr/bin:/bin" BULLET_NIGHTLY_TEST_LOG="$log_file" \
+  BULLET_NIGHTLY_PONG_PROVIDER=claude BULLET_LIVE_PROVIDERS="claude,codex" \
+  bash ops/ci/nightly.sh >/dev/null
+mixed_code=$?
+set -e
+if [[ "$mixed_code" -ne 78 ]]; then
+  fail "one PONG plus one refusal must return neutral 78, got $mixed_code"
+fi
+
 : >"$log_file"
 if PATH="$test_root:/usr/bin:/bin" \
   BULLET_NIGHTLY_TEST_LOG="$log_file" \
@@ -107,4 +137,4 @@ if PATH="$test_root:/usr/bin:/bin" \
   exit 1
 fi
 
-log "nightly exact live-test selection plus positive-half wiring passed"
+log "nightly selection, failure precedence, PONG, and neutral outcomes passed"

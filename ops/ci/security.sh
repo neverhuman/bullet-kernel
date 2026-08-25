@@ -11,8 +11,11 @@ require_tool gitleaks || exit 1
 require_tool cargo-deny || exit 1
 require_tool zizmor || exit 1
 require_tool git || exit 1
+require_exact_output "8.21.2" gitleaks version
+require_exact_output "cargo-deny 0.19.8" cargo-deny --version
+require_exact_output "zizmor 1.25.2" zizmor --version
 [[ -f deny.toml ]] || { echo "[ci] deny.toml missing: no committed supply-chain policy" >&2; exit 1; }
-gitleaks detect --source . --no-git --redact --no-banner
+scan_current_source_secrets
 # The advisory database is refreshed and then independently proved fresh.
 # cargo-deny 0.19.8 fetches it through the git CLI, and its capture() helper
 # reads a non-zero git exit as success (upstream src/advisories/helpers/db.rs),

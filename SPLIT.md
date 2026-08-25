@@ -36,6 +36,9 @@ live-conformance path, and trust-boundary process bins.
   (`COMPONENT_PROOF`, `SYNTHETIC_PROOF`, `TRANSACTION_PROOF`, `LIVE_PROOF`,
   `RELEASE_PROOF` per `bullet-farm/docs/release.md`); a receipt is never
   authority.
+- Jeryu tags observed today are not annotated signed tags. `bullet-family
+  forge pin` refuses `UNSIGNED_FORGE_TAG` until they are (J-5 / OD-D). Do not
+  write "signed Jeryu tags" as a current fact.
 
 ## Required Local Check
 

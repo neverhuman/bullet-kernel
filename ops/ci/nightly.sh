@@ -3,9 +3,10 @@
 # refusal test and (b) runs the positive live-conformance half through the CLI.
 # Under the checked-in v1alpha1 policy every positive half refuses at
 # POLICY_LIVE_ADMISSION_DISABLED (exit 78) before any provider is spawned; that
-# is a neutral outcome. The lane stays green only if every provider's positive
-# half either produced a PONG-matching receipt (exit 0) or was policy-refused
-# (exit 78) and no provider process was ever spawned; any other outcome fails.
+# is a neutral outcome. The lane is green only if every provider's positive
+# half produced a PONG-matching receipt (exit 0). Any policy refusal makes the
+# lane itself neutral (78), and any refusal-test/execution/spawn failure wins as
+# exit 1. This prevents an all-refused credential-free run from looking proved.
 # BULLET_LIVE_PROVIDERS unset returns 78 to distinguish unregistered from success.
 #
 # Real mode (operator only): BULLET_LIVE_REAL=1 together with BULLET_POLICY_PATH
@@ -34,6 +35,7 @@ else
   policy="$REPO_ROOT/crates/application/tests/fixtures/policy-v1alpha1.json"
 fi
 status=0
+neutral=0
 IFS=',' read -ra providers <<< "$BULLET_LIVE_PROVIDERS"
 for provider in "${providers[@]}"; do
   provider="${provider// /}"
@@ -80,13 +82,16 @@ for provider in "${providers[@]}"; do
   log "live-conformance positive half: $provider"
   set +e
   BULLET_POLICY_PATH="$policy" \
-    cargo run --locked -q -p bullet -- provider live-conformance \
+    cargo run --locked -q -p bullet --bin bullet -- provider live-conformance \
       --data-dir "$data_dir" --provider "$provider" --executable "$executable"
   code=$?
   set -e
   case "$code" in
     0) log "positive half $provider: PONG receipt (data dir $data_dir)" ;;
-    78) log "positive half $provider: POLICY_LIVE_ADMISSION_DISABLED (neutral refusal)" ;;
+    78)
+      log "positive half $provider: POLICY_LIVE_ADMISSION_DISABLED (neutral refusal)"
+      neutral=1
+      ;;
     *) echo "[ci] positive half $provider failed (exit $code)" >&2; status=1 ;;
   esac
   if (( real_mode == 0 )); then
@@ -98,4 +103,10 @@ for provider in "${providers[@]}"; do
   fi
   rm -rf "$bin_dir"
 done
-exit "$status"
+if (( status != 0 )); then
+  exit 1
+fi
+if (( neutral != 0 )); then
+  exit 78
+fi
+exit 0

@@ -25,7 +25,7 @@ struct Args {
     /// farmd control-plane base URL.
     #[arg(long, default_value = "http://127.0.0.1:7420")]
     farmd: String,
-    /// Runner identity (run_<32hex>); any other string is used as a seed.
+    /// Exact runner identity (run_<32hex>).
     #[arg(long)]
     runner_id: String,
     /// Runner generation.
@@ -68,6 +68,10 @@ fn adapter_for(provider: &str) -> Option<Arc<dyn HarnessAdapter>> {
         "sim" => Some(Arc::new(bullet_harness_sim::SimAdapter::new())),
         _ => None,
     }
+}
+
+fn parse_runner_id(raw: &str) -> Result<RunnerId, String> {
+    RunnerId::parse(raw).map_err(|error| error.to_string())
 }
 
 /// Bridges the runner loop's journal into the durable checkpoint supervisor.
@@ -123,6 +127,13 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> ExitCode {
+    let runner_id = match parse_runner_id(&args.runner_id) {
+        Ok(runner_id) => runner_id,
+        Err(error) => {
+            eprintln!("bullet-runner: INVALID_RUNNER_ID: {error}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(adapter) = adapter_for(&args.provider) else {
         eprintln!(
             "bullet-runner: unavailable provider {} (simulator-only quarantine)",
@@ -137,8 +148,6 @@ async fn run(args: Args) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let runner_id =
-        RunnerId::parse(&args.runner_id).unwrap_or_else(|_| RunnerId::from_seed(&args.runner_id));
     let ready = match client.next_ready().await {
         Ok(Some(ready)) => ready,
         Ok(None) => {
@@ -215,6 +224,22 @@ async fn execute(
         Err(err) => {
             eprintln!("bullet-runner: {}: {err}", err.reason_code());
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_runner_id;
+    use bullet_domain::RunnerId;
+
+    #[test]
+    fn runner_identity_is_exact_and_never_derived_from_malformed_text() {
+        let expected = RunnerId::from_seed("admitted-runner");
+        assert_eq!(parse_runner_id(expected.as_str()).unwrap(), expected);
+
+        for invalid in ["", "admitted-runner", "run_short", "run_not-hex"] {
+            assert!(parse_runner_id(invalid).is_err(), "{invalid:?} must refuse");
         }
     }
 }

@@ -28,7 +28,7 @@ pub struct Tooling {
     pub unshare: ToolRecord,
     /// `nsenter` (util-linux): runs commands inside the namespace.
     pub nsenter: ToolRecord,
-    /// `slirp4netns`: user-mode uplink with the host at [`GATEWAY`].
+    /// `slirp4netns`: user-mode uplink with the host at `GATEWAY`.
     pub slirp4netns: ToolRecord,
     /// `nft`: installs and lists the in-namespace ruleset.
     pub nft: ToolRecord,
