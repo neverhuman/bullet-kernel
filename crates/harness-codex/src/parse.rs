@@ -1,292 +1,485 @@
-//! Codex `exec --json` NDJSON parsing. Supports both the thread/turn/item
-//! event shape and the older `msg`-wrapped shape; the PatchProposal comes
-//! from the `-o` last-message file, never from a provider claim.
-
-use bullet_domain::Observation;
-use bullet_harness_core::{
-    AgentEvent, AgentEventKind, EventNormalizer, NativeMeta, PatchProposal, ProfileIdentity,
-    RunOutcome,
+use crate::protocol::{
+    nested_str, nonempty_string, parse_frame, protocol, turn_subject, valid_initialize_response,
+    valid_native_id, valid_thread, AppServerOutcome, CodexAppServerTranscript, Frame, Pending,
+    Phase,
 };
-use serde_json::{json, Value};
-use std::io::Write;
-use std::path::Path;
+use bullet_harness_core::{AgentEvent, AgentEventKind, HarnessError};
+use serde_json::{json, Map, Value};
 
-/// Normalize one finished invocation and its last-message file.
-pub fn normalize_outcome(
-    normalizer: &mut EventNormalizer,
-    outcome: &RunOutcome,
-    last_message: Option<&str>,
-) -> Vec<AgentEvent> {
-    let mut events = Vec::new();
-    let mut failed = false;
-    for line in &outcome.stdout_lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+impl CodexAppServerTranscript {
+    /// Consume exactly one stable App Server JSONL frame.
+    pub fn ingest_line(&mut self, line: &str) -> Result<Vec<AgentEvent>, HarnessError> {
+        if self.phase == Phase::Poisoned {
+            return Err(protocol("transcript is poisoned"));
         }
-        match serde_json::from_str::<Value>(trimmed) {
-            Ok(value) => {
-                for (kind, payload) in map_value(normalizer, &value) {
-                    if kind == AgentEventKind::TurnFailed {
-                        failed = true;
-                    }
-                    events.push(normalizer.accept(kind, payload, &NativeMeta::none()));
+        if self.phase == Phase::Terminal {
+            return self.fail("late frame after terminal outcome");
+        }
+        if self.inbound_frames >= Self::MAX_TRANSCRIPT_FRAMES {
+            return self.fail("transcript frame limit exceeded");
+        }
+        self.inbound_frames += 1;
+        let frame = match parse_frame(line) {
+            Ok(frame) => frame,
+            Err(reason) => return self.fail(reason),
+        };
+        match frame {
+            Frame::Response { id, result } => self.response(id, result),
+            Frame::Notification {
+                method,
+                params,
+                canonical,
+            } => {
+                if !self.seen_notifications.insert(canonical) {
+                    return self.fail("duplicate notification frame");
                 }
+                self.notification(&method, &params)
             }
-            Err(_) => events.push(normalizer.malformed(trimmed)),
         }
     }
-    if failed {
-        return events;
+
+    fn response(&mut self, id: u64, result: Value) -> Result<Vec<AgentEvent>, HarnessError> {
+        if !self.seen_responses.insert(id) {
+            return self.fail(format!("duplicate response id {id}"));
+        }
+        let Some((expected_id, pending)) = self.pending.take() else {
+            return self.fail(format!("unexpected response id {id}"));
+        };
+        if id != expected_id {
+            return self.fail(format!("response id {id} does not match {expected_id}"));
+        }
+        match pending {
+            Pending::Initialize => {
+                if self.phase != Phase::Initializing || !valid_initialize_response(&result) {
+                    return self.fail("invalid initialize response");
+                }
+                self.phase = Phase::AwaitInitialized;
+                Ok(vec![self.event(
+                    AgentEventKind::SessionStarted,
+                    json!({"protocol": "codex_app_server_jsonl"}),
+                    format!("response:{id}"),
+                )])
+            }
+            Pending::ThreadStart => self.thread_response(result, id),
+            Pending::TurnStart => self.turn_response(result, id),
+            Pending::TurnInterrupt => self.interrupt_response(result, id),
+        }
     }
-    if outcome.timed_out || outcome.exit_code != Some(0) {
-        let stderr_tail: String = outcome
-            .stderr
-            .chars()
-            .rev()
-            .take(400)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        let payload = json!({
-            "reason": "process did not exit cleanly",
-            "exit_code": outcome.exit_code,
-            "timed_out": outcome.timed_out,
-            "stderr_tail": stderr_tail,
+
+    fn notification(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        match method {
+            "thread/started" => self.thread_started(params),
+            "turn/started" => self.turn_started(params),
+            "item/started" => self.item_event(params, false),
+            "item/completed" => self.item_event(params, true),
+            "item/agentMessage/delta" => {
+                self.delta(params, AgentEventKind::TurnDelta, "agentMessage")
+            }
+            "item/reasoning/textDelta" | "item/reasoning/summaryTextDelta" => {
+                self.delta(params, AgentEventKind::ThinkingDelta, "reasoning")
+            }
+            "turn/completed" => self.turn_completed(params),
+            _ => self.fail(format!("unadmitted notification method {method:?}")),
+        }
+    }
+
+    fn thread_response(
+        &mut self,
+        result: Value,
+        request_id: u64,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        if self.phase != Phase::ThreadStarting || self.thread_response.is_some() {
+            return self.fail("unexpected thread/start response");
+        }
+        let Some(result_object) = result.as_object() else {
+            return self.fail("thread/start result is not an object");
+        };
+        let Some(id) = nested_str(Some(result_object), "thread", "id") else {
+            return self.fail("thread/start response lacks thread.id");
+        };
+        if !valid_native_id(id) {
+            return self.fail("thread/start response has invalid thread.id");
+        }
+        let Some(thread) = result_object.get("thread").and_then(Value::as_object) else {
+            return self.fail("thread/start response lacks thread object");
+        };
+        if result_object.get("approvalPolicy").and_then(Value::as_str) != Some("never")
+            || result_object.get("sandbox").and_then(Value::as_str) != Some("read-only")
+            || result_object.get("cwd").and_then(Value::as_str) != self.thread_cwd.as_deref()
+            || !nonempty_string(result_object, "model")
+            || !nonempty_string(result_object, "modelProvider")
+            || !result_object
+                .get("approvalsReviewer")
+                .is_some_and(Value::is_string)
+            || !valid_thread(
+                thread,
+                id,
+                &self.expected_runtime_version,
+                self.thread_cwd.as_deref(),
+            )
+        {
+            return self.fail("thread/start response does not preserve read-only subject");
+        }
+        self.thread_response = Some(id.to_string());
+        self.normalizer.set_native_session(id);
+        let ready = self.finish_thread_start()?;
+        let mut events = vec![self.event(
+            AgentEventKind::SessionIdentity,
+            json!({"request_id": request_id}),
+            format!("response:{request_id}"),
+        )];
+        if ready {
+            events.push(self.event(
+                AgentEventKind::SessionReady,
+                json!({"thread_id": id}),
+                "thread:ready",
+            ));
+        }
+        Ok(events)
+    }
+
+    fn thread_started(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        if self.phase != Phase::ThreadStarting || self.thread_notification.is_some() {
+            return self.fail("duplicate or out-of-phase thread/started");
+        }
+        let Some(thread) = params.get("thread").and_then(Value::as_object) else {
+            return self.fail("thread/started lacks thread.id");
+        };
+        let Some(id) = thread.get("id").and_then(Value::as_str) else {
+            return self.fail("thread/started lacks thread.id");
+        };
+        if !valid_native_id(id) {
+            return self.fail("thread/started has invalid thread.id");
+        }
+        if !valid_thread(
+            thread,
+            id,
+            &self.expected_runtime_version,
+            self.thread_cwd.as_deref(),
+        ) {
+            return self.fail("thread/started has invalid thread subject");
+        }
+        self.thread_notification = Some(id.to_string());
+        let ready = self.finish_thread_start()?;
+        Ok(if ready {
+            vec![self.event(
+                AgentEventKind::SessionReady,
+                json!({"thread_id": id}),
+                "thread:ready",
+            )]
+        } else {
+            Vec::new()
+        })
+    }
+
+    fn finish_thread_start(&mut self) -> Result<bool, HarnessError> {
+        let (Some(response), Some(notification)) =
+            (&self.thread_response, &self.thread_notification)
+        else {
+            return Ok(false);
+        };
+        if response != notification {
+            return self.fail("thread/start subjects disagree");
+        }
+        self.phase = Phase::ThreadReady;
+        Ok(true)
+    }
+
+    fn turn_response(
+        &mut self,
+        result: Value,
+        request_id: u64,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        if self.phase != Phase::TurnStarting || self.turn_response.is_some() {
+            return self.fail("unexpected turn/start response");
+        }
+        let Some((id, status)) = turn_subject(result.as_object()) else {
+            return self.fail("turn/start response lacks turn subject");
+        };
+        if !valid_native_id(id) || status != "inProgress" {
+            return self.fail("turn/start response is not valid inProgress");
+        }
+        self.turn_response = Some(id.to_string());
+        let ready = self.finish_turn_start()?;
+        Ok(if ready {
+            vec![self.event(
+                AgentEventKind::TurnStarted,
+                json!({"request_id": request_id}),
+                "turn:started",
+            )]
+        } else {
+            Vec::new()
+        })
+    }
+
+    fn turn_started(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        self.require_exact_thread(params)?;
+        if self.phase != Phase::TurnStarting || self.turn_notification.is_some() {
+            return self.fail("duplicate or out-of-phase turn/started");
+        }
+        let Some((id, status)) = turn_subject(Some(params)) else {
+            return self.fail("turn/started lacks turn subject");
+        };
+        if !valid_native_id(id) || status != "inProgress" {
+            return self.fail("turn/started is not valid inProgress");
+        }
+        self.turn_notification = Some(id.to_string());
+        let ready = self.finish_turn_start()?;
+        Ok(if ready {
+            vec![self.event(
+                AgentEventKind::TurnStarted,
+                json!({"turn_id": id}),
+                "turn:started",
+            )]
+        } else {
+            Vec::new()
+        })
+    }
+
+    fn finish_turn_start(&mut self) -> Result<bool, HarnessError> {
+        let (Some(response), Some(notification)) = (&self.turn_response, &self.turn_notification)
+        else {
+            return Ok(false);
+        };
+        if response != notification {
+            return self.fail("turn/start subjects disagree");
+        }
+        self.phase = Phase::Active;
+        Ok(true)
+    }
+
+    fn item_event(
+        &mut self,
+        params: &Map<String, Value>,
+        completed: bool,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        self.require_active_subject(params)?;
+        let Some(item) = params.get("item").and_then(Value::as_object) else {
+            return self.fail("item event lacks item object");
+        };
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            return self.fail("item event lacks item.id");
+        };
+        if !valid_native_id(id) {
+            return self.fail("item event has invalid item.id");
+        }
+        let kind = match item.get("type").and_then(Value::as_str) {
+            Some("agentMessage") => "agentMessage",
+            Some("reasoning") => "reasoning",
+            Some("commandExecution") => "commandExecution",
+            Some("fileChange") => return self.fail("provider file changes are never admitted"),
+            Some(other) => return self.fail(format!("unadmitted item type {other:?}")),
+            None => return self.fail("item event lacks item.type"),
+        };
+        let timestamp_field = if completed {
+            "completedAtMs"
+        } else {
+            "startedAtMs"
+        };
+        let Some(timestamp) = params.get(timestamp_field).and_then(Value::as_i64) else {
+            return self.fail(format!("item event lacks {timestamp_field}"));
+        };
+        if timestamp < 0 {
+            return self.fail("item event timestamp is negative");
+        }
+        match (self.item_states.get(id), completed) {
+            (None, false) => {
+                if self.item_states.len() >= Self::MAX_ITEMS {
+                    return self.fail("item limit exceeded");
+                }
+                self.item_states
+                    .insert(id.to_string(), (kind.to_string(), timestamp, false));
+                Ok(if kind == "commandExecution" {
+                    vec![self.event(
+                        AgentEventKind::ToolStarted,
+                        json!({"item_id": id}),
+                        format!("item:{id}:started"),
+                    )]
+                } else {
+                    Vec::new()
+                })
+            }
+            (Some((started_kind, started_at, false)), true)
+                if started_kind == kind && timestamp >= *started_at =>
+            {
+                self.item_states
+                    .insert(id.to_string(), (kind.to_string(), *started_at, true));
+                self.completed_item(item, id, kind)
+            }
+            _ => self.fail("duplicate, missing-start, or reordered item event"),
+        }
+    }
+
+    fn completed_item(
+        &mut self,
+        item: &Map<String, Value>,
+        id: &str,
+        kind: &str,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        match kind {
+            "agentMessage" => {
+                if self.final_message.is_some() {
+                    return self.fail("multiple completed agent messages are not admitted");
+                }
+                let Some(text) = item.get("text").and_then(Value::as_str) else {
+                    return self.fail("completed agentMessage lacks text");
+                };
+                self.final_message = Some((id.to_string(), text.to_string()));
+                Ok(vec![self.event(
+                    AgentEventKind::TurnDelta,
+                    json!({"text": text, "final": true}),
+                    format!("item:{id}:completed"),
+                )])
+            }
+            "commandExecution" => Ok(vec![self.event(
+                AgentEventKind::ToolCompleted,
+                json!({"item": item}),
+                format!("item:{id}:completed"),
+            )]),
+            "reasoning" => Ok(Vec::new()),
+            _ => self.fail("unreachable item type"),
+        }
+    }
+
+    fn delta(
+        &mut self,
+        params: &Map<String, Value>,
+        event_kind: AgentEventKind,
+        item_kind: &str,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        self.require_active_subject(params)?;
+        let Some(item_id) = params.get("itemId").and_then(Value::as_str) else {
+            return self.fail("delta lacks itemId");
+        };
+        if !self
+            .item_states
+            .get(item_id)
+            .is_some_and(|(kind, _, completed)| kind == item_kind && !completed)
+        {
+            return self.fail("delta does not name a matching active item");
+        }
+        let Some(text) = params.get("delta").and_then(Value::as_str) else {
+            return self.fail("delta payload is not text");
+        };
+        Ok(vec![self.event(
+            event_kind,
+            json!({"text": text}),
+            format!("delta:{item_id}"),
+        )])
+    }
+
+    fn turn_completed(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        self.require_exact_thread(params)?;
+        if !matches!(self.phase, Phase::Active | Phase::Interrupting) || self.terminal_seen {
+            return self.fail("duplicate or out-of-phase turn/completed");
+        }
+        let Some((id, status)) = turn_subject(Some(params)) else {
+            return self.fail("turn/completed lacks turn subject");
+        };
+        if id != self.turn_id()? {
+            return self.fail("turn/completed names a different turn");
+        }
+        self.terminal_seen = true;
+        let event = match status {
+            "completed" if !self.cancel_requested => self.completed_turn(params, id)?,
+            "interrupted" if self.cancel_requested => self.interrupted_turn(id),
+            "failed" if !self.cancel_requested => self.failed_turn(params, id),
+            _ => return self.fail("terminal status disagrees with cancellation state"),
+        };
+        Ok(vec![event])
+    }
+
+    fn interrupted_turn(&mut self, id: &str) -> AgentEvent {
+        self.outcome = Some(if self.timed_out {
+            AppServerOutcome::TimedOut
+        } else {
+            AppServerOutcome::Interrupted
         });
-        events.push(normalizer.accept(AgentEventKind::TurnFailed, payload, &NativeMeta::none()));
-        return events;
-    }
-    let (proposal, text) = match last_message {
-        Some(text) => (
-            PatchProposal::extract_from_text(text)
-                .ok()
-                .and_then(|p| serde_json::to_value(p).ok())
-                .unwrap_or(Value::Null),
-            Value::String(text.to_string()),
-        ),
-        None => (Value::Null, Value::Null),
-    };
-    let payload = json!({ "proposal": proposal, "text": text });
-    events.push(normalizer.accept(AgentEventKind::TurnCompleted, payload, &NativeMeta::none()));
-    events
-}
-
-fn map_value(normalizer: &mut EventNormalizer, value: &Value) -> Vec<(AgentEventKind, Value)> {
-    if let Some(kind) = value.get("type").and_then(Value::as_str) {
-        return map_typed(normalizer, kind, value);
-    }
-    if let Some(msg) = value.get("msg") {
-        return map_msg(normalizer, msg);
-    }
-    Vec::new()
-}
-
-fn map_typed(
-    normalizer: &mut EventNormalizer,
-    kind: &str,
-    value: &Value,
-) -> Vec<(AgentEventKind, Value)> {
-    match kind {
-        "thread.started" => {
-            if let Some(thread) = value.get("thread_id").and_then(Value::as_str) {
-                normalizer.set_native_session(thread);
-            }
-            vec![(AgentEventKind::SessionReady, value.clone())]
+        if self.cancel_acknowledged {
+            self.phase = Phase::Terminal;
         }
-        "turn.started" => Vec::new(),
-        "item.started" => match value.pointer("/item/type").and_then(Value::as_str) {
-            Some("command_execution") => vec![(
-                AgentEventKind::ToolStarted,
-                json!({ "command": value.pointer("/item/command") }),
-            )],
-            _ => Vec::new(),
-        },
-        "item.completed" => map_item(value),
-        "turn.completed" => vec![(
-            AgentEventKind::UsageReported,
-            json!({ "usage": value.get("usage") }),
-        )],
-        "turn.failed" | "error" => vec![(AgentEventKind::TurnFailed, value.clone())],
-        _ => Vec::new(),
-    }
-}
-
-fn map_item(value: &Value) -> Vec<(AgentEventKind, Value)> {
-    match value.pointer("/item/type").and_then(Value::as_str) {
-        Some("agent_message") => vec![(
-            AgentEventKind::TurnDelta,
-            json!({ "text": value.pointer("/item/text") }),
-        )],
-        Some("reasoning") => vec![(
-            AgentEventKind::ThinkingDelta,
-            json!({ "text": value.pointer("/item/text") }),
-        )],
-        Some("command_execution") => vec![(
-            AgentEventKind::ToolCompleted,
-            json!({
-                "command": value.pointer("/item/command"),
-                "exit_code": value.pointer("/item/exit_code"),
-            }),
-        )],
-        _ => Vec::new(),
-    }
-}
-
-fn map_msg(normalizer: &mut EventNormalizer, msg: &Value) -> Vec<(AgentEventKind, Value)> {
-    match msg.get("type").and_then(Value::as_str) {
-        Some("session_configured") => {
-            if let Some(session) = msg.get("session_id").and_then(Value::as_str) {
-                normalizer.set_native_session(session);
-            }
-            vec![(AgentEventKind::SessionReady, msg.clone())]
-        }
-        Some("agent_message") => vec![(
-            AgentEventKind::TurnDelta,
-            json!({ "text": msg.get("message") }),
-        )],
-        Some("agent_reasoning") => vec![(
-            AgentEventKind::ThinkingDelta,
-            json!({ "text": msg.get("text") }),
-        )],
-        Some("token_count") => vec![(AgentEventKind::UsageReported, msg.clone())],
-        Some("error") => vec![(AgentEventKind::TurnFailed, msg.clone())],
-        _ => Vec::new(),
-    }
-}
-
-pub(crate) fn append_raw(path: &Path, outcome: &RunOutcome) {
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        for line in &outcome.stdout_lines {
-            let _ = writeln!(file, "{line}");
-        }
-        if !outcome.stderr.is_empty() {
-            let _ = writeln!(file, "{}", json!({ "stderr": outcome.stderr }));
-        }
-    }
-}
-
-/// Parse `~/.codex/auth.json` into an identity observation.
-#[must_use]
-pub fn parse_auth_json(text: &str) -> Observation<ProfileIdentity> {
-    let Ok(value) = serde_json::from_str::<Value>(text) else {
-        return Observation::Unknown {
-            source: "codex auth.json".to_string(),
-            reason: "not valid json".to_string(),
+        let reason = if self.timed_out {
+            "timeout"
+        } else {
+            "interrupted"
         };
-    };
-    let account_id = value
-        .pointer("/tokens/account_id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    if account_id.is_none() {
-        return Observation::Unknown {
-            source: "codex auth.json".to_string(),
-            reason: "no tokens.account_id".to_string(),
-        };
+        self.event(
+            AgentEventKind::TurnFailed,
+            json!({"reason": reason}),
+            format!("turn:{id}:interrupted"),
+        )
     }
-    Observation::value(ProfileIdentity {
-        provider: "codex".to_string(),
-        email: None,
-        account_id,
-        subscription: None,
-        auth_method: value
-            .get("auth_mode")
+
+    fn failed_turn(&mut self, params: &Map<String, Value>, id: &str) -> AgentEvent {
+        let reason = params
+            .get("turn")
+            .and_then(Value::as_object)
+            .and_then(|turn| turn.get("error"))
+            .and_then(Value::as_object)
+            .and_then(|error| error.get("message"))
             .and_then(Value::as_str)
-            .map(str::to_string),
-    })
-}
+            .unwrap_or("App Server reported failure")
+            .to_string();
+        self.outcome = Some(AppServerOutcome::Failed(reason.clone()));
+        self.phase = Phase::Terminal;
+        self.event(
+            AgentEventKind::TurnFailed,
+            json!({"reason": reason}),
+            format!("turn:{id}:failed"),
+        )
+    }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bullet_harness_core::AgentSessionId;
-    use std::time::Duration;
+    fn interrupt_response(
+        &mut self,
+        result: Value,
+        request_id: u64,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        if self.phase != Phase::Interrupting
+            || !self.cancel_requested
+            || self.cancel_acknowledged
+            || !result.as_object().is_some_and(Map::is_empty)
+        {
+            return self.fail("invalid turn/interrupt acknowledgement");
+        }
+        self.cancel_acknowledged = true;
+        if self.terminal_seen {
+            self.phase = Phase::Terminal;
+        }
+        Ok(vec![self.event(
+            AgentEventKind::InterruptAcknowledged,
+            json!({"timed_out": self.timed_out}),
+            format!("response:{request_id}"),
+        )])
+    }
 
-    fn outcome(lines: &[&str], exit: i32) -> RunOutcome {
-        RunOutcome {
-            stdout_lines: lines.iter().map(|s| (*s).to_string()).collect(),
-            stderr: String::new(),
-            exit_code: Some(exit),
-            timed_out: false,
-            wall: Duration::from_millis(5),
+    fn require_active_subject(&mut self, params: &Map<String, Value>) -> Result<(), HarnessError> {
+        if self.phase != Phase::Active {
+            return self.fail("event arrived outside active turn");
+        }
+        self.require_exact_thread(params)?;
+        match params.get("turnId").and_then(Value::as_str) {
+            Some(id) if id == self.turn_id()? => Ok(()),
+            _ => self.fail("event names a different turn"),
         }
     }
 
-    fn normalizer() -> EventNormalizer {
-        EventNormalizer::new(AgentSessionId::new("ses-codex-test"), "codex")
-    }
-
-    const LAST: &str = r#"{"intent_summary":"x","changes":[{"path":"PONG.txt","op":"create","contents":"PONG"}],"gate_ids":["repo.gate.v1"],"claims":[],"uncertainties":[],"done":true}"#;
-
-    #[test]
-    fn thread_events_and_last_message_map() {
-        let lines = [
-            r#"{"type":"thread.started","thread_id":"th_1"}"#,
-            r#"{"type":"turn.started"}"#,
-            r#"{"type":"item.completed","item":{"type":"agent_message","text":"writing"}}"#,
-            r#"{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}"#,
-        ];
-        let mut n = normalizer();
-        let events = normalize_outcome(&mut n, &outcome(&lines, 0), Some(LAST));
-        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
-        assert!(kinds.contains(&AgentEventKind::SessionReady));
-        assert!(kinds.contains(&AgentEventKind::TurnDelta));
-        assert!(kinds.contains(&AgentEventKind::UsageReported));
-        let completed = events
-            .iter()
-            .find(|e| e.kind == AgentEventKind::TurnCompleted)
-            .expect("completed");
-        assert_eq!(
-            completed.payload["proposal"]["changes"][0]["path"],
-            "PONG.txt"
-        );
-        assert_eq!(completed.native_session_id.as_deref(), Some("th_1"));
-    }
-
-    #[test]
-    fn msg_shape_and_failures_map() {
-        let lines = [
-            r#"{"id":"0","msg":{"type":"session_configured","session_id":"s_9"}}"#,
-            r#"{"id":"1","msg":{"type":"agent_message","message":"hi"}}"#,
-            r#"{"id":"2","msg":{"type":"error","message":"boom"}}"#,
-        ];
-        let mut n = normalizer();
-        let events = normalize_outcome(&mut n, &outcome(&lines, 0), Some(LAST));
-        assert!(events.iter().any(|e| e.kind == AgentEventKind::TurnFailed));
-        assert!(!events
-            .iter()
-            .any(|e| e.kind == AgentEventKind::TurnCompleted));
-    }
-
-    #[test]
-    fn nonzero_exit_without_events_is_turn_failed() {
-        let mut n = normalizer();
-        let events = normalize_outcome(&mut n, &outcome(&["not json {"], 2), None);
-        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
-        assert!(kinds.contains(&AgentEventKind::ProtocolError));
-        assert!(kinds.contains(&AgentEventKind::TurnFailed));
-    }
-
-    #[test]
-    fn auth_json_parses_and_fails_closed() {
-        let good = r#"{"auth_mode":"chatgpt","tokens":{"account_id":"016926d0-c801"}}"#;
-        match parse_auth_json(good) {
-            Observation::Value { value } => {
-                assert!(value.account_id.unwrap().starts_with("016926d0"));
-                assert_eq!(value.auth_method.as_deref(), Some("chatgpt"));
-            }
-            other => panic!("expected identity, got {other:?}"),
+    fn require_exact_thread(&mut self, params: &Map<String, Value>) -> Result<(), HarnessError> {
+        match params.get("threadId").and_then(Value::as_str) {
+            Some(id) if id == self.thread_id()? => Ok(()),
+            _ => self.fail("event names a different thread"),
         }
-        assert!(matches!(parse_auth_json("{}"), Observation::Unknown { .. }));
-        assert!(matches!(
-            parse_auth_json("junk"),
-            Observation::Unknown { .. }
-        ));
     }
 }

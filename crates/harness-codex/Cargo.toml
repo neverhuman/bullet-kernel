@@ -1,6 +1,6 @@
 [package]
 name = "bullet-harness-codex"
-description = "Codex CLI exec adapter (read-only sandbox, JSONL events, PatchProposal)."
+description = "Offline Codex App Server JSONL contract adapter (no live dispatch)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
