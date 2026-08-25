@@ -10,6 +10,7 @@ use tokio::time::{timeout, Duration};
 
 const ORIGIN: &str = "http://127.0.0.1:7420";
 const BOOTSTRAP: &str = "boot_0000000000000000000000000000000000000000000000000000000000000000";
+const WORKER: &str = "wrk_2222222222222222222222222222222222222222222222222222222222222222";
 
 struct TestServer {
     addr: SocketAddr,
@@ -25,7 +26,7 @@ struct HttpResponse {
 type GuardCase<'a> = (&'a [(&'a str, &'a str)], u16, &'a str);
 
 async fn start(db: &Path) -> TestServer {
-    let app = bullet_farmd::api::router_with_bootstrap(db, BOOTSTRAP, ORIGIN.to_string())
+    let app = bullet_farmd::api::router_with_authorities(db, BOOTSTRAP, ORIGIN.to_string(), WORKER)
         .expect("router");
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -393,4 +394,82 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     .await;
     assert_eq!(corrupt.status, 500);
     assert_eq!(corrupt.body["code"], "STORE_FAILURE");
+}
+
+#[tokio::test]
+async fn only_independent_worker_authority_can_reconcile_and_replay() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let server = start(&directory.path().join("worker.sqlite")).await;
+    let (cookie, csrf) = bootstrap(&server).await;
+    let admitted = request(
+        &server,
+        "POST",
+        "/v1/commands",
+        &command_headers(&cookie, &csrf),
+        Some(&json!({"idempotency_key":"worker-http","kind":"run_demo","payload":{}})),
+    )
+    .await;
+    assert_eq!(admitted.status, 202);
+    let id = admitted.body["id"].as_str().expect("id");
+    let path = format!("/internal/v1/commands/{id}/reconcile");
+    let bearer = format!("Bearer {WORKER}");
+    for (headers, code) in [
+        (vec![], "WORKER_AUTHORITY_REQUIRED"),
+        (
+            vec![("Authorization", "Bearer wrk_invalid")],
+            "WORKER_AUTHORITY_INVALID",
+        ),
+        (
+            vec![("Cookie", cookie.as_str())],
+            "WORKER_AUTHORITY_REQUIRED",
+        ),
+        (
+            vec![
+                ("Authorization", bearer.as_str()),
+                ("Authorization", bearer.as_str()),
+            ],
+            "WORKER_AUTHORITY_INVALID",
+        ),
+    ] {
+        let denied = request(&server, "POST", &path, &headers, None).await;
+        assert_eq!(denied.status, 401, "{}", denied.text);
+        assert_eq!(denied.body["code"], code);
+    }
+    let pending = request(
+        &server,
+        "GET",
+        &format!("/v1/commands/{id}"),
+        &[("Cookie", &cookie)],
+        None,
+    )
+    .await;
+    assert_eq!(pending.body["status"], "PENDING");
+
+    let settled = request(&server, "POST", &path, &[("Authorization", &bearer)], None).await;
+    assert_eq!(settled.status, 200, "{}", settled.text);
+    assert_eq!(settled.body["status"], "UNKNOWN");
+    assert_eq!(
+        settled.body["result"]["code"],
+        "EXECUTION_ADAPTER_UNAVAILABLE"
+    );
+    let replay = request(&server, "POST", &path, &[("Authorization", &bearer)], None).await;
+    assert_eq!(replay.body, settled.body);
+    let projected = request(
+        &server,
+        "GET",
+        &format!("/v1/commands/{id}"),
+        &[("Cookie", &cookie)],
+        None,
+    )
+    .await;
+    assert_eq!(projected.body, settled.body);
+    let connection = Connection::open(&server.db).expect("open");
+    let reconciled: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE kind = 'command_reconciled' AND correlation_id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .expect("count");
+    assert_eq!(reconciled, 1);
 }

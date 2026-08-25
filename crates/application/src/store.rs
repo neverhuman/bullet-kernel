@@ -71,6 +71,19 @@ pub trait Ledger {
     /// Store or idempotency failure.
     fn submit_command(&mut self, request: &CommandRequest) -> Result<CommandRecord, LedgerError>;
 
+    /// Settle one exact public command through the bounded internal worker.
+    /// The command, its single correlated outbox row, and its one audit event
+    /// must commit atomically. Exact replay returns the stored disposition.
+    /// This operation cannot produce APPLIED or VERIFIED.
+    ///
+    /// # Errors
+    /// Store failure, missing command, or corrupt/conflicting durable truth.
+    fn reconcile_offline_command(
+        &mut self,
+        id: &bullet_domain::CommandId,
+        now: &str,
+    ) -> Result<CommandRecord, LedgerError>;
+
     /// Advance a command phase and optionally store its response.
     ///
     /// # Errors

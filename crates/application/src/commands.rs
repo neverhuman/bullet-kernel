@@ -8,6 +8,9 @@ const MAX_COMMAND_KEY_BYTES: usize = 256;
 const MAX_COMMAND_KIND_BYTES: usize = 64;
 const MAX_COMMAND_JSON_BYTES: usize = 1024 * 1024;
 
+/// Audit kind emitted once when the internal worker settles a command.
+pub const COMMAND_RECONCILED_EVENT: &str = "command_reconciled";
+
 /// Inbound command.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandRequest {
@@ -36,6 +39,15 @@ pub struct CommandRecord {
     pub phase: CommandPhase,
     /// Stored result for idempotent replay.
     pub response: Option<String>,
+}
+
+/// Deterministic, non-success disposition available before live executors and
+/// effect read-back are connected. Its fields are private so callers cannot
+/// turn an unverified observation into APPLIED or VERIFIED.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OfflineCommandResolution {
+    phase: CommandPhase,
+    response: String,
 }
 
 impl CommandRequest {
@@ -92,6 +104,40 @@ impl CommandRequest {
         CommandId::from_seed(&self.idempotency_key)
     }
 
+    /// Produce the only disposition the bounded offline worker may persist.
+    /// A recognized command whose executor is absent stays epistemically
+    /// UNKNOWN; an unknown command kind is durably refused as FAILED.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Encoding` when the request is invalid or the fixed response
+    /// cannot be encoded.
+    pub fn offline_worker_resolution(&self) -> Result<OfflineCommandResolution, DomainError> {
+        self.validate()?;
+        let (phase, code, detail, repair) = if self.kind == "run_demo" {
+            (
+                CommandPhase::Unknown,
+                "EXECUTION_ADAPTER_UNAVAILABLE",
+                "No admitted execution and read-back adapter is connected to this worker.",
+                "Configure the authenticated runner, verifier, and effect adapter, then submit a new command key.",
+            )
+        } else {
+            (
+                CommandPhase::Failed,
+                "UNSUPPORTED_COMMAND_KIND",
+                "The internal worker has no admitted handler for this command kind.",
+                "Use a command kind published by the running Kernel contract.",
+            )
+        };
+        let response = serde_json::to_string(&serde_json::json!({
+            "code": code,
+            "detail": detail,
+            "repair": repair,
+        }))
+        .map_err(|error| DomainError::Encoding(error.to_string()))?;
+        Ok(OfflineCommandResolution { phase, response })
+    }
+
     /// Validate bounded identifiers and exact JSON syntax.
     ///
     /// # Errors
@@ -127,6 +173,32 @@ impl CommandRequest {
             return Err(DomainError::Idempotency(self.idempotency_key.clone()));
         }
         Ok(())
+    }
+}
+
+impl OfflineCommandResolution {
+    /// Durable command/outbox phase. Never APPLIED or VERIFIED.
+    #[must_use]
+    pub fn phase(&self) -> CommandPhase {
+        self.phase
+    }
+
+    /// Exact JSON result and reconciliation-event body.
+    #[must_use]
+    pub fn response(&self) -> &str {
+        &self.response
+    }
+
+    /// Build and validate the exact final command row for this resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Encoding` when the source record is corrupt.
+    pub fn resolved_record(&self, mut record: CommandRecord) -> Result<CommandRecord, DomainError> {
+        record.phase = self.phase;
+        record.response = Some(self.response.clone());
+        record.validate()?;
+        Ok(record)
     }
 }
 

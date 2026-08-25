@@ -34,6 +34,7 @@ pub(crate) struct AuthState {
     origin: String,
     bootstrap: Bootstrap,
     session: Option<Session>,
+    worker: Option<Digest>,
 }
 
 struct IssuedSession {
@@ -47,6 +48,7 @@ impl AuthState {
             origin,
             bootstrap: Bootstrap::Disabled,
             session: None,
+            worker: None,
         }
     }
 
@@ -60,7 +62,14 @@ impl AuthState {
                 expires_at: Instant::now() + Duration::from_secs(BOOTSTRAP_SECONDS),
             },
             session: None,
+            worker: None,
         })
+    }
+
+    pub(crate) fn with_worker_token(mut self, token: &str) -> Result<Self, String> {
+        validate_token("wrk", token)?;
+        self.worker = Some(secret_digest("worker", token));
+        Ok(self)
     }
 
     fn exchange(&mut self, headers: &HeaderMap, token: &str) -> Result<IssuedSession, ApiError> {
@@ -138,6 +147,25 @@ impl AuthState {
                 "The CSRF token is not bound to the active browser session.",
                 "Bootstrap again only after restarting the local daemon.",
             ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn authorize_worker(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        let expected = self.worker.ok_or_else(worker_unavailable)?;
+        let mut values = headers.get_all(header::AUTHORIZATION).iter();
+        let value = values
+            .next()
+            .ok_or_else(worker_required)?
+            .to_str()
+            .map_err(|_| worker_invalid())?;
+        if values.next().is_some() {
+            return Err(worker_invalid());
+        }
+        let token = value.strip_prefix("Bearer ").ok_or_else(worker_invalid)?;
+        validate_token("wrk", token).map_err(|_| worker_invalid())?;
+        if !constant_time_equal(expected, secret_digest("worker", token)) {
+            return Err(worker_invalid());
         }
         Ok(())
     }
@@ -313,4 +341,52 @@ fn session_invalid() -> ApiError {
         "The browser session is invalid, expired, or ambiguous.",
         "Restart bullet-farmd and exchange its new one-time bootstrap token.",
     )
+}
+
+fn worker_unavailable() -> ApiError {
+    ApiError::protocol(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "WORKER_AUTHORITY_UNAVAILABLE",
+        "This daemon was not started with internal worker authority.",
+        "Restart bullet-farmd with a protected worker token file.",
+    )
+}
+
+fn worker_required() -> ApiError {
+    ApiError::protocol(
+        StatusCode::UNAUTHORIZED,
+        "WORKER_AUTHORITY_REQUIRED",
+        "The internal operation requires its independent worker bearer.",
+        "Read the configured worker token file from the authorized local worker only.",
+    )
+}
+
+fn worker_invalid() -> ApiError {
+    ApiError::protocol(
+        StatusCode::UNAUTHORIZED,
+        "WORKER_AUTHORITY_INVALID",
+        "The internal worker bearer is malformed, ambiguous, or invalid.",
+        "Send exactly one Authorization header containing the configured worker bearer.",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_worker_authority_fails_closed_before_header_parsing() {
+        let headers = HeaderMap::new();
+        let error = AuthState::disabled("http://127.0.0.1:7420".into())
+            .authorize_worker(&headers)
+            .expect_err("disabled worker");
+        assert!(matches!(
+            error,
+            ApiError::Protocol {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "WORKER_AUTHORITY_UNAVAILABLE",
+                ..
+            }
+        ));
+    }
 }

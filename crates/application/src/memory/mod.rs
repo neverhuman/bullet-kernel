@@ -103,6 +103,14 @@ impl Ledger for MemoryLedger {
         self.submit_command_impl(request)
     }
 
+    fn reconcile_offline_command(
+        &mut self,
+        id: &CommandId,
+        now: &str,
+    ) -> Result<CommandRecord, LedgerError> {
+        self.reconcile_offline_command_impl(id, now)
+    }
+
     fn set_command_phase(
         &mut self,
         key: &str,

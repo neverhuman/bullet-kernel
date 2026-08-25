@@ -1,6 +1,7 @@
 //! Idempotent command rows.
 
 use super::{events, outbox, store};
+use bullet_application::commands::COMMAND_RECONCILED_EVENT;
 use bullet_application::{CommandRecord, CommandRequest, LedgerError};
 use bullet_domain::{CommandId, CommandPhase, Digest, DomainError};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -171,6 +172,158 @@ pub(super) fn submit_command(
     fail_boundary(fail_after)?;
     transaction.commit().map_err(store)?;
     Ok(record)
+}
+
+pub(super) fn reconcile_offline_command(
+    conn: &mut Connection,
+    fail_after: &mut Option<u8>,
+    id: &CommandId,
+    now: &str,
+) -> Result<CommandRecord, LedgerError> {
+    let transaction = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(store)?;
+    let record = get_command_by_id(&transaction, id)?
+        .ok_or_else(|| LedgerError::Store(format!("unknown command {id}")))?;
+    let request =
+        CommandRequest::from_json(&record.idempotency_key, &record.kind, &record.payload)?;
+    request.matches(&record)?;
+    let dispatch = serde_json::to_string(&request).map_err(store)?;
+    let rows = outbox::for_command(&transaction, id)?;
+    if rows.len() != 1 || rows[0].kind != DISPATCH_KIND || rows[0].payload != dispatch {
+        return Err(LedgerError::Store(
+            "command has incomplete or conflicting dispatch truth".into(),
+        ));
+    }
+    let submitted = event_count(&transaction, "command_submitted", id, Some(id.as_str()))?;
+    if submitted != 1 {
+        return Err(LedgerError::Store(
+            "command has incomplete or conflicting submitted audit truth".into(),
+        ));
+    }
+    let resolution = request.offline_worker_resolution()?;
+    let expected = resolution.resolved_record(record.clone())?;
+    let reconciled = event_count(&transaction, COMMAND_RECONCILED_EVENT, id, None)?;
+    let exact_reconciled = event_count(
+        &transaction,
+        COMMAND_RECONCILED_EVENT,
+        id,
+        Some(resolution.response()),
+    )?;
+    let row = &rows[0];
+    if record.phase != CommandPhase::Pending {
+        if record != expected
+            || row.phase != resolution.phase()
+            || row.delivered_at.is_some()
+            || row.acked_at.is_none()
+            || reconciled != 1
+            || exact_reconciled != 1
+        {
+            return Err(LedgerError::Store(
+                "command has conflicting reconciled truth".into(),
+            ));
+        }
+        transaction.commit().map_err(store)?;
+        return Ok(record);
+    }
+    if row.phase != CommandPhase::Pending
+        || row.delivered_at.is_some()
+        || row.acked_at.is_some()
+        || reconciled != 0
+    {
+        return Err(LedgerError::Store(
+            "pending command has conflicting worker truth".into(),
+        ));
+    }
+    let changed = transaction
+        .execute(
+            "UPDATE commands SET phase = ?1, response_json = ?2
+             WHERE id = ?3 AND phase = 'pending' AND response_json IS NULL",
+            params![
+                resolution.phase().as_str(),
+                resolution.response(),
+                id.as_str()
+            ],
+        )
+        .map_err(store)?;
+    if changed != 1 {
+        return Err(LedgerError::Store(
+            "command changed during reconciliation".into(),
+        ));
+    }
+    reconcile_fail_boundary(fail_after)?;
+    let changed = transaction
+        .execute(
+            "UPDATE outbox SET phase = ?1, acked_at = ?2
+             WHERE seq = ?3 AND command_id = ?4 AND phase = 'pending'
+               AND delivered_at IS NULL AND acked_at IS NULL",
+            params![
+                resolution.phase().as_str(),
+                now,
+                i64::try_from(row.seq).map_err(store)?,
+                id.as_str()
+            ],
+        )
+        .map_err(store)?;
+    if changed != 1 {
+        return Err(LedgerError::Store(
+            "command outbox changed during reconciliation".into(),
+        ));
+    }
+    reconcile_fail_boundary(fail_after)?;
+    events::insert_event(
+        &transaction,
+        COMMAND_RECONCILED_EVENT,
+        resolution.response(),
+        Some(id.as_str()),
+        Some(id.as_str()),
+        None,
+    )?;
+    reconcile_fail_boundary(fail_after)?;
+    reconcile_fail_boundary(fail_after)?;
+    transaction.commit().map_err(store)?;
+    Ok(expected)
+}
+
+fn event_count(
+    conn: &Connection,
+    kind: &str,
+    id: &CommandId,
+    body: Option<&str>,
+) -> Result<i64, LedgerError> {
+    match body {
+        Some(body) => conn
+            .query_row(
+                "SELECT COUNT(*) FROM events
+                 WHERE kind = ?1 AND correlation_id = ?2 AND body = ?3",
+                params![kind, id.as_str(), body],
+                |row| row.get(0),
+            )
+            .map_err(store),
+        None => conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind = ?1 AND correlation_id = ?2",
+                params![kind, id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(store),
+    }
+}
+
+fn reconcile_fail_boundary(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {
+    match fail_after {
+        Some(0) => {
+            *fail_after = None;
+            Err(LedgerError::Store(
+                "injected command reconciliation boundary".into(),
+            ))
+        }
+        Some(remaining) => {
+            *remaining -= 1;
+            Ok(())
+        }
+        None => Ok(()),
+    }
 }
 
 fn fail_boundary(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {

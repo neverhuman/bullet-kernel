@@ -72,6 +72,59 @@ fn public_submission_is_atomic_and_exactly_once_in_memory() {
 }
 
 #[test]
+fn offline_worker_is_atomic_idempotent_and_never_green() {
+    let request =
+        CommandRequest::new("worker-command", "run_demo", &serde_json::json!({})).expect("request");
+    let mut ledger = MemoryLedger::new();
+    let pending = ledger.submit_command(&request).expect("submit");
+    ledger.set_failpoint(1);
+    assert_eq!(
+        ledger
+            .reconcile_offline_command(&pending.id, AT)
+            .expect_err("atomic rollback")
+            .reason_code(),
+        "STORE_FAILURE"
+    );
+    assert_eq!(
+        ledger
+            .get_command_by_id(&pending.id)
+            .expect("lookup")
+            .expect("command")
+            .phase,
+        CommandPhase::Pending
+    );
+    assert_eq!(ledger.list_events().expect("events").len(), 1);
+
+    let settled = ledger
+        .reconcile_offline_command(&pending.id, AT)
+        .expect("settle");
+    assert_eq!(settled.phase, CommandPhase::Unknown);
+    assert!(settled
+        .response
+        .as_deref()
+        .is_some_and(|response| { response.contains("EXECUTION_ADAPTER_UNAVAILABLE") }));
+    let replay = ledger
+        .reconcile_offline_command(&pending.id, "2027-01-01T00:00:00.000Z")
+        .expect("exact replay");
+    assert_eq!(replay, settled);
+    assert_eq!(ledger.list_events().expect("events").len(), 2);
+    let outbox = ledger.outbox_for_command(&pending.id).expect("outbox");
+    assert_eq!(outbox[0].phase, CommandPhase::Unknown);
+    assert_eq!(outbox[0].acked_at.as_deref(), Some(AT));
+
+    let unsupported =
+        CommandRequest::new("worker-unsupported", "not_admitted", &serde_json::json!({}))
+            .expect("request");
+    let unsupported = ledger.submit_command(&unsupported).expect("submit");
+    let refused = ledger
+        .reconcile_offline_command(&unsupported.id, AT)
+        .expect("refuse");
+    assert_eq!(refused.phase, CommandPhase::Failed);
+    assert_ne!(refused.phase, CommandPhase::Verified);
+    assert_ne!(settled.phase, CommandPhase::Verified);
+}
+
+#[test]
 fn malformed_or_incoherent_commands_are_inert() {
     for (key, kind, payload) in [
         ("", "valid", "{}"),

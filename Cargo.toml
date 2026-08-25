@@ -62,6 +62,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 hex = "0.4"
+libc = "0.2.189"
 proptest = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

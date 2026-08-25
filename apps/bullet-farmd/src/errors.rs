@@ -113,6 +113,9 @@ fn title_for(code: &str) -> &'static str {
         "CSRF_INVALID" => "Invalid CSRF token",
         "ORIGIN_REQUIRED" => "Origin required",
         "ORIGIN_DENIED" => "Origin denied",
+        "WORKER_AUTHORITY_UNAVAILABLE" => "Worker authority unavailable",
+        "WORKER_AUTHORITY_REQUIRED" => "Worker authority required",
+        "WORKER_AUTHORITY_INVALID" => "Invalid worker authority",
         "MUTATION_ENDPOINT_REMOVED" => "Mutation endpoint removed",
         _ => "Request failed",
     }

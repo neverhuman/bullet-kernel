@@ -65,6 +65,23 @@ pub fn router_with_bootstrap(
     build_router(db, auth)
 }
 
+/// Build the local browser router with independent internal worker authority.
+///
+/// # Errors
+///
+/// Returns a ledger error or invalid bootstrap/origin/worker token error.
+pub fn router_with_authorities(
+    db: &FsPath,
+    bootstrap_token: &str,
+    portal_origin: String,
+    worker_token: &str,
+) -> Result<Router, LedgerError> {
+    let auth = crate::auth::AuthState::new(bootstrap_token, portal_origin)
+        .and_then(|auth| auth.with_worker_token(worker_token))
+        .map_err(LedgerError::Store)?;
+    build_router(db, auth)
+}
+
 fn build_router(db: &FsPath, auth: crate::auth::AuthState) -> Result<Router, LedgerError> {
     let ledger = SqliteLedger::open(db)?;
     let state: SharedState = Arc::new(AppState {
@@ -81,6 +98,10 @@ fn build_router(db: &FsPath, auth: crate::auth::AuthState) -> Result<Router, Led
         .route("/v1/auth/bootstrap", post(crate::auth::bootstrap))
         .route("/v1/commands", post(crate::commands::submit))
         .route("/v1/commands/{id}", get(crate::commands::get))
+        .route(
+            "/internal/v1/commands/{id}/reconcile",
+            post(crate::commands::reconcile),
+        )
         .route("/v1/outbox", get(outbox))
         .route("/v1/events", get(events))
         .route("/v1/ready", get(crate::leases::next_ready))

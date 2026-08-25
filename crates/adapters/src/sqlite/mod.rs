@@ -59,6 +59,7 @@ pub struct SqliteLedger {
     graph_delta_fail_after: Option<u8>,
     lease_acquisition_fail_after: Option<u8>,
     command_submission_fail_after: Option<u8>,
+    command_reconciliation_fail_after: Option<u8>,
 }
 
 impl SqliteLedger {
@@ -83,6 +84,7 @@ impl SqliteLedger {
             graph_delta_fail_after: None,
             lease_acquisition_fail_after: None,
             command_submission_fail_after: None,
+            command_reconciliation_fail_after: None,
         })
     }
 
@@ -108,6 +110,12 @@ impl SqliteLedger {
     /// internal boundaries. Used only by crash-atomicity integration tests.
     pub fn set_command_submission_failpoint(&mut self, allowed: u8) {
         self.command_submission_fail_after = Some(allowed);
+    }
+
+    /// Inject a one-shot command-reconciliation transaction failure after
+    /// `allowed` internal boundaries. Used only by crash-atomicity tests.
+    pub fn set_command_reconciliation_failpoint(&mut self, allowed: u8) {
+        self.command_reconciliation_fail_after = Some(allowed);
     }
 
     /// Read projection data and its event watermark from one SQLite snapshot.
@@ -152,6 +160,19 @@ impl Ledger for SqliteLedger {
             &mut self.conn,
             &mut self.command_submission_fail_after,
             request,
+        )
+    }
+
+    fn reconcile_offline_command(
+        &mut self,
+        id: &bullet_domain::CommandId,
+        now: &str,
+    ) -> Result<CommandRecord, LedgerError> {
+        commands::reconcile_offline_command(
+            &mut self.conn,
+            &mut self.command_reconciliation_fail_after,
+            id,
+            now,
         )
     }
 
