@@ -2,6 +2,7 @@
 
 pub(crate) mod meta;
 pub(crate) mod portal;
+mod safe_integer;
 use crate::commands::{self, reconcile};
 use crate::{errors::ApiError, projections};
 use axum::extract::{Path, RawQuery, State};
@@ -11,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use bullet_adapters::SqliteLedger;
-use bullet_application::{derive_receipt, Ledger, LedgerError, LedgerEvent, OutboxItem};
+use bullet_application::{Ledger, LedgerError, LedgerEvent, OutboxItem, derive_receipt};
 use bullet_domain::{Digest, Mission, MissionId};
 use chrono::{DateTime, Utc};
 use futures_util::stream::Stream;
@@ -204,6 +205,9 @@ async fn outbox(State(state): State<SharedState>) -> Result<Response, ApiError> 
             items: ledger.outbox_all()?,
         })
     })?;
+    for item in &view.items {
+        safe_integer::outbox_sequence(item.seq)?;
+    }
     snapshot_response(view, as_of_sequence)
 }
 
@@ -219,6 +223,7 @@ pub(crate) fn snapshot_response<T: Serialize>(
     data: T,
     as_of_sequence: u64,
 ) -> Result<Response, ApiError> {
+    safe_integer::snapshot_watermark(as_of_sequence)?;
     let body = Snapshot {
         data,
         as_of_sequence,
@@ -378,6 +383,7 @@ fn validate_batch(after: u64, events: &[LedgerEvent]) -> Result<(), ApiError> {
 }
 
 pub(crate) fn validate_event(event: &LedgerEvent) -> Result<(), ApiError> {
+    safe_integer::event_sequence(event.seq)?;
     let id = event
         .event_id
         .as_deref()
@@ -442,6 +448,8 @@ struct EventEnvelope<'a> {
 }
 
 fn sse_frame(event: &LedgerEvent) -> Result<SseFrame, io::Error> {
+    safe_integer::event_sequence(event.seq)
+        .map_err(|_| io::Error::other("event sequence exceeds JavaScript safe integer range"))?;
     let id = event
         .event_id
         .as_deref()

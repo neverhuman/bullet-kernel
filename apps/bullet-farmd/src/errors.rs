@@ -2,9 +2,9 @@
 //! are 500s and never leak raw store strings; domain refusals map to stable
 //! reason codes.
 
-use axum::http::{header::CONTENT_TYPE, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
 use axum::Json;
+use axum::http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
+use axum::response::{IntoResponse, Response};
 use bullet_application::LedgerError;
 use bullet_domain::{Digest, DomainError};
 use serde::Serialize;
@@ -50,6 +50,8 @@ pub enum ApiError {
     UnsupportedSchema(String),
     /// The durable store failed. Logged; the detail is not exposed.
     Internal(String),
+    /// A server-owned integer cannot be represented exactly by JSON clients.
+    UnsafeInteger(&'static str),
     /// An HTTP protocol or browser-authority rule was refused.
     Protocol {
         /// HTTP status.
@@ -102,6 +104,7 @@ fn title_for(code: &str) -> &'static str {
         "NOT_FOUND" => "Resource not found",
         "UNSUPPORTED_SCHEMA" => "Unsupported database schema",
         "STORE_FAILURE" => "Ledger store failure",
+        "API_INTEGER_OUT_OF_RANGE" => "API integer out of range",
         "INVALID_JSON" => "Invalid JSON request",
         "BOOTSTRAP_UNAVAILABLE" => "Browser bootstrap unavailable",
         "BOOTSTRAP_CONSUMED" => "Browser bootstrap already consumed",
@@ -140,6 +143,11 @@ impl ApiError {
                 "STORE_FAILURE".into(),
                 true,
             ),
+            Self::UnsafeInteger(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "API_INTEGER_OUT_OF_RANGE".into(),
+                false,
+            ),
             Self::Protocol { status, code, .. } => (*status, (*code).into(), false),
         }
     }
@@ -171,6 +179,9 @@ impl IntoResponse for ApiError {
                 "database requires export and removal before restart"
             );
         }
+        if let Self::UnsafeInteger(field) = &self {
+            tracing::error!(field, %request_id, %correlation_id, "unsafe API integer refused");
+        }
         let detail = match &self {
             Self::NotFound(resource) => format!("{resource} was not found"),
             Self::Invalid(_) => "The request violates a validated domain invariant.".into(),
@@ -181,16 +192,35 @@ impl IntoResponse for ApiError {
                 "This database schema is not supported by this pre-1.0 binary.".into()
             }
             Self::Internal(_) => "The durable ledger could not produce a trusted result.".into(),
+            Self::UnsafeInteger(_) => {
+                "A server-owned integer exceeds the exact JavaScript-safe range and was not serialized."
+                    .into()
+            }
             Self::Protocol { detail, .. } => (*detail).into(),
         };
         let repair = match &self {
-            Self::ReplayUnavailable(_) => "Fetch a fresh projection snapshot, then reconnect with its as_of_sequence as the exclusive cursor.",
-            Self::UnsupportedSchema(_) => "Export any data you need, remove the unsupported database, and restart to initialize the current schema.",
-            Self::Internal(_) => "Retry once; if the failure persists, use request_id and correlation_id to inspect farmd logs and run bullet-family doctor.",
-            Self::NotFound(_) => "Refresh the owning projection and retry only if the resource appears there.",
-            Self::BadRequest(_) => "Remove duplicate or unknown cursor fields and send either after or Last-Event-ID, not both.",
+            Self::ReplayUnavailable(_) => {
+                "Fetch a fresh projection snapshot, then reconnect with its as_of_sequence as the exclusive cursor."
+            }
+            Self::UnsupportedSchema(_) => {
+                "Export any data you need, remove the unsupported database, and restart to initialize the current schema."
+            }
+            Self::Internal(_) => {
+                "Retry once; if the failure persists, use request_id and correlation_id to inspect farmd logs and run bullet-family doctor."
+            }
+            Self::UnsafeInteger(_) => {
+                "Freeze API delivery, inspect the named counter in farmd logs, and reconcile its durable source before retrying."
+            }
+            Self::NotFound(_) => {
+                "Refresh the owning projection and retry only if the resource appears there."
+            }
+            Self::BadRequest(_) => {
+                "Remove duplicate or unknown cursor fields and send either after or Last-Event-ID, not both."
+            }
             Self::Invalid(_) => "Correct the identified request field before retrying.",
-            Self::Conflict(_) => "Refresh durable authority state before constructing a new request.",
+            Self::Conflict(_) => {
+                "Refresh durable authority state before constructing a new request."
+            }
             Self::Protocol { repair, .. } => repair,
         };
         let problem = Problem {

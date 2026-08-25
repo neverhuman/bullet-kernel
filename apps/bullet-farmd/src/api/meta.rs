@@ -1,9 +1,10 @@
 //! Contract and liveness answers: `/openapi.yaml` and `/health`.
 
 use crate::api::SharedState;
+use crate::errors::ApiError;
+use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Serialize;
 
 const OPENAPI: &str = include_str!("../../../../contracts/openapi.yaml");
@@ -22,12 +23,16 @@ pub(crate) struct Health {
     reap: Option<crate::reaper::ReapRun>,
 }
 
-pub(crate) async fn health(State(state): State<SharedState>) -> Json<Health> {
-    Json(Health {
+pub(crate) async fn health(State(state): State<SharedState>) -> Result<Json<Health>, ApiError> {
+    let reap = state.reaper.snapshot().await;
+    if let Some(run) = &reap {
+        super::safe_integer::health_reclaimed(run.reclaimed)?;
+    }
+    Ok(Json(Health {
         status: "ok",
         portal: super::portal::health_field(),
-        reap: state.reaper.snapshot().await,
-    })
+        reap,
+    }))
 }
 
 pub(crate) async fn openapi() -> impl IntoResponse {
