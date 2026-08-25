@@ -6,7 +6,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use tempfile::Builder;
 
 #[derive(Clone, Copy)]
@@ -28,12 +28,33 @@ pub(super) struct LockedParent {
 impl LockedParent {
     pub(super) fn open(record: &Path) -> Result<Self, AuthorityHighWaterError> {
         let public_parent = record.parent().expect("validated parent").to_path_buf();
-        reject_symlink_components(&public_parent)?;
-        let parent = OpenOptions::new()
+        let root = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&public_parent)
-            .map_err(|error| operation("OPEN_PARENT", error))?;
+            .open("/")
+            .map_err(|error| operation("OPEN_ROOT", error))?;
+        let relative_parent = public_parent
+            .strip_prefix(Path::new("/"))
+            .expect("validated absolute parent");
+        let relative_parent = if relative_parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            relative_parent
+        };
+        let parent = rustix::fs::openat2(
+            &root,
+            relative_parent,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+            rustix::fs::ResolveFlags::BENEATH
+                | rustix::fs::ResolveFlags::NO_SYMLINKS
+                | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+        )
+        .map(File::from)
+        .map_err(|error| operation("OPEN_PARENT", error))?;
         let effective_uid = std::fs::metadata("/proc/self")
             .map_err(|error| operation("EFFECTIVE_UID", error))?
             .uid();
@@ -282,27 +303,6 @@ fn admit_file_path(
         return Err(admission(format!(
             "authority high-water {kind} pathname does not identify its admitted descriptor"
         )));
-    }
-    Ok(())
-}
-
-fn reject_symlink_components(path: &Path) -> Result<(), AuthorityHighWaterError> {
-    let mut current = PathBuf::from("/");
-    for component in path.components() {
-        match component {
-            Component::RootDir => continue,
-            Component::Normal(part) => current.push(part),
-            _ => {
-                return Err(super::invalid_path(
-                    "authority high-water path is not normalized",
-                ))
-            }
-        }
-        let metadata = std::fs::symlink_metadata(&current)
-            .map_err(|error| operation("STAT_PATH_COMPONENT", error))?;
-        if metadata.file_type().is_symlink() {
-            return Err(admission("authority high-water path contains a symlink"));
-        }
     }
     Ok(())
 }
