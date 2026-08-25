@@ -1,0 +1,57 @@
+[stack]
+id = "rust-ts-vite-react-sqlite"
+version = "0.4.0"
+
+# bullet-kernel is the Rust control plane. `crates/domain` is the pure typed
+# core: identities, states, gates, fences, the mutation guard and the typed
+# errors that carry every stable reason code. It must stay free of filesystem,
+# process, clock, network, RNG and SQL access so every identity and every state
+# decision is reproducible from its inputs alone. Durable writes live in
+# `crates/adapters` (SQLite) and `db/`; process and network effects live in
+# `crates/effects`, `crates/harness-*` and the `apps/` binaries, which are not
+# domain paths.
+[rust]
+domain_paths = ["crates/domain/src"]
+forbidden_domain_imports = [
+  "std::fs",
+  "std::env",
+  "std::net",
+  "std::process",
+  "std::time::SystemTime",
+  "rand::",
+  "rusqlite::",
+  "sqlx::",
+  "reqwest::",
+  "axum::",
+  "tokio::net"
+]
+
+# No TypeScript or web runtime is authored here. `contracts/generated/api.ts` is
+# a generated client emitted from `contracts/openapi.yaml` for bullet-portal to
+# consume; the operations portal itself lives in bullet-portal.
+[typescript]
+web_paths = []
+forbidden_web_imports = []
+generated_contract_paths = ["contracts/generated"]
+
+# No Python product truth. There is no Python file in scope.
+[python]
+allowed_truth_paths = []
+
+# No queue or event-bus adapter surface: work moves through the SQLite outbox
+# and the ready queue inside `crates/adapters`, not through an external broker.
+[queues]
+adapter_paths = []
+event_contract_paths = []
+generated_type_paths = ["contracts/generated", "crates/domain/src/schema_bundle.rs"]
+client_markers = []
+
+# Durable truth is an embedded SQLite database. The schema is exact and
+# checksummed: `crates/adapters/src/sqlite/migrations.rs` verifies every applied
+# migration, the product schema, foreign-key integrity and the identity contract
+# on every open, and refuses a database it cannot account for.
+[db]
+root_paths = ["db"]
+migration_paths = ["db/migrations"]
+constraint_paths = ["db/migrations"]
+schema_version = "11"

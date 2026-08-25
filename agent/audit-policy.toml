@@ -1,0 +1,53 @@
+# Jankurai audit policy for bullet-kernel.
+#
+# The thresholds below are the auditor defaults, written out so that nothing in
+# this file weakens the decision: standard mode still fails under 85 and still
+# treats critical and high findings as hard. `ops/ci/audit.sh` applies its own
+# upward-only `AUDIT_FLOOR` ratchet on top of this policy.
+minimum_score = 85
+fail_on = ["critical", "high"]
+advisory_on = ["medium", "low"]
+
+# Explicit cost-surface enumeration for HLT-026-COST-BUDGET-GAP.
+#
+# The control plane calls no provider, model, or metered API from any proof
+# lane. Provider harnesses (`crates/harness-claude`, `crates/harness-codex`,
+# `crates/harness-cursor`, `crates/harness-antigravity`) are contract-tested
+# against recorded tapes and refuse live admission with
+# `LIVE_ADMISSION_UNAVAILABLE`; no lane spends money. The word "token" in this
+# repository is an authority token, not an API billing unit. Attempt time,
+# lease TTL, and egress containment budgets are enforced in code
+# (`crates/harness-core`, `db/migrations/0005_lease_ttl.sql` bounds
+# `ttl_seconds` to 1..=15) rather than declared as spend limits.
+cost_surface = []
+
+# Accepted false positives for HLT-001-DEAD-MARKER.
+#
+# These three words are load-bearing protocol, framework, and domain vocabulary
+# in this repository, not deferred-work markers. Listing a term here suppresses
+# only that exact word for the dead-marker heuristic; every other dead-language,
+# fallback-soup, secret, and boundary check still runs over the same files.
+#
+# `stale` renders stable machine reason codes that bullet-git, the runner, and
+# the daemon protocol all consume — `STALE_AUTHORITY`
+# (crates/domain/src/error.rs, crates/runner/src/error.rs,
+# apps/bullet-farmd/src/errors.rs, apps/bullet/src/contracts.rs) and the
+# stale-fence guards in crates/domain/src/mutation_guard.rs,
+# crates/domain/src/observation.rs, crates/effects/src/local.rs,
+# crates/harness-core/src/admission.rs and
+# crates/application/src/launch_grant/issuer.rs. Renaming any of them would
+# break the wire contract, not remove dead language.
+#
+# `fallback` is the axum `Router::fallback` route registration
+# (apps/bullet-farmd/src/api.rs) and the router's `fallback=<tier>` field in the
+# recorded routing reason (crates/router/src/lib.rs), which names the tier that
+# actually served a request. Both are load-bearing API and observability
+# vocabulary. The separate `fallback-soup-in-product-code` rule is unaffected
+# and still runs.
+#
+# `temp` is the operating system temporary directory: `tempfile::tempdir()` in
+# the runner simulation tests and the FS006 behavior row in
+# crates/behavior/src/catalog.rs, whose whole subject is durable work being put
+# in a system temp path.
+[dead_language]
+allow_terms = ["stale", "fallback", "temp"]
