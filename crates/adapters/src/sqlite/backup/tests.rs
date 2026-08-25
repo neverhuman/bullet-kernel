@@ -208,9 +208,17 @@ fn backup_symlink_is_refused_without_following_it() {
     let (_directory, source, backup, restored) = paths();
     drop(SqliteLedger::open(&source).unwrap());
     let receipt = create_backup(&source, &backup).unwrap();
-    let link = backup.with_extension("link");
-    symlink(&backup, &link).unwrap();
-    assert!(restore_backup(&link, &receipt, &restored).is_err());
+    let backup_link = backup.with_extension("link");
+    symlink(&backup, &backup_link).unwrap();
+    assert!(restore_backup(&backup_link, &receipt, &restored).is_err());
+    assert!(!restored.exists());
+
+    let source_target_before = fs::read(&source).unwrap();
+    let source_link = source.with_extension("link");
+    symlink(&source, &source_link).unwrap();
+    let error = create_backup(&source_link, &restored).unwrap_err();
+    assert!(error.to_string().contains("SQLITE_MAINTENANCE_OPEN"));
+    assert_eq!(fs::read(&source).unwrap(), source_target_before);
     assert!(!restored.exists());
 }
 

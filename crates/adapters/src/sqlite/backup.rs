@@ -280,7 +280,9 @@ fn open_database_read_only(path: &Path) -> Result<Connection, SqliteMaintenanceE
     }
     Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
     .map_err(|err| phase("OPEN", err))
 }
