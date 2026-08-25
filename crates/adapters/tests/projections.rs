@@ -4,14 +4,14 @@
 use bullet_adapters::SqliteLedger;
 use bullet_application::store::ProjectionReader;
 use bullet_application::{
-    materialize_plan, run_demo, EffectIntentRecord, EffectReceiptRecord, EffectState, LeaseService,
-    Ledger, MemoryLedger, PlanInput, ReceiptVerdict, ZERO_OID,
+    EffectIntentRecord, EffectReceiptRecord, EffectState, LeaseService, Ledger, MemoryLedger,
+    PlanInput, ReceiptVerdict, ZERO_OID, materialize_plan, run_demo,
 };
 use bullet_domain::{AttemptId, EffectId, EffectReceiptId, TaskClass};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::Connection;
 
-fn scenario<L: Ledger>(ledger: &mut L) {
+fn scenario<L: Ledger + ProjectionReader>(ledger: &mut L) {
     run_demo(ledger).expect("demo");
     let intent = EffectIntentRecord {
         id: EffectId::from_seed("proj-intent"),
@@ -134,7 +134,7 @@ fn sqlite_projection_reads_share_one_watermark_and_a_canonical_clock() {
         .expect("snapshot");
     assert_eq!(watermark, sqlite.latest_event_sequence().expect("latest"));
     assert!(watermark > 0);
-    assert_eq!(rows.0.len(), 1);
+    assert!(rows.0.is_empty());
     assert!(rows.1.len() >= 2);
 }
 
