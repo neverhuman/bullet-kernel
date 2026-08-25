@@ -180,7 +180,8 @@ impl ArgvBuilder {
 
     /// Build against a completed local admission evaluation. This method is
     /// structurally present so live adapters have one future chokepoint, but
-    /// current receipts always retain signed-authority and egress blockers.
+    /// initial receipts contain signed-authority and egress blockers that
+    /// verified evidence may clear before this chokepoint is reached.
     ///
     /// # Errors
     ///
