@@ -1,6 +1,6 @@
 [package]
 name = "bullet-harness-antigravity"
-description = "Antigravity (agy) text-only adapter; structured output Unsupported."
+description = "Fail-closed offline Antigravity 1.1.19 structured-output contract."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

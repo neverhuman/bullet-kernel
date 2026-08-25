@@ -1,114 +1,100 @@
-//! Antigravity text output handling: the whole stdout is one final text;
-//! a fenced ```diff block is extracted best-effort. There is no structured
-//! surface, so a proposal is always null here.
+//! Strict ingestion for the frozen one-shot Antigravity JSON result subset.
 
-use bullet_harness_core::{AgentEvent, AgentEventKind, EventNormalizer, NativeMeta, RunOutcome};
+use crate::protocol::{
+    exact_fields, protocol, AgyHeadlessBinding, AgyHeadlessOutcome, AgyHeadlessTranscript, Phase,
+    MAX_OUTPUT_FRAME_BYTES,
+};
+use bullet_harness_core::{AgentEvent, AgentEventKind, HarnessError, NativeMeta, PatchProposal};
 use serde_json::{json, Value};
 
-/// Normalize one finished text invocation into envelopes.
-pub fn normalize_outcome(
-    normalizer: &mut EventNormalizer,
-    outcome: &RunOutcome,
-) -> Vec<AgentEvent> {
-    let mut events = Vec::new();
-    let text = outcome.stdout_lines.join("\n");
-    if outcome.timed_out || outcome.exit_code != Some(0) {
-        let payload = json!({
-            "reason": "process did not exit cleanly",
-            "exit_code": outcome.exit_code,
-            "timed_out": outcome.timed_out,
-            "stderr_tail": outcome.stderr.chars().rev().take(400).collect::<String>()
-                .chars().rev().collect::<String>(),
-        });
-        events.push(normalizer.accept(AgentEventKind::TurnFailed, payload, &NativeMeta::none()));
-        return events;
-    }
-    let diff = extract_diff(&text).map_or(Value::Null, Value::String);
-    let payload = json!({ "proposal": null, "text": text, "diff": diff });
-    events.push(normalizer.accept(AgentEventKind::TurnCompleted, payload, &NativeMeta::none()));
-    events
-}
-
-/// Extract the first fenced ```diff block, if any.
-#[must_use]
-pub fn extract_diff(text: &str) -> Option<String> {
-    let fence = "```diff";
-    let start = text.find(fence)? + fence.len();
-    let rest = &text[start..];
-    let end = rest.find("```")?;
-    let body = rest[..end].trim();
-    if body.is_empty() {
-        None
-    } else {
-        Some(body.to_string())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bullet_harness_core::AgentSessionId;
-    use std::time::Duration;
-
-    fn outcome(lines: &[&str], exit: i32) -> RunOutcome {
-        RunOutcome {
-            stdout_lines: lines.iter().map(|s| (*s).to_string()).collect(),
-            stderr: String::new(),
-            exit_code: Some(exit),
-            timed_out: false,
-            wall: Duration::from_millis(5),
+impl AgyHeadlessTranscript {
+    /// Consume the single-line JSON object emitted for one prepared turn.
+    ///
+    /// The admitted subset is deliberately just `{ "structured_output": ... }`.
+    /// Native JSON fields outside that observed authorization-bearing field are
+    /// not guessed. Any malformed, extra, repeated, or late result poisons the
+    /// transcript permanently.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed protocol/proposal error and poisons this transcript.
+    pub fn ingest_result_line(&mut self, line: &str) -> Result<Vec<AgentEvent>, HarnessError> {
+        let result = self.ingest_result_line_inner(line);
+        if result.is_err() {
+            self.phase = Phase::Poisoned;
+            self.outcome = None;
         }
+        result
     }
 
-    fn normalizer() -> EventNormalizer {
-        EventNormalizer::new(AgentSessionId::new("ses-agy-test"), "agy")
-    }
-
-    #[test]
-    fn text_with_diff_fence_is_extracted() {
-        let lines = [
-            "Here is the change:",
-            "```diff",
-            "--- /dev/null",
-            "+++ b/PONG.txt",
-            "@@ -0,0 +1 @@",
-            "+PONG",
-            "```",
-            "Done.",
-        ];
-        let mut n = normalizer();
-        let events = normalize_outcome(&mut n, &outcome(&lines, 0));
-        let completed = events
-            .iter()
-            .find(|e| e.kind == AgentEventKind::TurnCompleted)
-            .expect("completed");
-        assert!(
-            completed.payload["proposal"].is_null(),
-            "text-only, never a proposal"
+    fn ingest_result_line_inner(&mut self, line: &str) -> Result<Vec<AgentEvent>, HarnessError> {
+        if self.phase == Phase::Poisoned {
+            return Err(protocol("transcript is poisoned"));
+        }
+        if self.phase != Phase::AwaitResult {
+            return Err(protocol(
+                "result is not expected before one argv is prepared",
+            ));
+        }
+        if line.is_empty()
+            || line.len() > MAX_OUTPUT_FRAME_BYTES
+            || line.contains(['\n', '\r', '\0'])
+        {
+            return Err(protocol("invalid one-line JSON result boundary"));
+        }
+        let value: Value = serde_json::from_str(line)
+            .map_err(|error| protocol(format!("malformed JSON result: {error}")))?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| protocol("JSON result is not an object"))?;
+        if !exact_fields(object, &["structured_output"]) {
+            return Err(protocol(
+                "JSON result is outside the exact structured_output subset",
+            ));
+        }
+        let proposal = PatchProposal::from_value(&object["structured_output"])?;
+        if proposal.gate_ids != self.admitted_gate_ids {
+            return Err(protocol(
+                "proposal gate_ids differ from exact ordered admission",
+            ));
+        }
+        let binding = AgyHeadlessBinding {
+            provider: crate::PROVIDER.to_string(),
+            binary: crate::BINARY.to_string(),
+            profile_id: self.profile_id.clone(),
+            invocation_id: self.invocation_id.clone(),
+            cwd: self.expected_cwd.clone(),
+            runtime_version: self.expected_runtime_version.clone(),
+            binary_sha256: self.expected_binary_sha256.clone(),
+            prompt_digest: self.prompt_digest.clone(),
+            gate_ids: self.admitted_gate_ids.clone(),
+        };
+        let outcome = AgyHeadlessOutcome {
+            proposal: proposal.clone(),
+            binding: binding.clone(),
+        };
+        self.outcome = Some(outcome);
+        self.phase = Phase::Terminal;
+        let event = self.normalizer.accept(
+            AgentEventKind::TurnCompleted,
+            json!({
+                "proposal": proposal,
+                "verified": false,
+                "source": "agy_offline_contract",
+                "binding": {
+                    "provider": binding.provider,
+                    "binary": binding.binary,
+                    "profile_id": binding.profile_id,
+                    "invocation_id": binding.invocation_id,
+                    "cwd": binding.cwd,
+                    "runtime_version": binding.runtime_version,
+                    "binary_sha256": binding.binary_sha256,
+                    "prompt_digest": binding.prompt_digest,
+                    "gate_ids": binding.gate_ids,
+                }
+            }),
+            &NativeMeta::none(),
         );
-        let diff = completed.payload["diff"].as_str().expect("diff extracted");
-        assert!(diff.contains("+PONG"));
-    }
-
-    #[test]
-    fn plain_text_has_null_diff() {
-        let mut n = normalizer();
-        let events = normalize_outcome(&mut n, &outcome(&["no diff here"], 0));
-        let completed = &events[0];
-        assert_eq!(completed.kind, AgentEventKind::TurnCompleted);
-        assert!(completed.payload["diff"].is_null());
-    }
-
-    #[test]
-    fn nonzero_exit_is_turn_failed() {
-        let mut n = normalizer();
-        let events = normalize_outcome(&mut n, &outcome(&["partial"], 3));
-        assert_eq!(events[0].kind, AgentEventKind::TurnFailed);
-    }
-
-    #[test]
-    fn empty_fence_is_none() {
-        assert!(extract_diff("```diff\n\n```").is_none());
-        assert!(extract_diff("nothing").is_none());
+        Ok(vec![event])
     }
 }
