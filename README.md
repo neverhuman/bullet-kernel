@@ -22,6 +22,7 @@ Last reviewed 2026-08-25 against HEAD `ca380bc`. Evidence classes follow
 | `crates/router`, `fusion`, `behavior`, `projections` | non-authoritative scaffolds: routing fallback, fusion, behaviour catalog, spec §25 `View`/`Surface` types; the served §25 projections live in `apps/bullet-farmd/src/projections/` |
 | `crates/mcp-mock`, `crates/test-simulation` | in-process mocks and harness tapes for the contract lane |
 | `apps/bullet-farmd` | loopback-only HTTP + SSE daemon; routes in the table below |
+| `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
 | `apps/bullet` | CLI: `farm init\|backup\|restore`, `demo`, `demo-synthetic`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`; every flag is in [`docs/cli.md`](docs/cli.md) |
 | `apps/bullet-runner` | attempt runner process; accepts only the `sim` provider and constructs `HttpLeaseClient` |
 | `apps/bullet-verifier` | verifier process boundary; refuses the writer identity, reads its job as `--stdin` JSON |

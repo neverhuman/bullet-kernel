@@ -10,6 +10,7 @@
     "Cargo.lock": "workspace",
     "agent/": "agent",
     "apps/": "apps",
+    "apps/bullet-mcpd/": "mcp",
     "contracts/": "contracts",
     "crates/domain/": "domain",
     "crates/application/": "application",

@@ -17,6 +17,10 @@
       "command": "cargo test --workspace",
       "purpose": "prove daemon and CLI surfaces"
     },
+    "apps/bullet-mcpd/": {
+      "command": "cargo test -p bullet-mcpd",
+      "purpose": "prove the bounded read-only MCP lifecycle, exact farmd snapshots, and authority-negative inventory"
+    },
     "apps/bullet-farmd/build.rs": {
       "command": "cargo test -p bullet-farmd --test portal_bundle",
       "purpose": "prove the optional Portal embedding verifies a pre-built bundle before staging; the packaged browser lane is bullet-portal ops/ci/packaged-farmd.sh"
