@@ -52,14 +52,19 @@ fn assert_connection_pragmas(ledger: &SqliteLedger) {
         .conn
         .pragma_query_value(None, "synchronous", |row| row.get(0))
         .unwrap();
+    let busy_timeout: i64 = ledger
+        .conn
+        .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+        .unwrap();
     assert_eq!(foreign_keys, 1);
     assert_eq!(journal_mode, "wal");
     assert_eq!(synchronous, 2);
+    assert_eq!(busy_timeout, 5_000);
 }
 
 #[test]
 fn fresh_creation_records_exact_checksums_and_reopens() {
-    let (_directory, path) = database();
+    let (directory, path) = database();
     let ledger = SqliteLedger::open(&path).unwrap();
     assert_connection_pragmas(&ledger);
     let rows: Vec<(i64, String, String)> = ledger
@@ -78,8 +83,12 @@ fn fresh_creation_records_exact_checksums_and_reopens() {
     }
     drop(ledger);
 
-    let reopened = SqliteLedger::open(path).unwrap();
+    let reopened = SqliteLedger::open(&path).unwrap();
     assert_connection_pragmas(&reopened);
+    drop(reopened);
+
+    #[cfg(target_os = "linux")]
+    crate::sqlite::open::assert_hostile_contract(directory.path(), &path);
 }
 
 #[test]

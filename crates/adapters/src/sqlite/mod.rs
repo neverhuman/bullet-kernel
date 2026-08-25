@@ -14,6 +14,7 @@ mod leases;
 mod materialization;
 mod migrations;
 mod nonces;
+mod open;
 mod outbox;
 mod projections;
 
@@ -33,7 +34,6 @@ use bullet_domain::{
 };
 use rusqlite::Connection;
 use std::path::Path;
-use std::time::Duration;
 
 pub use backup::{
     create_backup, restore_backup, BackupReceipt, RestoreReceipt, SqliteMaintenanceError,
@@ -69,6 +69,7 @@ impl Drop for ReadTransaction<'_> {
 /// SQLite-backed ledger.
 pub struct SqliteLedger {
     conn: Connection,
+    _database_guard: open::AdmissionGuard,
     materialization_fail_after: Option<u8>,
     graph_delta_fail_after: Option<u8>,
     lease_acquisition_fail_after: Option<u8>,
@@ -85,14 +86,11 @@ impl SqliteLedger {
     /// Returns `UNSUPPORTED_SCHEMA` before mutating legacy or unrecognized
     /// pre-1.0 databases; other SQLite failures are store errors.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, LedgerError> {
-        let mut conn = Connection::open(path.as_ref()).map_err(store)?;
-        conn.busy_timeout(Duration::from_millis(5_000))
-            .map_err(store)?;
-        migrations::enable_foreign_keys(&conn)?;
-        migrations::verify_or_initialize(&mut conn)?;
-        configure_durability(&conn)?;
+        let admitted = open::initialized(path.as_ref())?;
+        let open::AdmittedConnection { connection, guard } = admitted;
         Ok(Self {
-            conn,
+            conn: connection,
+            _database_guard: guard,
             materialization_fail_after: None,
             graph_delta_fail_after: None,
             lease_acquisition_fail_after: None,
@@ -149,25 +147,6 @@ impl SqliteLedger {
         transaction.commit()?;
         Ok((data, as_of_sequence))
     }
-}
-
-fn configure_durability(conn: &Connection) -> Result<(), LedgerError> {
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(store)?;
-    conn.pragma_update(None, "synchronous", "FULL")
-        .map_err(store)?;
-    let journal_mode: String = conn
-        .pragma_query_value(None, "journal_mode", |row| row.get(0))
-        .map_err(store)?;
-    let synchronous: i64 = conn
-        .pragma_query_value(None, "synchronous", |row| row.get(0))
-        .map_err(store)?;
-    if journal_mode != "wal" || synchronous != 2 {
-        return Err(store(format!(
-            "SQLite refused required durability pragmas: journal_mode={journal_mode}, synchronous={synchronous}"
-        )));
-    }
-    Ok(())
 }
 
 pub(crate) fn store(err: impl ToString) -> LedgerError {
