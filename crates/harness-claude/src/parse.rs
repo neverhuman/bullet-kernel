@@ -1,302 +1,375 @@
-//! Claude Code stream-json line parsing. Every raw line is kept in the
-//! session artifact; unknown-but-valid JSON types are skipped, malformed
-//! lines become protocol.error anomalies.
+//! Strict ingestion for the pinned Claude bidirectional stream transcript.
 
-use bullet_domain::Observation;
-use bullet_harness_core::{
-    AgentEventKind, EventNormalizer, NativeMeta, PatchProposal, ProfileIdentity, RunOutcome,
+use crate::protocol::{
+    basic_event_subject, empty_array, empty_optional_array, event_subject, exact_fields, protocol,
+    unique_string_array, valid_native_id, valid_result_common, valid_uuid, ClaudeStreamOutcome,
+    ClaudeStreamTranscript, Phase, MAX_ASSISTANT_CONTENT_ITEMS, MAX_ASSISTANT_MESSAGES,
+    MAX_STREAM_JSON_FRAMES, MAX_STREAM_JSON_FRAME_BYTES,
 };
-use serde_json::{json, Value};
+use bullet_harness_core::{AgentEvent, AgentEventKind, HarnessError, PatchProposal};
+use serde_json::{json, Map, Value};
 
-/// Normalize one finished invocation's stdout into envelopes.
-pub fn normalize_outcome(
-    normalizer: &mut EventNormalizer,
-    outcome: &RunOutcome,
-) -> Vec<bullet_harness_core::AgentEvent> {
-    let mut events = Vec::new();
-    let mut saw_turn_end = false;
-    for line in &outcome.stdout_lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+impl ClaudeStreamTranscript {
+    /// Consume one newline-delimited Claude stream-JSON frame.
+    ///
+    /// # Errors
+    ///
+    /// Any malformed, duplicate, out-of-phase, or wrong-subject frame poisons
+    /// the transcript permanently.
+    pub fn ingest_line(&mut self, line: &str) -> Result<Vec<AgentEvent>, HarnessError> {
+        if self.phase == Phase::Poisoned {
+            return Err(protocol("transcript is poisoned"));
         }
-        match serde_json::from_str::<Value>(trimmed) {
-            Ok(value) => {
-                for (kind, payload) in map_value(normalizer, &value) {
-                    if matches!(
-                        kind,
-                        AgentEventKind::TurnCompleted | AgentEventKind::TurnFailed
-                    ) {
-                        saw_turn_end = true;
-                    }
-                    events.push(normalizer.accept(kind, payload, &NativeMeta::none()));
+        if self.phase == Phase::Terminal {
+            return self.fail("late frame after terminal outcome");
+        }
+        if line.is_empty()
+            || line.len() > MAX_STREAM_JSON_FRAME_BYTES
+            || line.contains(['\n', '\r', '\0'])
+        {
+            return self.fail("invalid stream-JSON frame boundary");
+        }
+        self.inbound_frames = self
+            .inbound_frames
+            .checked_add(1)
+            .ok_or_else(|| protocol("stream-JSON frame counter overflow"))?;
+        if self.inbound_frames > MAX_STREAM_JSON_FRAMES {
+            return self.fail("stream-JSON transcript frame limit exceeded");
+        }
+        let value: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(error) => return self.fail(format!("malformed stream-JSON: {error}")),
+        };
+        let Some(object) = value.as_object() else {
+            return self.fail("stream-JSON frame is not an object");
+        };
+        let canonical = serde_json::to_string(&value)
+            .map_err(|error| protocol(format!("frame canonicalization failed: {error}")))?;
+        if !self.seen_frames.insert(canonical) {
+            return self.fail("duplicate stream-JSON frame");
+        }
+        match object.get("type").and_then(Value::as_str) {
+            Some("system") => self.system_init(object),
+            Some("assistant") => self.assistant(object),
+            Some("result") => self.result(object),
+            Some(other) => self.fail(format!("unadmitted stream-JSON type {other:?}")),
+            None => self.fail("stream-JSON frame lacks string type"),
+        }
+    }
+
+    fn system_init(
+        &mut self,
+        object: &Map<String, Value>,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        self.require_phase(Phase::AwaitSessionInit, "system/init")?;
+        let required = [
+            "type",
+            "subtype",
+            "uuid",
+            "session_id",
+            "apiKeySource",
+            "claude_code_version",
+            "cwd",
+            "tools",
+            "mcp_servers",
+            "model",
+            "permissionMode",
+            "slash_commands",
+            "output_style",
+            "agents",
+            "skills",
+            "plugins",
+            "analytics_disabled",
+            "product_feedback_disabled",
+        ];
+        let optional = [
+            "plugin_errors",
+            "plugin_warnings",
+            "mcp_server_errors",
+            "capabilities",
+        ];
+        if !exact_fields(object, &required, &optional)
+            || object.get("subtype").and_then(Value::as_str) != Some("init")
+            || object.get("claude_code_version").and_then(Value::as_str)
+                != Some(self.expected_runtime_version.as_str())
+            || object.get("cwd").and_then(Value::as_str) != Some(self.expected_cwd.as_str())
+            || object.get("permissionMode").and_then(Value::as_str) != Some("plan")
+            || !object
+                .get("apiKeySource")
+                .and_then(Value::as_str)
+                .is_some_and(valid_native_id)
+            || object.get("output_style").and_then(Value::as_str) != Some("default")
+            || object.get("analytics_disabled").and_then(Value::as_bool) != Some(true)
+            || object
+                .get("product_feedback_disabled")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || !empty_array(object, "mcp_servers")
+            || !empty_array(object, "slash_commands")
+            || !empty_array(object, "agents")
+            || !empty_array(object, "skills")
+            || !empty_array(object, "plugins")
+            || !empty_optional_array(object, "plugin_errors")
+            || !empty_optional_array(object, "plugin_warnings")
+            || !empty_optional_array(object, "mcp_server_errors")
+        {
+            return self.fail("system/init does not preserve the pinned read-only subject");
+        }
+        let tools = match unique_string_array(object, "tools") {
+            Some(tools) => tools,
+            None => return self.fail("system/init tools are malformed"),
+        };
+        if tools != ["Read", "Glob", "Grep"] {
+            return self.fail("system/init tools differ from the exact read-only admission");
+        }
+        if object.contains_key("capabilities")
+            && unique_string_array(object, "capabilities").is_none()
+        {
+            return self.fail("system/init capabilities are malformed or duplicate");
+        }
+        let (uuid, session_id, model) = match event_subject(object) {
+            Some(subject) => subject,
+            None => return self.fail("system/init has invalid event subject"),
+        };
+        self.record_event(uuid)?;
+        self.native_session_id = Some(session_id.to_string());
+        self.model = Some(model.to_string());
+        self.normalizer.set_native_session(session_id);
+        self.normalizer.set_model(model);
+        self.phase = Phase::Active;
+        Ok(vec![
+            self.event(
+                AgentEventKind::SessionIdentity,
+                json!({"native_session_id": session_id, "model": model}),
+                &format!("{uuid}:identity"),
+            ),
+            self.event(
+                AgentEventKind::SessionReady,
+                json!({"claude_code_version": self.expected_runtime_version}),
+                &format!("{uuid}:ready"),
+            ),
+            self.event(
+                AgentEventKind::TurnStarted,
+                json!({"invocation_id": self.invocation_id}),
+                &format!("{uuid}:turn"),
+            ),
+        ])
+    }
+
+    fn assistant(&mut self, object: &Map<String, Value>) -> Result<Vec<AgentEvent>, HarnessError> {
+        self.require_phase(Phase::Active, "assistant")?;
+        if self.assistant_messages >= MAX_ASSISTANT_MESSAGES {
+            return self.fail("assistant message limit exceeded");
+        }
+        if !exact_fields(
+            object,
+            &[
+                "type",
+                "uuid",
+                "session_id",
+                "message",
+                "parent_tool_use_id",
+            ],
+            &["error"],
+        ) || !object.get("parent_tool_use_id").is_some_and(Value::is_null)
+            || !object.get("error").is_none_or(Value::is_null)
+        {
+            return self.fail("assistant envelope is not an exact main-session message");
+        }
+        let Some((uuid, session_id)) = basic_event_subject(object) else {
+            return self.fail("assistant has invalid event subject");
+        };
+        self.require_native_session(session_id)?;
+        let Some(message) = object.get("message").and_then(Value::as_object) else {
+            return self.fail("assistant.message is not an object");
+        };
+        let required = [
+            "id",
+            "type",
+            "role",
+            "model",
+            "content",
+            "stop_reason",
+            "stop_sequence",
+            "usage",
+        ];
+        if !exact_fields(message, &required, &["container", "context_management"])
+            || message.get("type").and_then(Value::as_str) != Some("message")
+            || message.get("role").and_then(Value::as_str) != Some("assistant")
+            || message.get("model").and_then(Value::as_str) != self.model.as_deref()
+            || !message.get("usage").is_some_and(Value::is_object)
+            || !message.get("stop_sequence").is_some_and(Value::is_null)
+            || !message
+                .get("stop_reason")
+                .is_some_and(|value| value.is_null() || value.as_str() == Some("end_turn"))
+        {
+            return self.fail("assistant message subject is malformed or mismatched");
+        }
+        let Some(message_id) = message.get("id").and_then(Value::as_str) else {
+            return self.fail("assistant message lacks id");
+        };
+        if !valid_native_id(message_id) || !self.seen_message_ids.insert(message_id.to_string()) {
+            return self.fail("assistant message id is invalid or duplicate");
+        }
+        let Some(content) = message.get("content").and_then(Value::as_array) else {
+            return self.fail("assistant content is not an array");
+        };
+        if content.is_empty() || content.len() > MAX_ASSISTANT_CONTENT_ITEMS {
+            return self.fail("assistant content item count is outside admission");
+        }
+        let mut mapped = Vec::new();
+        for (index, item) in content.iter().enumerate() {
+            let Some(item) = item.as_object() else {
+                return self.fail("assistant content item is not an object");
+            };
+            let (kind, payload) = match item.get("type").and_then(Value::as_str) {
+                Some("text")
+                    if exact_fields(item, &["type", "text"], &[])
+                        && item.get("text").is_some_and(Value::is_string) =>
+                {
+                    (
+                        AgentEventKind::TurnDelta,
+                        json!({"text": item.get("text"), "authoritative": false}),
+                    )
                 }
-            }
-            Err(_) => events.push(normalizer.malformed(trimmed)),
+                Some("thinking")
+                    if exact_fields(item, &["type", "thinking", "signature"], &[])
+                        && item.get("thinking").is_some_and(Value::is_string)
+                        && item.get("signature").is_some_and(Value::is_string) =>
+                {
+                    (
+                        AgentEventKind::ThinkingDelta,
+                        json!({"text": item.get("thinking")}),
+                    )
+                }
+                Some("tool_use") => {
+                    return self.fail("tool use is outside the frozen V1 transcript")
+                }
+                _ => return self.fail("unadmitted assistant content item"),
+            };
+            mapped.push(self.event(kind, payload, &format!("{uuid}:content:{index}")));
+        }
+        self.record_event(uuid)?;
+        self.assistant_messages += 1;
+        Ok(mapped)
+    }
+
+    fn result(&mut self, object: &Map<String, Value>) -> Result<Vec<AgentEvent>, HarnessError> {
+        if self.phase != Phase::Active {
+            return self.fail("result is out of phase");
+        }
+        let Some((uuid, session_id)) = basic_event_subject(object) else {
+            return self.fail("result has invalid event subject");
+        };
+        self.require_native_session(session_id)?;
+        self.record_event(uuid)?;
+        if !valid_result_common(object) {
+            return self.fail("result common subject is malformed");
+        }
+        let Some(subtype) = object.get("subtype").and_then(Value::as_str) else {
+            return self.fail("result lacks subtype");
+        };
+        if subtype == "success" {
+            self.success_result(object, uuid)
+        } else {
+            self.failure_result(object, uuid, subtype)
         }
     }
-    if !saw_turn_end {
-        let payload = json!({
-            "reason": "stream ended without a result event",
-            "exit_code": outcome.exit_code,
-            "timed_out": outcome.timed_out,
-            "stderr_tail": tail(&outcome.stderr, 400),
+
+    fn success_result(
+        &mut self,
+        object: &Map<String, Value>,
+        uuid: &str,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        let model_usage_matches = self.model.as_deref().is_some_and(|model| {
+            object
+                .get("modelUsage")
+                .and_then(Value::as_object)
+                .is_some_and(|usage| usage.len() == 1 && usage.contains_key(model))
         });
-        events.push(normalizer.accept(AgentEventKind::TurnFailed, payload, &NativeMeta::none()));
-    }
-    events
-}
-
-fn tail(text: &str, max: usize) -> String {
-    let start = text.len().saturating_sub(max);
-    text[start..].to_string()
-}
-
-fn map_value(normalizer: &mut EventNormalizer, value: &Value) -> Vec<(AgentEventKind, Value)> {
-    match value.get("type").and_then(Value::as_str) {
-        Some("system") => map_system(normalizer, value),
-        Some("assistant") => map_message(value, true),
-        Some("user") => map_message(value, false),
-        Some("result") => map_result(value),
-        _ => Vec::new(),
-    }
-}
-
-fn map_system(normalizer: &mut EventNormalizer, value: &Value) -> Vec<(AgentEventKind, Value)> {
-    if value.get("subtype").and_then(Value::as_str) != Some("init") {
-        return Vec::new();
-    }
-    if let Some(native) = value.get("session_id").and_then(Value::as_str) {
-        normalizer.set_native_session(native);
-    }
-    if let Some(model) = value.get("model").and_then(Value::as_str) {
-        normalizer.set_model(model);
-    }
-    vec![
-        (AgentEventKind::SessionReady, value.clone()),
-        (
-            AgentEventKind::SessionIdentity,
-            json!({ "session_id": value.get("session_id"), "model": value.get("model") }),
-        ),
-    ]
-}
-
-fn map_message(value: &Value, assistant: bool) -> Vec<(AgentEventKind, Value)> {
-    let Some(content) = value.pointer("/message/content").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    let mut events = Vec::new();
-    for item in content {
-        match item.get("type").and_then(Value::as_str) {
-            Some("text") if assistant => {
-                events.push((
-                    AgentEventKind::TurnDelta,
-                    json!({ "text": item.get("text") }),
-                ));
-            }
-            Some("thinking") if assistant => {
-                events.push((
-                    AgentEventKind::ThinkingDelta,
-                    json!({ "text": item.get("thinking") }),
-                ));
-            }
-            Some("tool_use") if assistant => {
-                events.push((
-                    AgentEventKind::ToolRequested,
-                    json!({ "tool": item.get("name"), "input": item.get("input") }),
-                ));
-            }
-            Some("tool_result") if !assistant => {
-                events.push((
-                    AgentEventKind::ToolCompleted,
-                    json!({ "is_error": item.get("is_error") }),
-                ));
-            }
-            _ => {}
+        if self.phase != Phase::Active
+            || self.assistant_messages == 0
+            || object.get("num_turns").and_then(Value::as_u64) != Some(self.assistant_messages)
+            || !model_usage_matches
+            || object.get("is_error").and_then(Value::as_bool) != Some(false)
+            || object.get("stop_reason").and_then(Value::as_str) != Some("end_turn")
+            || !object.get("result").is_some_and(Value::is_string)
+            || object.get("errors").is_some()
+        {
+            return self.fail("success result disagrees with the active terminal subject");
         }
-    }
-    events
-}
-
-fn map_result(value: &Value) -> Vec<(AgentEventKind, Value)> {
-    let mut events = Vec::new();
-    let usage = value.get("usage").cloned().unwrap_or(Value::Null);
-    let cost = value.get("total_cost_usd").cloned().unwrap_or(Value::Null);
-    if !usage.is_null() || !cost.is_null() {
-        events.push((
-            AgentEventKind::UsageReported,
-            json!({ "usage": usage, "total_cost_usd": cost, "duration_ms": value.get("duration_ms") }),
-        ));
-    }
-    let is_error = value
-        .get("is_error")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || value
-            .get("subtype")
-            .and_then(Value::as_str)
-            .is_some_and(|s| s != "success");
-    if is_error {
-        events.push((
-            AgentEventKind::TurnFailed,
-            json!({ "reason": value.get("subtype"), "result": value.get("result") }),
-        ));
-        return events;
-    }
-    let proposal = extract_proposal(value);
-    events.push((
-        AgentEventKind::TurnCompleted,
-        json!({
-            "proposal": proposal,
-            "text": value.get("result"),
-            "native_session_id": value.get("session_id"),
-        }),
-    ));
-    events
-}
-
-fn extract_proposal(value: &Value) -> Value {
-    if let Some(structured) = value.get("structured_output") {
-        if let Ok(p) = PatchProposal::from_value(structured) {
-            return serde_json::to_value(p).unwrap_or(Value::Null);
-        }
-    }
-    if let Some(text) = value.get("result").and_then(Value::as_str) {
-        if let Ok(p) = PatchProposal::extract_from_text(text) {
-            return serde_json::to_value(p).unwrap_or(Value::Null);
-        }
-    }
-    Value::Null
-}
-
-/// Parse `claude auth status` JSON output into an identity observation.
-#[must_use]
-pub fn parse_auth_status(text: &str) -> Observation<ProfileIdentity> {
-    let Some(start) = text.find('{') else {
-        return Observation::Unknown {
-            source: "claude auth status".to_string(),
-            reason: "no json in output".to_string(),
+        let Some(structured) = object.get("structured_output") else {
+            return self.fail("success result lacks structured_output");
         };
-    };
-    let Ok(value) = serde_json::from_str::<Value>(text[start..].trim()) else {
-        return Observation::Unknown {
-            source: "claude auth status".to_string(),
-            reason: "output not valid json".to_string(),
+        let proposal = match PatchProposal::from_value(structured) {
+            Ok(proposal) => proposal,
+            Err(error) => return self.fail(format!("terminal PatchProposal invalid: {error}")),
         };
-    };
-    if value.get("loggedIn").and_then(Value::as_bool) != Some(true) {
-        return Observation::Unknown {
-            source: "claude auth status".to_string(),
-            reason: "not logged in".to_string(),
-        };
-    }
-    Observation::value(ProfileIdentity {
-        provider: "claude".to_string(),
-        email: value
-            .get("email")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        account_id: value
-            .get("orgId")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        subscription: value
-            .get("subscriptionType")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        auth_method: value
-            .get("authMethod")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bullet_harness_core::AgentSessionId;
-
-    fn outcome(lines: &[&str], exit: i32) -> RunOutcome {
-        RunOutcome {
-            stdout_lines: lines.iter().map(|s| (*s).to_string()).collect(),
-            stderr: String::new(),
-            exit_code: Some(exit),
-            timed_out: false,
-            wall: std::time::Duration::from_millis(5),
+        if proposal.gate_ids != self.admitted_gate_ids {
+            return self.fail("terminal PatchProposal gate_ids differ from admission");
         }
-    }
-
-    fn normalizer() -> EventNormalizer {
-        EventNormalizer::new(AgentSessionId::new("ses-claude-test"), "claude")
-    }
-
-    #[test]
-    fn happy_stream_maps_to_envelopes() {
-        let proposal = r#"{\"intent_summary\":\"x\",\"changes\":[{\"path\":\"PONG.txt\",\"op\":\"create\",\"contents\":\"PONG\"}],\"gate_ids\":[\"repo.gate.v1\"],\"claims\":[],\"uncertainties\":[],\"done\":true}"#;
-        let lines = [
-            r#"{"type":"system","subtype":"init","session_id":"abc-123","model":"claude-x","tools":[]}"#,
-            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}"#,
-            &format!(
-                r#"{{"type":"result","subtype":"success","is_error":false,"result":"{}","total_cost_usd":0.01,"usage":{{"input_tokens":10,"output_tokens":5}},"session_id":"abc-123"}}"#,
-                proposal
+        let events = vec![
+            self.event(
+                AgentEventKind::UsageReported,
+                json!({"usage": object.get("usage"), "total_cost_usd": object.get("total_cost_usd")}),
+                &format!("{uuid}:usage"),
+            ),
+            self.event(
+                AgentEventKind::TurnCompleted,
+                json!({"proposal": proposal, "terminal_event_id": uuid}),
+                uuid,
             ),
         ];
-        let mut n = normalizer();
-        let refs: Vec<&str> = lines.iter().map(AsRef::as_ref).collect();
-        let events = normalize_outcome(&mut n, &outcome(&refs, 0));
-        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
-        assert!(kinds.contains(&AgentEventKind::SessionReady));
-        assert!(kinds.contains(&AgentEventKind::TurnDelta));
-        assert!(kinds.contains(&AgentEventKind::UsageReported));
-        let completed = events
-            .iter()
-            .find(|e| e.kind == AgentEventKind::TurnCompleted)
-            .expect("completed");
-        assert_eq!(
-            completed.payload["proposal"]["changes"][0]["path"],
-            "PONG.txt"
+        self.outcome = Some(ClaudeStreamOutcome::Proposal(proposal));
+        self.phase = Phase::Terminal;
+        Ok(events)
+    }
+
+    fn failure_result(
+        &mut self,
+        object: &Map<String, Value>,
+        uuid: &str,
+        subtype: &str,
+    ) -> Result<Vec<AgentEvent>, HarnessError> {
+        let allowed = matches!(
+            subtype,
+            "error_max_turns"
+                | "error_during_execution"
+                | "error_max_budget_usd"
+                | "error_max_structured_output_retries"
         );
-        assert_eq!(completed.native_session_id.as_deref(), Some("abc-123"));
-    }
-
-    #[test]
-    fn malformed_line_and_missing_result_are_typed() {
-        let mut n = normalizer();
-        let events = normalize_outcome(&mut n, &outcome(&["nonsense {"], 1));
-        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
-        assert!(kinds.contains(&AgentEventKind::ProtocolError));
-        assert!(kinds.contains(&AgentEventKind::TurnFailed));
-    }
-
-    #[test]
-    fn error_result_maps_to_turn_failed() {
-        let line = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}"#;
-        let mut n = normalizer();
-        let events = normalize_outcome(&mut n, &outcome(&[line], 1));
-        assert!(events.iter().any(|e| e.kind == AgentEventKind::TurnFailed));
-        assert!(!events
-            .iter()
-            .any(|e| e.kind == AgentEventKind::TurnCompleted));
-    }
-
-    #[test]
-    fn auth_status_parses_and_fails_closed() {
-        let logged_in =
-            r#"{"loggedIn":true,"email":"ben@veox.ai","orgId":"o1","subscriptionType":"max"}"#;
-        match parse_auth_status(logged_in) {
-            Observation::Value { value } => {
-                assert_eq!(value.email.as_deref(), Some("ben@veox.ai"));
-                assert_eq!(value.subscription.as_deref(), Some("max"));
-            }
-            other => panic!("expected identity, got {other:?}"),
+        let errors = object.get("errors").and_then(Value::as_array);
+        if !allowed
+            || object.get("is_error").and_then(Value::as_bool) != Some(true)
+            || errors.is_none_or(|errors| {
+                errors.is_empty() || errors.iter().any(|error| !error.is_string())
+            })
+            || object.get("structured_output").is_some()
+            || object.get("result").is_some()
+        {
+            return self.fail("failure result has invalid terminal shape");
         }
-        assert!(matches!(
-            parse_auth_status(r#"{"loggedIn":false}"#),
-            Observation::Unknown { .. }
-        ));
-        assert!(matches!(
-            parse_auth_status("garbage"),
-            Observation::Unknown { .. }
-        ));
+        let event = self.event(
+            AgentEventKind::TurnFailed,
+            json!({"subtype": subtype, "terminal_event_id": uuid}),
+            uuid,
+        );
+        self.outcome = Some(ClaudeStreamOutcome::Failed(subtype.to_string()));
+        self.phase = Phase::Terminal;
+        Ok(vec![event])
+    }
+
+    fn record_event(&mut self, uuid: &str) -> Result<(), HarnessError> {
+        if !valid_uuid(uuid) || !self.seen_event_ids.insert(uuid.to_string()) {
+            return self.fail("provider event uuid is invalid or duplicate");
+        }
+        Ok(())
+    }
+
+    fn require_native_session(&mut self, session_id: &str) -> Result<(), HarnessError> {
+        if self.native_session_id.as_deref() != Some(session_id) {
+            return self.fail("provider event names the wrong native session");
+        }
+        Ok(())
     }
 }
