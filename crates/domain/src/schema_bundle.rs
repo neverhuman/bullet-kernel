@@ -4,22 +4,25 @@
 // DO NOT EDIT BY HAND.
 pub const SCHEMA_VERSION: &str = "v1alpha1";
 pub const SCHEMA_BUNDLE_HASH: &str =
-    "0a6df08780940bd2363068a2c958ffc9d5d6c346ce760ccacce663fd853d7099";
+    "e75054c8887cbb034105b3bc01012e425cb14fd97ebe2422999947fe000e575f";
 pub const INVARIANT_REGISTRY_HASH: &str =
     "978a8b4ebb14ff0c978afb431c154647adef2f9839de322356a765c59a0c3858";
 pub const POLICY_SNAPSHOT_HASH: &str =
-    "b9860c3a8856f820d0e960b064dd470963923ca706d57634568cd5cbfd962063";
+    "55d42dc1827360fdb42f76a0e4be8bd549e6432f33734af82e10edafd92c51c1";
 pub const CANONICAL_GOLDEN_JSON: &str = r##"{"a":"é","array":[true,null,17],"z":"last"}"##;
 pub const CANONICAL_GOLDEN_HASH: &str =
     "1d800cb94962906f78d42cb8cc84c2c078311a50e35ca515240b800abc3d2263";
 pub const AUTHORITY_GOLDEN_HASH: &str =
     "4ff1ce8a4ba7a37ae705a8d2459e5a9d900abe55610f6d6984fe514cd37860df";
+pub const LAUNCH_GRANT_GOLDEN_HASH: &str =
+    "5f89dde4a6e9c6d4b19631dd99607418012f1cbe57bfad89e8de4016254df4b0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuthorityAudienceV1 {
     BulletGitd,
     EffectBroker,
+    ProviderRunner,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -817,6 +820,53 @@ pub struct IssuerKeyV1 {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct LaunchGrantClaimsV1 {
+    pub schema_version: String,
+    pub grant_id: String,
+    pub audience: AuthorityAudienceV1,
+    pub operation: String,
+    pub issuer: String,
+    pub key_id: String,
+    pub issued_at_unix_ms: u64,
+    pub not_before_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    pub grant_nonce: String,
+    pub mission_id: String,
+    pub repository_id: String,
+    pub graph_revision_id: String,
+    pub work_package_id: String,
+    pub variant_id: String,
+    pub attempt_id: String,
+    pub attempt_fence: u64,
+    pub runner_id: String,
+    pub runner_epoch: u64,
+    pub workspace_id: String,
+    pub workspace_nonce_digest: String,
+    pub authority_epoch: u64,
+    pub freeze_generation: u64,
+    pub provider: String,
+    pub adapter: String,
+    pub provider_profile_id: String,
+    pub model: String,
+    pub credential_generation: u64,
+    pub protocol: String,
+    pub executable_path: String,
+    pub executable_digest: String,
+    pub descriptor_digest: String,
+    pub capability_digest: String,
+    pub policy_snapshot_digest: String,
+    pub policy_generation: u64,
+    pub sandbox_manifest_digest: String,
+    pub environment_digest: String,
+    pub gate_ids: Vec<String>,
+    pub budget_reservation_id: String,
+    pub max_invocations: u64,
+    pub max_wall_clock_ms: u64,
+    pub max_cost_micro_usd: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LaunchGrantV1 {
     pub schema_version: String,
     pub authority_envelope_digest: String,
@@ -1213,6 +1263,15 @@ pub struct SentinelResult {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignedAuthorityEnvelopeV1 {
+    pub schema_version: String,
+    pub issuer: String,
+    pub key_id: String,
+    pub paseto: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedLaunchGrantV1 {
     pub schema_version: String,
     pub issuer: String,
     pub key_id: String,
