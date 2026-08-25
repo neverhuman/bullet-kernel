@@ -53,7 +53,7 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            $ref: "#/components/schemas/MissionId"
       responses:
         "200":
           description: mission view
@@ -211,7 +211,8 @@ paths:
         - in: path
           name: id
           required: true
-          schema: { type: string }
+          schema:
+            $ref: "#/components/schemas/CommandId"
       responses:
         "200":
           description: PENDING, APPLIED, VERIFIED, FAILED, or UNKNOWN durable truth
@@ -321,6 +322,33 @@ components:
       in: header
       name: X-Bullet-CSRF
   schemas:
+    CommandId:
+      type: string
+      pattern: '^cmd_[0-9a-f]{64}$'
+    MissionId:
+      type: string
+      pattern: '^mis_[0-9a-f]{64}$'
+    OrganizationId:
+      type: string
+      pattern: '^org_[0-9a-f]{64}$'
+    RepositoryId:
+      type: string
+      pattern: '^rep_[0-9a-f]{64}$'
+    AcceptanceContractId:
+      type: string
+      pattern: '^acc_[0-9a-f]{64}$'
+    WorkPackageId:
+      type: string
+      pattern: '^wpk_[0-9a-f]{64}$'
+    PlanRevisionId:
+      type: string
+      pattern: '^pln_[0-9a-f]{64}$'
+    VariantId:
+      type: string
+      pattern: '^var_[0-9a-f]{64}$'
+    Digest:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
     Health:
       type: object
       required: [status]
@@ -356,12 +384,14 @@ components:
       additionalProperties: false
       required: [id, status, kind, payload_digest, result]
       properties:
-        id: { type: string }
+        id:
+          $ref: "#/components/schemas/CommandId"
         status:
           type: string
           enum: [PENDING, APPLIED, VERIFIED, FAILED, UNKNOWN]
         kind: { type: string }
-        payload_digest: { type: string }
+        payload_digest:
+          $ref: "#/components/schemas/Digest"
         result:
           $ref: "#/components/schemas/JsonValue"
     JsonValue:
@@ -383,6 +413,7 @@ components:
       enum: [value, empty, unknown, contradictory]
     Mission:
       type: object
+      additionalProperties: false
       required:
         - id
         - organization_id
@@ -392,15 +423,20 @@ components:
         - acceptance_contract_id
         - state
       properties:
-        id: { type: string }
-        organization_id: { type: string }
-        repository_id: { type: string }
+        id:
+          $ref: "#/components/schemas/MissionId"
+        organization_id:
+          $ref: "#/components/schemas/OrganizationId"
+        repository_id:
+          $ref: "#/components/schemas/RepositoryId"
         title: { type: string }
         objective: { type: string }
-        acceptance_contract_id: { type: string }
+        acceptance_contract_id:
+          $ref: "#/components/schemas/AcceptanceContractId"
         state: { type: string }
     WorkPackage:
       type: object
+      additionalProperties: false
       required:
         - id
         - mission_id
@@ -409,14 +445,18 @@ components:
         - title
         - state
       properties:
-        id: { type: string }
-        mission_id: { type: string }
-        plan_revision_id: { type: string }
+        id:
+          $ref: "#/components/schemas/WorkPackageId"
+        mission_id:
+          $ref: "#/components/schemas/MissionId"
+        plan_revision_id:
+          $ref: "#/components/schemas/PlanRevisionId"
         task_class: { type: string }
         title: { type: string }
         state: { type: string }
     MissionView:
       type: object
+      additionalProperties: false
       required: [mission, packages, fence]
       properties:
         mission:
@@ -427,6 +467,7 @@ components:
             $ref: "#/components/schemas/WorkPackage"
         fence:
           type: [integer, "null"]
+          minimum: 0
     MissionListSnapshot:
       type: object
       additionalProperties: false
@@ -561,11 +602,15 @@ components:
         repair: { type: string }
     ReadyView:
       type: object
+      additionalProperties: false
       required: [work_package_id, mission_id, variant_id, title, enqueued_at]
       properties:
-        work_package_id: { type: string }
-        mission_id: { type: string }
-        variant_id: { type: string }
+        work_package_id:
+          $ref: "#/components/schemas/WorkPackageId"
+        mission_id:
+          $ref: "#/components/schemas/MissionId"
+        variant_id:
+          $ref: "#/components/schemas/VariantId"
         title: { type: string }
         enqueued_at: { type: string }
     ReadySnapshot:

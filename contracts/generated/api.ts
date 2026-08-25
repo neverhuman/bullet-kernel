@@ -3,6 +3,24 @@
  * regenerate: cargo run -p bullet -- contracts generate
  * do not hand-edit */
 
+export type CommandId = string;
+
+export type MissionId = string;
+
+export type OrganizationId = string;
+
+export type RepositoryId = string;
+
+export type AcceptanceContractId = string;
+
+export type WorkPackageId = string;
+
+export type PlanRevisionId = string;
+
+export type VariantId = string;
+
+export type Digest = string;
+
 export type Health = {
   status: string;
 };
@@ -25,10 +43,10 @@ export type CommandEnvelope = {
 };
 
 export type CommandStatus = {
-  id: string;
+  id: CommandId;
   status: "PENDING" | "APPLIED" | "VERIFIED" | "FAILED" | "UNKNOWN";
   kind: string;
-  payload_digest: string;
+  payload_digest: Digest;
   result: JsonValue;
 };
 
@@ -38,19 +56,19 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | {
 export type ObservationKind = "value" | "empty" | "unknown" | "contradictory";
 
 export type Mission = {
-  id: string;
-  organization_id: string;
-  repository_id: string;
+  id: MissionId;
+  organization_id: OrganizationId;
+  repository_id: RepositoryId;
   title: string;
   objective: string;
-  acceptance_contract_id: string;
+  acceptance_contract_id: AcceptanceContractId;
   state: string;
 };
 
 export type WorkPackage = {
-  id: string;
-  mission_id: string;
-  plan_revision_id: string;
+  id: WorkPackageId;
+  mission_id: MissionId;
+  plan_revision_id: PlanRevisionId;
   task_class: string;
   title: string;
   state: string;
@@ -141,9 +159,9 @@ export type Problem = {
 };
 
 export type ReadyView = {
-  work_package_id: string;
-  mission_id: string;
-  variant_id: string;
+  work_package_id: WorkPackageId;
+  mission_id: MissionId;
+  variant_id: VariantId;
   title: string;
   enqueued_at: string;
 };
@@ -154,5 +172,243 @@ export type ReadySnapshot = {
   observed_at: string;
   source: "bullet-kernel/sqlite-ledger";
 };
+
+export const PUBLIC_API_RUNTIME_SCHEMA = {
+  "$defs": {
+    "AcceptanceContractId": {
+      "pattern": "^acc_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "CommandId": {
+      "pattern": "^cmd_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "CommandStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "result": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "APPLIED",
+            "VERIFIED",
+            "FAILED",
+            "UNKNOWN"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "kind",
+        "payload_digest",
+        "result"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "JsonValue": {
+      "description": "A recursively typed JSON value from durable command truth.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "properties": {},
+          "type": "object"
+        }
+      ]
+    },
+    "Mission": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_contract_id": {
+          "$ref": "#/$defs/AcceptanceContractId"
+        },
+        "id": {
+          "$ref": "#/$defs/MissionId"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "organization_id": {
+          "$ref": "#/$defs/OrganizationId"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "state": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "organization_id",
+        "repository_id",
+        "title",
+        "objective",
+        "acceptance_contract_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "MissionId": {
+      "pattern": "^mis_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "MissionView": {
+      "additionalProperties": false,
+      "properties": {
+        "fence": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mission": {
+          "$ref": "#/$defs/Mission"
+        },
+        "packages": {
+          "items": {
+            "$ref": "#/$defs/WorkPackage"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "mission",
+        "packages",
+        "fence"
+      ],
+      "type": "object"
+    },
+    "OrganizationId": {
+      "pattern": "^org_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "PlanRevisionId": {
+      "pattern": "^pln_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ReadyView": {
+      "additionalProperties": false,
+      "properties": {
+        "enqueued_at": {
+          "type": "string"
+        },
+        "mission_id": {
+          "$ref": "#/$defs/MissionId"
+        },
+        "title": {
+          "type": "string"
+        },
+        "variant_id": {
+          "$ref": "#/$defs/VariantId"
+        },
+        "work_package_id": {
+          "$ref": "#/$defs/WorkPackageId"
+        }
+      },
+      "required": [
+        "work_package_id",
+        "mission_id",
+        "variant_id",
+        "title",
+        "enqueued_at"
+      ],
+      "type": "object"
+    },
+    "RepositoryId": {
+      "pattern": "^rep_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "VariantId": {
+      "pattern": "^var_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "WorkPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/WorkPackageId"
+        },
+        "mission_id": {
+          "$ref": "#/$defs/MissionId"
+        },
+        "plan_revision_id": {
+          "$ref": "#/$defs/PlanRevisionId"
+        },
+        "state": {
+          "type": "string"
+        },
+        "task_class": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "mission_id",
+        "plan_revision_id",
+        "task_class",
+        "title",
+        "state"
+      ],
+      "type": "object"
+    },
+    "WorkPackageId": {
+      "pattern": "^wpk_[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://bullet.farm/schemas/public-api-runtime-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+} as const;
+
+export const PUBLIC_API_RUNTIME_REFS = {
+  CommandStatus: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandStatus",
+  Mission: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/Mission",
+  MissionView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/MissionView",
+  ReadyView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ReadyView",
+} as const;
 
 export const API_PREFIX = "/v1";
