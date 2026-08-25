@@ -2,6 +2,7 @@
 
 use super::credentials::CredentialReceipt;
 use super::protocol::ProviderProtocol;
+use super::signed::{EgressIsolationRecord, SignedAuthorityRecord};
 use crate::error::HarnessError;
 use crate::event::{AgentEvent, AgentEventKind};
 use crate::proposal::PatchProposal;
@@ -173,6 +174,12 @@ pub struct ProviderConformanceReceipt {
     pub canary_surfaces: Vec<String>,
     /// Complete sorted reasons dispatch remains blocked.
     pub blockers: Vec<AdmissionBlocker>,
+    /// Verified Kernel grant that cleared `SIGNED_ADMISSION_UNAVAILABLE`.
+    #[serde(default)]
+    pub signed_authority: Option<SignedAuthorityRecord>,
+    /// Audited evidence that cleared `EGRESS_ISOLATION_UNAVAILABLE`.
+    #[serde(default)]
+    pub egress_isolation: Option<EgressIsolationRecord>,
 }
 
 /// Inputs to deterministic receipt construction.
@@ -230,34 +237,35 @@ impl ProviderConformanceReceipt {
             events_blake3: input.evidence.events_blake3.clone(),
             canary_surfaces,
             blockers,
+            signed_authority: None,
+            egress_isolation: None,
         };
-        let bytes =
-            serde_json::to_vec(&receipt).map_err(|error| HarnessError::AdmissionRefused {
-                reason: format!("receipt serialization failed: {error}"),
-            })?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"bullet-provider-conformance-receipt-v1\0");
-        hasher.update(&bytes);
-        receipt.receipt_id = hasher.finalize().to_hex().to_string();
+        receipt.receipt_id = receipt.seal_digest()?;
         Ok(receipt)
     }
 
-    /// Fail closed on the first blocker. This receipt can never become a
-    /// live spawn authority merely by being deserialized.
+    /// A serialized receipt is never spawn authority: it fails on its first
+    /// blocker and, with none recorded, as `UNSIGNED_RECEIPT`. Only a live
+    /// `EvaluatedAdmission` that cleared every blocker with evidence can
+    /// dispatch.
     ///
     /// # Errors
     ///
-    /// `PROVIDER_ADMISSION_BLOCKED` while any blocker exists.
+    /// Always `PROVIDER_ADMISSION_BLOCKED` (or `ADMISSION_REFUSED` on tamper).
     pub fn require_dispatch(&self) -> Result<(), HarnessError> {
         self.verify()?;
-        let blocker = self
-            .blockers
+        Err(HarnessError::AdmissionBlocked {
+            blocker: self.first_blocker().to_string(),
+        })
+    }
+
+    /// First remaining blocker code, or `UNSIGNED_RECEIPT` when none remain.
+    #[must_use]
+    pub fn first_blocker(&self) -> &'static str {
+        self.blockers
             .first()
             .map(AdmissionBlocker::as_str)
-            .unwrap_or("UNSIGNED_RECEIPT");
-        Err(HarnessError::AdmissionBlocked {
-            blocker: blocker.to_string(),
-        })
+            .unwrap_or("UNSIGNED_RECEIPT")
     }
 
     /// Recompute the domain-separated receipt identifier.
@@ -266,8 +274,30 @@ impl ProviderConformanceReceipt {
     ///
     /// `ADMISSION_REFUSED` if the receipt was modified or cannot serialize.
     pub fn verify(&self) -> Result<(), HarnessError> {
+        if self.receipt_id != self.seal_digest()? {
+            return Err(HarnessError::AdmissionRefused {
+                reason: "provider conformance receipt digest mismatch".into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Remove exactly one present blocker and reseal. Callers verify the
+    /// receipt before recording the clearing evidence and calling this.
+    pub(crate) fn clear_blocker(&mut self, blocker: &AdmissionBlocker) -> Result<(), HarnessError> {
+        let Some(index) = self.blockers.iter().position(|present| present == blocker) else {
+            return Err(HarnessError::AdmissionRefused {
+                reason: format!("blocker {} is not present", blocker.as_str()),
+            });
+        };
+        self.blockers.remove(index);
+        self.receipt_id = self.seal_digest()?;
+        Ok(())
+    }
+
+    fn seal_digest(&self) -> Result<String, HarnessError> {
         let mut unsigned = self.clone();
-        let claimed = std::mem::take(&mut unsigned.receipt_id);
+        unsigned.receipt_id = String::new();
         let bytes =
             serde_json::to_vec(&unsigned).map_err(|error| HarnessError::AdmissionRefused {
                 reason: format!("receipt serialization failed: {error}"),
@@ -275,12 +305,7 @@ impl ProviderConformanceReceipt {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"bullet-provider-conformance-receipt-v1\0");
         hasher.update(&bytes);
-        if claimed != hasher.finalize().to_hex().as_str() {
-            return Err(HarnessError::AdmissionRefused {
-                reason: "provider conformance receipt digest mismatch".into(),
-            });
-        }
-        Ok(())
+        Ok(hasher.finalize().to_hex().to_string())
     }
 }
 

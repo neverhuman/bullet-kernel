@@ -53,6 +53,10 @@
       "command": "cargo test -p bullet-harness-antigravity",
       "purpose": "prove agy text adapter and Unsupported capability gating"
     },
+    "crates/harness-egress/": {
+      "command": "cargo test -p bullet-harness-egress && bash ops/ci/egress.sh",
+      "purpose": "prove allowlist/proxy/receipt units, then live namespace egress isolation (neutral 78 without tools)"
+    },
     "crates/runner/": {
       "command": "cargo test -p bullet-runner-core",
       "purpose": "prove attempt loop, scope check, heartbeat self-fence"

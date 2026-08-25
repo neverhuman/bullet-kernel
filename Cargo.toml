@@ -11,6 +11,7 @@ members = [
   "crates/harness-codex",
   "crates/harness-cursor",
   "crates/harness-antigravity",
+  "crates/harness-egress",
   "crates/runner",
   "crates/verifier",
   "crates/effects",

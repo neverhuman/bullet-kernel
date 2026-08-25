@@ -16,7 +16,12 @@ async-trait.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 futures.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+libc.workspace = true
+pasetors = { version = "=0.8.0", default-features = false, features = ["v4"] }
 serde.workspace = true
+serde_jcs = "0.2"
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

@@ -5,6 +5,7 @@
 mod credentials;
 mod protocol;
 mod receipt;
+mod signed;
 
 use crate::adapter::HarnessDescriptor;
 use crate::capability::{CapabilityMatrix, CapabilityState, PromotionStage};
@@ -20,10 +21,15 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+pub use crate::launch_grant::environment_digest;
 pub use credentials::{CredentialGrant, CredentialReceipt};
 pub use protocol::{ProtocolRequirement, ProviderProtocol};
 pub use receipt::{
     AdmissionBlocker, CanarySecrets, ConformanceEvidence, ProviderConformanceReceipt,
+};
+pub use signed::{
+    EgressIsolationEvidence, EgressIsolationRecord, EgressProbe, EgressProbeOutcome,
+    SignedAuthorityRecord, REQUIRED_EGRESS_PROBES,
 };
 
 const MAX_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
@@ -260,14 +266,22 @@ impl EvaluatedAdmission {
         self.home.env()
     }
 
-    /// Live dispatch remains blocked until every external prerequisite is
-    /// implemented and independently verified.
+    /// Dispatch is possible only once every blocker has been cleared by its
+    /// own evidence (`admit_signed`, `admit_egress`); the receipt is
+    /// re-verified first so an altered receipt never dispatches.
     ///
     /// # Errors
     ///
-    /// Always `PROVIDER_ADMISSION_BLOCKED` in this slice.
+    /// `PROVIDER_ADMISSION_BLOCKED` naming the first remaining blocker, or
+    /// `ADMISSION_REFUSED` on a tampered receipt.
     pub fn require_dispatch(&self) -> Result<(), HarnessError> {
-        self.receipt.require_dispatch()
+        self.receipt.verify()?;
+        if self.receipt.blockers.is_empty() {
+            return Ok(());
+        }
+        Err(HarnessError::AdmissionBlocked {
+            blocker: self.receipt.first_blocker().to_string(),
+        })
     }
 }
 

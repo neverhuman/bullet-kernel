@@ -5,6 +5,7 @@ mod authority;
 mod clock;
 mod commands;
 mod effects;
+mod launch_grant;
 mod materialization;
 
 use crate::authority::ActiveLeaseSubject;
@@ -12,6 +13,7 @@ use crate::commands::{CommandRecord, CommandRequest};
 use crate::effect_state::EffectState;
 use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
 use crate::graph_delta::{evaluate_graph_delta, GraphDelta, GraphDeltaCommandResult};
+use crate::launch_grant::StoredLaunchGrantNonce;
 use crate::records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReadyRow, ReleaseRequest, StoredGraph,
@@ -40,6 +42,7 @@ pub struct MemoryLedger {
     effect_intents: BTreeMap<String, EffectIntentRecord>,
     effect_keys: BTreeMap<String, String>,
     effect_receipts: Vec<EffectReceiptRecord>,
+    launch_grant_nonces: BTreeMap<String, StoredLaunchGrantNonce>,
     fail_after_writes: Option<u32>,
     simulation_clock_millis: i64,
 }

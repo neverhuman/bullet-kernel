@@ -1,5 +1,6 @@
 //! Bullet Farm CLI.
 
+mod authority;
 mod contracts;
 #[path = "demo_live/mod.rs"]
 mod demo_synthetic;
@@ -38,6 +39,11 @@ enum Commands {
     Contracts {
         #[command(subcommand)]
         command: ContractsCommands,
+    },
+    /// Operator-held launch-grant authority: keygen and offline minting.
+    Authority {
+        #[command(subcommand)]
+        command: authority::AuthorityCommands,
     },
 }
 
@@ -114,6 +120,7 @@ fn run() -> Result<(), String> {
             ContractsCommands::Generate => contracts::generate(),
             ContractsCommands::Check => contracts::check(),
         },
+        Commands::Authority { command } => authority::run(command),
     }
 }
 

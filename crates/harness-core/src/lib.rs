@@ -11,6 +11,7 @@ pub mod conformance;
 pub mod error;
 pub mod event;
 pub mod ids;
+pub mod launch_grant;
 pub mod probe;
 pub mod proposal;
 pub mod session;
@@ -25,10 +26,11 @@ pub use adapter::{
     SteeringMessage, Turn, TurnHandle,
 };
 pub use admission::{
-    capability_digest, descriptor_digest, executable_digest, AdmissionBlocker, CanarySecrets,
-    ConformanceEvidence, CredentialGrant, CredentialReceipt, EvaluatedAdmission,
-    ProtocolRequirement, ProviderAdmission, ProviderAdmissionPolicy, ProviderConformanceReceipt,
-    ProviderProtocol, RuntimeProbeSnapshot,
+    capability_digest, descriptor_digest, environment_digest, executable_digest, AdmissionBlocker,
+    CanarySecrets, ConformanceEvidence, CredentialGrant, CredentialReceipt,
+    EgressIsolationEvidence, EgressIsolationRecord, EgressProbe, EgressProbeOutcome,
+    EvaluatedAdmission, ProtocolRequirement, ProviderAdmission, ProviderAdmissionPolicy,
+    ProviderConformanceReceipt, ProviderProtocol, RuntimeProbeSnapshot, SignedAuthorityRecord,
 };
 pub use argv::{filter_env, ArgvBuilder, InvocationBudget, PreparedInvocation};
 pub use capability::{Capability, CapabilityMatrix, CapabilityState, PromotionStage};
@@ -37,6 +39,11 @@ pub use event::{
     AgentEvent, AgentEventKind, AgentEventPayload, ArtifactRef, EventNormalizer, NativeMeta,
 };
 pub use ids::{synthetic_uuid, AgentSessionId, EventId, InvocationId};
+pub use launch_grant::{
+    verify_launch_grant, LaunchGrantClaims, LaunchGrantExpectation, LaunchGrantNonceLedger,
+    LaunchGrantSigningKey, LaunchGrantVerificationKey, LeaseBinding, MemoryNonceLedger,
+    NonceConsumption, PolicyBinding, ProviderBinding, SignedLaunchGrant, VerifiedLaunchGrant,
+};
 pub use probe::{ExpectedProfile, ProbeResult, ProfileIdentity, ProfileRef};
 pub use proposal::{ChangeOp, FileChange, PatchProposal};
 pub use session::SessionState;

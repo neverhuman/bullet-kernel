@@ -25,5 +25,8 @@ demo:
 audit:
     bash scripts/ci-local.sh audit
 
+egress:
+    bash scripts/ci-local.sh egress
+
 nightly:
     bash scripts/ci-local.sh nightly

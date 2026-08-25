@@ -148,6 +148,78 @@ pub enum HarnessError {
         /// Challenge description.
         reason: String,
     },
+    /// A launch grant, its envelope, key, or a policy key is malformed.
+    #[error("launch grant invalid: {reason}")]
+    LaunchGrantInvalid {
+        /// Non-secret refusal detail.
+        reason: String,
+    },
+    /// The verification instant is at or after the grant expiry.
+    #[error("launch grant expired at {expires_at_unix_ms}")]
+    LaunchGrantExpired {
+        /// Exclusive expiry instant.
+        expires_at_unix_ms: u64,
+    },
+    /// The verification instant precedes the grant validity start.
+    #[error("launch grant not valid before {not_before_unix_ms}")]
+    LaunchGrantNotYetValid {
+        /// Inclusive validity start.
+        not_before_unix_ms: u64,
+    },
+    /// The grant window exceeds the frozen 15 s maximum.
+    #[error("launch grant ttl {ttl_ms} ms exceeds the 15000 ms maximum")]
+    LaunchGrantTtlExceeded {
+        /// Claimed window length.
+        ttl_ms: u64,
+    },
+    /// No admitted policy key matches the grant issuer, key id, and audience.
+    #[error("launch grant key unknown: {issuer}/{key_id}: {reason}")]
+    LaunchGrantKeyUnknown {
+        /// Issuer label from the envelope.
+        issuer: String,
+        /// Key label from the envelope.
+        key_id: String,
+        /// Why the key is not admitted.
+        reason: String,
+    },
+    /// The grant names an audience other than `provider-runner`.
+    #[error("launch grant audience mismatch: {audience}")]
+    LaunchGrantAudienceMismatch {
+        /// Printable claimed audience.
+        audience: String,
+    },
+    /// One bound field differs from the durable lease, admission, or policy.
+    #[error("launch grant subject mismatch on {field}")]
+    LaunchGrantSubjectMismatch {
+        /// Name of the first mismatching field.
+        field: String,
+    },
+    /// The single-use grant nonce was already consumed.
+    #[error("launch grant {grant_id} replayed")]
+    LaunchGrantReplayed {
+        /// Replayed grant identifier.
+        grant_id: String,
+    },
+    /// No policy snapshot could be loaded.
+    #[error("policy unavailable: {reason}")]
+    PolicyUnavailable {
+        /// Where and why loading failed.
+        reason: String,
+    },
+    /// The policy snapshot is malformed or unsafe.
+    #[error("policy invalid: {reason}")]
+    PolicyInvalid {
+        /// Non-secret validation detail.
+        reason: String,
+    },
+    /// The loaded policy generation keeps live admission disabled.
+    #[error("policy generation {generation} keeps {field} = false; live admission refused")]
+    PolicyLiveAdmissionDisabled {
+        /// Loaded policy generation.
+        generation: u64,
+        /// Exact policy field that refuses live admission.
+        field: String,
+    },
 }
 
 impl HarnessError {
@@ -176,6 +248,17 @@ impl HarnessError {
             Self::Io { .. } => "IO_FAILED",
             Self::ProviderFailure { .. } => "PROVIDER_FAILURE",
             Self::AuthRequired { .. } => "AUTH_REQUIRED",
+            Self::LaunchGrantInvalid { .. } => "LAUNCH_GRANT_INVALID",
+            Self::LaunchGrantExpired { .. } => "LAUNCH_GRANT_EXPIRED",
+            Self::LaunchGrantNotYetValid { .. } => "LAUNCH_GRANT_NOT_YET_VALID",
+            Self::LaunchGrantTtlExceeded { .. } => "LAUNCH_GRANT_TTL_EXCEEDED",
+            Self::LaunchGrantKeyUnknown { .. } => "LAUNCH_GRANT_KEY_UNKNOWN",
+            Self::LaunchGrantAudienceMismatch { .. } => "LAUNCH_GRANT_AUDIENCE_MISMATCH",
+            Self::LaunchGrantSubjectMismatch { .. } => "LAUNCH_GRANT_SUBJECT_MISMATCH",
+            Self::LaunchGrantReplayed { .. } => "LAUNCH_GRANT_REPLAYED",
+            Self::PolicyUnavailable { .. } => "POLICY_UNAVAILABLE",
+            Self::PolicyInvalid { .. } => "POLICY_INVALID",
+            Self::PolicyLiveAdmissionDisabled { .. } => "POLICY_LIVE_ADMISSION_DISABLED",
         }
     }
 }
@@ -194,5 +277,11 @@ mod tests {
             token: "--worktree".into(),
         };
         assert_eq!(err.reason_code(), "WORKTREE_FLAG_DENIED");
+        let disabled = HarnessError::PolicyLiveAdmissionDisabled {
+            generation: 1,
+            field: "sandbox_policy.live_admission_enabled".into(),
+        };
+        assert_eq!(disabled.reason_code(), "POLICY_LIVE_ADMISSION_DISABLED");
+        assert!(disabled.to_string().contains("generation 1"));
     }
 }

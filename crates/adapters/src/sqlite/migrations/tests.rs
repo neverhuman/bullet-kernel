@@ -197,7 +197,7 @@ fn altered_name_and_checksum_are_refused() {
 fn partial_future_and_unrecognized_versions_are_refused() {
     for statement in [
         "DELETE FROM schema_version WHERE version = 9",
-        "INSERT INTO schema_version VALUES (10, 'future.sql', '00', 'future')",
+        "INSERT INTO schema_version VALUES (11, 'future.sql', '00', 'future')",
         "UPDATE schema_version SET version = 99 WHERE version = 9",
     ] {
         let (_directory, path) = database();

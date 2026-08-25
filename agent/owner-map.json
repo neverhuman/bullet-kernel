@@ -28,6 +28,7 @@
     "crates/harness-codex/": "harness",
     "crates/harness-cursor/": "harness",
     "crates/harness-antigravity/": "harness",
+    "crates/harness-egress/": "harness",
     "crates/runner/": "runner",
     "crates/verifier/": "verifier",
     "crates/effects/": "effects",

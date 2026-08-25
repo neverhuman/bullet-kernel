@@ -70,6 +70,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0009_effect_receipt_identity.sql",
         sql: include_str!("../../../../db/migrations/0009_effect_receipt_identity.sql"),
     },
+    Migration {
+        version: 10,
+        name: "0010_launch_grants.sql",
+        sql: include_str!("../../../../db/migrations/0010_launch_grants.sql"),
+    },
 ];
 
 #[derive(Debug, PartialEq, Eq)]

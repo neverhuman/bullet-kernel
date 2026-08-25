@@ -6,12 +6,16 @@ mod commands;
 mod effects;
 mod events;
 mod graph;
+mod launch_grants;
 mod lease_time;
 mod leases;
 mod materialization;
 mod migrations;
 mod outbox;
 
+use bullet_application::launch_grant::{
+    LaunchGrantNonceRecord, LaunchGrantNonceStore, NonceConsumption, StoredLaunchGrantNonce,
+};
 use bullet_application::{
     ActiveLease, ActiveLeaseSubject, CommandRecord, CommandRequest, EffectIntentRecord,
     EffectReceiptRecord, EffectState, ExpiredLease, GraphDelta, HeartbeatRequest, LeaseGrant,
@@ -405,6 +409,30 @@ impl Ledger for SqliteLedger {
 
     fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError> {
         effects::unresolved_effects(&self.conn)
+    }
+}
+
+impl LaunchGrantNonceStore for SqliteLedger {
+    fn record_launch_grant_nonce(
+        &mut self,
+        record: &LaunchGrantNonceRecord,
+    ) -> Result<(), LedgerError> {
+        launch_grants::record(&self.conn, record)
+    }
+
+    fn consume_launch_grant_nonce(
+        &mut self,
+        nonce: &str,
+        attempt_id: &AttemptId,
+    ) -> Result<NonceConsumption, LedgerError> {
+        launch_grants::consume(&mut self.conn, nonce, attempt_id)
+    }
+
+    fn get_launch_grant_nonce(
+        &self,
+        nonce: &str,
+    ) -> Result<Option<StoredLaunchGrantNonce>, LedgerError> {
+        launch_grants::get(&self.conn, nonce)
     }
 }
 
