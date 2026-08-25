@@ -6,6 +6,8 @@ use bullet_verifier_core::{execute, GateId, VerifierError, VerifierRequest};
 use clap::Parser;
 use std::io::Read;
 
+const MAX_STDIN_REQUEST_BYTES: usize = 64 * 1024;
+
 #[derive(Parser)]
 #[command(
     name = "bullet-verifier",
@@ -37,12 +39,18 @@ struct Args {
 
 fn request_from(args: Args) -> Result<VerifierRequest, VerifierError> {
     if args.stdin {
-        let mut raw = String::new();
-        std::io::stdin()
-            .read_to_string(&mut raw)
-            .map_err(|err| VerifierError::Io(format!("read stdin: {err}")))?;
-        return serde_json::from_str(&raw)
-            .map_err(|err| VerifierError::BadInput(format!("stdin json: {err}")));
+        if args.workspace_repo_path.is_some()
+            || args.base_sha.is_some()
+            || args.head_sha.is_some()
+            || args.tree_sha.is_some()
+            || args.gate_id.is_some()
+            || args.author_attempt_id.is_some()
+        {
+            return Err(VerifierError::BadInput(
+                "--stdin cannot be combined with request flags".into(),
+            ));
+        }
+        return request_from_reader(std::io::stdin().lock());
     }
     let missing = |name: &str| VerifierError::BadInput(format!("--{name} is required"));
     Ok(VerifierRequest {
@@ -56,6 +64,24 @@ fn request_from(args: Args) -> Result<VerifierRequest, VerifierError> {
         author_attempt_id: args
             .author_attempt_id
             .ok_or_else(|| missing("author-attempt-id"))?,
+    })
+}
+
+fn request_from_reader(reader: impl Read) -> Result<VerifierRequest, VerifierError> {
+    let limit = u64::try_from(MAX_STDIN_REQUEST_BYTES + 1).expect("request limit fits u64");
+    let mut raw = Vec::with_capacity(MAX_STDIN_REQUEST_BYTES.min(8 * 1024));
+    reader
+        .take(limit)
+        .read_to_end(&mut raw)
+        .map_err(|err| VerifierError::Io(format!("read stdin: {err}")))?;
+    if raw.len() > MAX_STDIN_REQUEST_BYTES {
+        return Err(VerifierError::BadInput(format!(
+            "stdin request exceeds {MAX_STDIN_REQUEST_BYTES}-byte limit"
+        )));
+    }
+
+    serde_json::from_slice(&raw).map_err(|err| {
+        VerifierError::BadInput(format!("stdin must contain one JSON request: {err}"))
     })
 }
 

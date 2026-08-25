@@ -50,9 +50,10 @@ fn fixture(dir: &Path) -> serde_json::Value {
     })
 }
 
-fn run_binary(request: &serde_json::Value, envs: &[(&str, &str)]) -> std::process::Output {
+fn run_binary_raw(raw: &[u8], extra_args: &[&str], envs: &[(&str, &str)]) -> std::process::Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_bullet-verifier"));
     cmd.arg("--stdin")
+        .args(extra_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -60,13 +61,31 @@ fn run_binary(request: &serde_json::Value, envs: &[(&str, &str)]) -> std::proces
         cmd.env(key, value);
     }
     let mut child = cmd.spawn().expect("spawn");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(request.to_string().as_bytes())
-        .expect("write");
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin.write_all(raw).expect("write");
+    drop(stdin);
     child.wait_with_output().expect("wait")
+}
+
+fn run_binary(request: &serde_json::Value, envs: &[(&str, &str)]) -> std::process::Output {
+    run_binary_raw(request.to_string().as_bytes(), &[], envs)
+}
+
+fn one_json_line(raw: &[u8]) -> serde_json::Value {
+    assert_eq!(raw.last(), Some(&b'\n'), "frame must end with one newline");
+    assert_eq!(
+        raw.iter().filter(|byte| **byte == b'\n').count(),
+        1,
+        "protocol stream must contain exactly one frame"
+    );
+    serde_json::from_slice(raw).expect("frame is json")
+}
+
+fn assert_bad_input(out: &std::process::Output) {
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty(), "refusal must not emit evidence");
+    let err = one_json_line(&out.stderr);
+    assert_eq!(err["reason_code"], "BAD_INPUT");
 }
 
 #[test]
@@ -79,8 +98,8 @@ fn stdin_round_trip_emits_typed_e2_record() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let record: serde_json::Value =
-        serde_json::from_slice(&out.stdout).expect("stdout is one JSON record");
+    assert!(out.stderr.is_empty(), "successful protocol run is quiet");
+    let record = one_json_line(&out.stdout);
     assert_eq!(record["tier"], "E2");
     assert_eq!(record["outcome"], "PASS");
     assert_eq!(record["produced_by"], "bullet-verifier");
@@ -100,7 +119,7 @@ fn author_overlap_env_refuses_with_typed_reason() {
     let request = fixture(dir.path());
     let out = run_binary(&request, &[("BULLET_VERIFIER_AUTHOR_OVERLAP", "1")]);
     assert_eq!(out.status.code(), Some(2));
-    let err: serde_json::Value = serde_json::from_slice(&out.stderr).expect("stderr json");
+    let err = one_json_line(&out.stderr);
     assert_eq!(err["reason_code"], "VERIFIER_IS_AUTHOR");
     assert!(out.stdout.is_empty(), "no evidence record on refusal");
 }
@@ -108,9 +127,44 @@ fn author_overlap_env_refuses_with_typed_reason() {
 #[test]
 fn malformed_stdin_is_bad_input() {
     let out = run_binary(&serde_json::json!({"nope": true}), &[]);
-    assert_eq!(out.status.code(), Some(2));
-    let err: serde_json::Value = serde_json::from_slice(&out.stderr).expect("stderr json");
-    assert_eq!(err["reason_code"], "BAD_INPUT");
+    assert_bad_input(&out);
+}
+
+#[test]
+fn stdin_size_limit_accepts_exact_boundary_and_refuses_one_byte_more() {
+    const LIMIT: usize = 64 * 1024;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut raw = fixture(dir.path()).to_string().into_bytes();
+    assert!(raw.len() < LIMIT);
+    raw.resize(LIMIT, b' ');
+
+    let accepted = run_binary_raw(&raw, &[], &[]);
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    one_json_line(&accepted.stdout);
+
+    raw.push(b' ');
+    assert_bad_input(&run_binary_raw(&raw, &[], &[]));
+}
+
+#[test]
+fn multiple_trailing_and_mixed_transport_are_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let request = fixture(dir.path()).to_string();
+
+    for raw in [format!("{request}{request}"), format!("{request} trailing")] {
+        assert_bad_input(&run_binary_raw(raw.as_bytes(), &[], &[]));
+    }
+
+    let mixed = run_binary_raw(
+        request.as_bytes(),
+        &["--base-sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        &[],
+    );
+    assert_bad_input(&mixed);
 }
 
 #[test]
