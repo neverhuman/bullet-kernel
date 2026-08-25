@@ -8,7 +8,7 @@ use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::sse::{Event as SseFrame, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use bullet_adapters::SqliteLedger;
 use bullet_application::{derive_receipt, Ledger, LedgerError, LedgerEvent, OutboxItem};
@@ -109,23 +109,25 @@ pub fn daemon(
     let router = Router::new()
         .route("/health", get(meta::health))
         .route("/openapi.yaml", get(meta::openapi))
-        .route("/v1/missions", get(list_missions))
-        .route("/v1/missions/{id}", get(get_mission))
-        .route("/v1/demo", get(get_demo))
-        .route("/v1/demo/run", post(removed_demo_mutation))
-        .route("/v1/auth/bootstrap", post(crate::auth::bootstrap))
-        .route("/v1/commands", post(commands::submit))
-        .route("/v1/commands/{id}", get(commands::get))
+        .route("/api/v1/missions", get(list_missions))
+        .route("/api/v1/missions/{id}", get(get_mission))
+        .route("/api/v1/demo", get(get_demo))
+        .route("/api/v1/demo/run", post(removed_demo_mutation))
+        .route("/api/v1/auth/bootstrap", post(crate::auth::bootstrap))
+        .route("/api/v1/commands", post(commands::submit))
+        .route("/api/v1/commands/{id}", get(commands::get))
         .route("/internal/v1/commands/{id}/reconcile", post(reconcile))
-        .route("/v1/outbox", get(outbox))
-        .route("/v1/events", get(events))
-        .route("/v1/ready", get(crate::leases::next_ready))
-        .route("/v1/fleet", get(projections::fleet))
-        .route("/v1/sessions", get(projections::sessions))
-        .route("/v1/context-lineage", get(projections::context_lineage))
-        .route("/v1/merge-rail", get(projections::merge_rail))
-        .route("/v1/quality-lab", get(projections::quality_lab))
-        .route("/v1/audit", get(projections::audit))
+        .route("/api/v1/outbox", get(outbox))
+        .route("/api/v1/events", get(events))
+        .route("/api/v1/ready", get(crate::leases::next_ready))
+        .route("/api/v1/fleet", get(projections::fleet))
+        .route("/api/v1/sessions", get(projections::sessions))
+        .route("/api/v1/context-lineage", get(projections::context_lineage))
+        .route("/api/v1/merge-rail", get(projections::merge_rail))
+        .route("/api/v1/quality-lab", get(projections::quality_lab))
+        .route("/api/v1/audit", get(projections::audit))
+        .route("/v1", any(retired_api_version))
+        .route("/v1/{*path}", any(retired_api_version))
         .merge(portal::router())
         .fallback(api_not_found)
         .with_state(Arc::clone(&state));
@@ -134,6 +136,15 @@ pub fn daemon(
 
 async fn api_not_found() -> ApiError {
     ApiError::NotFound("API route".into())
+}
+
+async fn retired_api_version() -> ApiError {
+    ApiError::protocol(
+        axum::http::StatusCode::GONE,
+        "API_VERSION_RETIRED",
+        "The legacy /v1 operator API is retired and performs no operation.",
+        "Repeat the request against /api/v1 after refreshing the current OpenAPI contract.",
+    )
 }
 
 async fn list_missions(State(state): State<SharedState>) -> Result<Response, ApiError> {
@@ -177,7 +188,7 @@ async fn removed_demo_mutation() -> ApiError {
         axum::http::StatusCode::GONE,
         "MUTATION_ENDPOINT_REMOVED",
         "Direct demo mutation was removed because transport success is not verification.",
-        "Submit an authenticated run_demo envelope to POST /v1/commands and reconcile its command id.",
+        "Submit an authenticated run_demo envelope to POST /api/v1/commands and reconcile its command id.",
     )
 }
 

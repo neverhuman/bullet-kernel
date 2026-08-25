@@ -77,10 +77,10 @@ A later command tool is permitted only after all of these land together:
    generated public command DTO;
 2. the Rust DTO/client is generated from `contracts/openapi.yaml`; the adapter
    does not copy private handler structs or construct authority claims;
-3. `POST /v1/commands` still returns `202 PENDING`; MCP transport success is
+3. `POST /api/v1/commands` still returns `202 PENDING`; MCP transport success is
    not application or verification success;
 4. loss of the submission response becomes `UNKNOWN`. The adapter reconciles
-   the exact command/idempotency key with `GET /v1/commands/{id}` and never
+   the exact command/idempotency key with `GET /api/v1/commands/{id}` and never
    automatically submits a second write;
 5. only durable `VERIFIED` may be rendered as verified. `PENDING`, `APPLIED`,
    `FAILED`, and `UNKNOWN` remain distinct;

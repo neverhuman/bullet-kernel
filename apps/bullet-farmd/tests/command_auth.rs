@@ -100,7 +100,7 @@ async fn bootstrap(server: &TestServer) -> (String, String) {
     let response = request(
         server,
         "POST",
-        "/v1/auth/bootstrap",
+        "/api/v1/auth/bootstrap",
         &[("Origin", ORIGIN)],
         Some(&json!({"bootstrap_token": BOOTSTRAP})),
     )
@@ -139,7 +139,7 @@ async fn bootstrap_is_strict_one_time_and_never_enables_wildcard_cors() {
     let missing = request(
         &server,
         "POST",
-        "/v1/auth/bootstrap",
+        "/api/v1/auth/bootstrap",
         &[("Origin", ORIGIN)],
         Some(&json!({})),
     )
@@ -149,7 +149,7 @@ async fn bootstrap_is_strict_one_time_and_never_enables_wildcard_cors() {
     let wrong = request(
         &server,
         "POST",
-        "/v1/auth/bootstrap",
+        "/api/v1/auth/bootstrap",
         &[("Origin", ORIGIN)],
         Some(&json!({
             "bootstrap_token":
@@ -163,7 +163,7 @@ async fn bootstrap_is_strict_one_time_and_never_enables_wildcard_cors() {
     let replay = request(
         &server,
         "POST",
-        "/v1/auth/bootstrap",
+        "/api/v1/auth/bootstrap",
         &[("Origin", ORIGIN)],
         Some(&json!({"bootstrap_token": BOOTSTRAP})),
     )
@@ -206,7 +206,7 @@ async fn origin_cookie_and_csrf_each_fail_closed_before_command_mutation() {
         ),
     ];
     for (headers, status, code) in cases {
-        let response = request(&server, "POST", "/v1/commands", headers, Some(&command)).await;
+        let response = request(&server, "POST", "/api/v1/commands", headers, Some(&command)).await;
         assert_eq!(response.status, *status, "{code}");
         assert_eq!(response.body["code"], *code);
         assert_eq!(response.body["status"], *status);
@@ -217,6 +217,9 @@ async fn origin_cookie_and_csrf_each_fail_closed_before_command_mutation() {
             Some("application/problem+json")
         );
     }
+    let retired = request(&server, "POST", "/v1/commands", &[], Some(&command)).await;
+    assert_eq!(retired.status, 410);
+    assert_eq!(retired.body["code"], "API_VERSION_RETIRED");
     let count: i64 = Connection::open(&server.db)
         .expect("open")
         .query_row("SELECT COUNT(*) FROM commands", [], |row| row.get(0))
@@ -236,18 +239,32 @@ async fn command_submission_replay_and_raw_phase_writes_fail_closed() {
         "kind": "run_demo",
         "payload": {"requested": true}
     });
-    let first = request(&server, "POST", "/v1/commands", &headers, Some(&command)).await;
+    let first = request(
+        &server,
+        "POST",
+        "/api/v1/commands",
+        &headers,
+        Some(&command),
+    )
+    .await;
     assert_eq!(first.status, 202, "{}", first.text);
     assert_eq!(first.body["status"], "PENDING");
     assert_eq!(first.body["result"], Value::Null);
     let command_id = first.body["id"].as_str().expect("id");
-    let replay = request(&server, "POST", "/v1/commands", &headers, Some(&command)).await;
+    let replay = request(
+        &server,
+        "POST",
+        "/api/v1/commands",
+        &headers,
+        Some(&command),
+    )
+    .await;
     assert_eq!(replay.status, 202);
     assert_eq!(replay.body, first.body);
     let conflict = request(
         &server,
         "POST",
-        "/v1/commands",
+        "/api/v1/commands",
         &headers,
         Some(&json!({
             "idempotency_key": "run-once",
@@ -283,7 +300,7 @@ async fn command_submission_replay_and_raw_phase_writes_fail_closed() {
         let status = request(
             &server,
             "GET",
-            &format!("/v1/commands/{command_id}"),
+            &format!("/api/v1/commands/{command_id}"),
             &[("Cookie", &cookie)],
             None,
         )
@@ -302,7 +319,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let unknown_field = request(
         &server,
         "POST",
-        "/v1/commands",
+        "/api/v1/commands",
         &headers,
         Some(&json!({
             "idempotency_key":"strict",
@@ -317,7 +334,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let missing_session = request(
         &server,
         "GET",
-        &format!("/v1/commands/cmd_{}", "0".repeat(64)),
+        &format!("/api/v1/commands/cmd_{}", "0".repeat(64)),
         &[],
         None,
     )
@@ -327,7 +344,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let missing = request(
         &server,
         "GET",
-        &format!("/v1/commands/cmd_{}", "0".repeat(64)),
+        &format!("/api/v1/commands/cmd_{}", "0".repeat(64)),
         &[("Cookie", &cookie)],
         None,
     )
@@ -337,7 +354,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let legacy = request(
         &server,
         "GET",
-        &format!("/v1/commands/cmd_{}", "0".repeat(32)),
+        &format!("/api/v1/commands/cmd_{}", "0".repeat(32)),
         &[("Cookie", &cookie)],
         None,
     )
@@ -348,7 +365,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let admitted = request(
         &server,
         "POST",
-        "/v1/commands",
+        "/api/v1/commands",
         &headers,
         Some(&json!({"idempotency_key":"strict","kind":"run_demo","payload":{}})),
     )
@@ -366,7 +383,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let missing_event = request(
         &server,
         "GET",
-        &format!("/v1/commands/{admitted_id}"),
+        &format!("/api/v1/commands/{admitted_id}"),
         &[("Cookie", &cookie)],
         None,
     )
@@ -377,7 +394,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let outbox_command = request(
         &server,
         "POST",
-        "/v1/commands",
+        "/api/v1/commands",
         &headers,
         Some(&json!({
             "idempotency_key":"strict-outbox",
@@ -397,7 +414,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let corrupt = request(
         &server,
         "GET",
-        &format!("/v1/commands/{outbox_command_id}"),
+        &format!("/api/v1/commands/{outbox_command_id}"),
         &[("Cookie", &cookie)],
         None,
     )
@@ -463,7 +480,7 @@ async fn only_independent_worker_authority_can_reconcile_and_replay() {
     let admitted = request(
         &server,
         "POST",
-        "/v1/commands",
+        "/api/v1/commands",
         &command_headers(&cookie, &csrf),
         Some(&json!({"idempotency_key":"worker-http","kind":"run_demo","payload":{}})),
     )
@@ -497,7 +514,7 @@ async fn only_independent_worker_authority_can_reconcile_and_replay() {
     let pending = request(
         &server,
         "GET",
-        &format!("/v1/commands/{id}"),
+        &format!("/api/v1/commands/{id}"),
         &[("Cookie", &cookie)],
         None,
     )
@@ -521,7 +538,7 @@ async fn only_independent_worker_authority_can_reconcile_and_replay() {
     let projected = request(
         &server,
         "GET",
-        &format!("/v1/commands/{id}"),
+        &format!("/api/v1/commands/{id}"),
         &[("Cookie", &cookie)],
         None,
     )

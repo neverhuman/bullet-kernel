@@ -22,7 +22,7 @@ paths:
       responses:
         "200":
           description: OpenAPI document
-  /v1/missions:
+  /api/v1/missions:
     get:
       summary: List missions
       responses:
@@ -45,7 +45,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/missions/{id}:
+  /api/v1/missions/{id}:
     get:
       summary: Mission graph projection
       parameters:
@@ -80,7 +80,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/demo:
+  /api/v1/demo:
     get:
       summary: Demo receipt re-derived from ledger rows, or null before a run
       responses:
@@ -97,7 +97,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DemoSnapshot"
-  /v1/demo/run:
+  /api/v1/demo/run:
     post:
       deprecated: true
       summary: Removed direct mutation endpoint
@@ -108,7 +108,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/auth/bootstrap:
+  /api/v1/auth/bootstrap:
     post:
       summary: Exchange the one-time local CLI token for a browser session
       parameters:
@@ -151,7 +151,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/commands:
+  /api/v1/commands:
     post:
       summary: Durably admit a command as pending
       description: >
@@ -202,7 +202,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/commands/{id}:
+  /api/v1/commands/{id}:
     get:
       summary: Reconcile one durable command
       security:
@@ -238,7 +238,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/outbox:
+  /api/v1/outbox:
     get:
       summary: Outbox rows with real delivery phases
       responses:
@@ -255,7 +255,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OutboxSnapshot"
-  /v1/events:
+  /api/v1/events:
     get:
       summary: Server-sent event stream of ledger events
       description: >
@@ -294,7 +294,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/ready:
+  /api/v1/ready:
     get:
       summary: The next ready work package
       responses:
@@ -311,7 +311,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReadySnapshot"
-  /v1/fleet:
+  /api/v1/fleet:
     get:
       summary: Fleet projection (spec 25.5) of active lease rows and the ready queue
       description: >
@@ -338,7 +338,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/sessions:
+  /api/v1/sessions:
     get:
       summary: Session Supervisor projection (spec 25.7) of attempt rows by state
       description: >
@@ -365,7 +365,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/context-lineage:
+  /api/v1/context-lineage:
     get:
       summary: Context Lineage projection (spec 25.8) of immutable initial capsules
       description: >
@@ -392,7 +392,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/merge-rail:
+  /api/v1/merge-rail:
     get:
       summary: Merge Rail projection (spec 25.13) of Candidates, effect intents, and receipts
       description: >
@@ -418,7 +418,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/quality-lab:
+  /api/v1/quality-lab:
     get:
       summary: Quality Lab projection (spec 25.14) of evidence rows with typed outcomes
       description: >
@@ -444,12 +444,12 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/audit:
+  /api/v1/audit:
     get:
       summary: Incidents and Audit projection (spec 25.15) of the bounded durable event tail
       description: >
         One atomic ledger read of the newest events up to tail_window, each
-        passing the same envelope integrity check as /v1/events. A gap or a
+        passing the same envelope integrity check as /api/v1/events. A gap or a
         corrupt row inside the tail is a store failure, never a shorter list.
       responses:
         "200":

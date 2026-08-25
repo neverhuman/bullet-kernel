@@ -144,17 +144,24 @@ async fn health_missions_and_demo_are_null_safe_on_empty_db() {
     let (status, body) = request(addr, "GET", "/health").await;
     assert_eq!(status, 200);
     assert_eq!(json_body(&body)["status"], "ok");
-    let (status, body) = request(addr, "GET", "/v1/missions").await;
+    for legacy in ["/v1", "/v1/missions"] {
+        let (status, body) = request(addr, "GET", legacy).await;
+        assert_eq!(status, 410, "{legacy}");
+        let problem = json_body(&body);
+        assert_eq!(problem["code"], "API_VERSION_RETIRED");
+        assert_eq!(problem["retryable"], false);
+    }
+    let (status, body) = request(addr, "GET", "/api/v1/missions").await;
     assert_eq!(status, 200);
     assert_eq!(snapshot_data(&body), Value::Array(vec![]));
-    let (status, body) = request(addr, "GET", "/v1/demo").await;
+    let (status, body) = request(addr, "GET", "/api/v1/demo").await;
     assert_eq!(status, 200);
     assert_eq!(
         snapshot_data(&body),
         Value::Null,
         "no fabricated receipt before a run"
     );
-    let (status, body) = request(addr, "GET", "/v1/outbox").await;
+    let (status, body) = request(addr, "GET", "/api/v1/outbox").await;
     assert_eq!(status, 200);
     assert_eq!(snapshot_data(&body)["items"], Value::Array(vec![]));
 }
@@ -165,26 +172,26 @@ async fn demo_projection_uses_durable_rows_and_direct_mutation_is_gone() {
     let db = dir.path().join("ledger.sqlite");
     let receipt = seed_demo(&db);
     let addr = start(&db).await;
-    let (status, body) = request(addr, "POST", "/v1/demo/run").await;
+    let (status, body) = request(addr, "POST", "/api/v1/demo/run").await;
     assert_eq!(status, 410);
     assert_eq!(json_body(&body)["code"], "MUTATION_ENDPOINT_REMOVED");
     assert_eq!(receipt["fence_first"], 1);
     assert_eq!(receipt["fence_second"], 2);
     assert_eq!(receipt["stale_refused"], true);
     assert_eq!(receipt["effect_unknown_outcome"], "unknown");
-    let (status, body) = request(addr, "GET", "/v1/demo").await;
+    let (status, body) = request(addr, "GET", "/api/v1/demo").await;
     assert_eq!(status, 200);
     assert_eq!(snapshot_data(&body)["fence_second"], 2);
     let mission_id = receipt["mission_id"]
         .as_str()
         .expect("mission id")
         .to_string();
-    let (status, body) = request(addr, "GET", &format!("/v1/missions/{mission_id}")).await;
+    let (status, body) = request(addr, "GET", &format!("/api/v1/missions/{mission_id}")).await;
     assert_eq!(status, 200);
     let view = snapshot_data(&body);
     assert_eq!(view["mission"]["id"], receipt["mission_id"]);
     assert_eq!(view["fence"], 2);
-    let (status, body) = request(addr, "GET", "/v1/outbox").await;
+    let (status, body) = request(addr, "GET", "/api/v1/outbox").await;
     assert_eq!(status, 200);
     let outbox = snapshot_data(&body);
     let items = outbox["items"].as_array().expect("items");
@@ -202,7 +209,7 @@ async fn events_sse_streams_the_first_chunk_with_sequence_ids() {
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     stream
         .write_all(
-            b"GET /v1/events?after=0 HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n",
+            b"GET /api/v1/events?after=0 HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n",
         )
         .await
         .expect("write");
@@ -247,23 +254,28 @@ async fn event_cursors_are_exclusive_and_last_event_id_resumes_after_the_cursor(
     seed_demo(&db);
     let addr = start(&db).await;
 
-    let conflict =
-        raw_request_with_headers(addr, "GET", "/v1/events?after=1", "Last-Event-ID: 1\r\n").await;
+    let conflict = raw_request_with_headers(
+        addr,
+        "GET",
+        "/api/v1/events?after=1",
+        "Last-Event-ID: 1\r\n",
+    )
+    .await;
     assert!(conflict.starts_with("HTTP/1.1 400"));
     assert!(conflict.contains("CONFLICTING_CURSOR"));
 
-    let malformed = raw_request(addr, "GET", "/v1/events?after=not-a-sequence").await;
+    let malformed = raw_request(addr, "GET", "/api/v1/events?after=not-a-sequence").await;
     assert!(malformed.starts_with("HTTP/1.1 400"));
     assert!(malformed.contains("INVALID_CURSOR"));
 
-    for path in ["/v1/events?after=1&after=2", "/v1/events?cursor=1"] {
+    for path in ["/api/v1/events?after=1&after=2", "/api/v1/events?cursor=1"] {
         let rejected = raw_request(addr, "GET", path).await;
         assert!(rejected.starts_with("HTTP/1.1 400"), "{path}");
     }
     let duplicate_header = raw_request_with_headers(
         addr,
         "GET",
-        "/v1/events",
+        "/api/v1/events",
         "Last-Event-ID: 1\r\nLast-Event-ID: 2\r\n",
     )
     .await;
@@ -273,7 +285,7 @@ async fn event_cursors_are_exclusive_and_last_event_id_resumes_after_the_cursor(
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     stream
         .write_all(
-            b"GET /v1/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\nLast-Event-ID: 1\r\n\r\n",
+            b"GET /api/v1/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\nLast-Event-ID: 1\r\n\r\n",
         )
         .await
         .expect("write");
@@ -299,7 +311,7 @@ async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
     let db = dir.path().join("ledger.sqlite");
     let addr = start(&db).await;
 
-    for path in ["/v1/missions", "/v1/outbox"] {
+    for path in ["/api/v1/missions", "/api/v1/outbox"] {
         let response = raw_request(addr, "GET", path).await;
         assert_eq!(
             response_header(&response, "x-bullet-as-of-sequence").as_deref(),
@@ -308,8 +320,8 @@ async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
     }
 
     seed_demo(&db);
-    let missions = raw_request(addr, "GET", "/v1/missions").await;
-    let outbox = raw_request(addr, "GET", "/v1/outbox").await;
+    let missions = raw_request(addr, "GET", "/api/v1/missions").await;
+    let outbox = raw_request(addr, "GET", "/api/v1/outbox").await;
     let mission_sequence = response_header(&missions, "x-bullet-as-of-sequence")
         .expect("mission watermark")
         .parse::<u64>()
@@ -328,7 +340,10 @@ async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
     assert_eq!(mission_snapshot["as_of_sequence"], mission_sequence);
     let mission_rows = snapshot_data(mission_body);
     let mission_id = mission_rows[0]["id"].as_str().expect("mission id");
-    for path in [format!("/v1/missions/{mission_id}"), "/v1/ready".into()] {
+    for path in [
+        format!("/api/v1/missions/{mission_id}"),
+        "/api/v1/ready".into(),
+    ] {
         let response = raw_request(addr, "GET", &path).await;
         assert_eq!(
             response_header(&response, "x-bullet-as-of-sequence")
@@ -356,7 +371,7 @@ async fn missing_durable_stale_refusal_makes_demo_projection_unknown() {
             [],
         )
         .expect("remove proof");
-    let (status, body) = request(addr, "GET", "/v1/demo").await;
+    let (status, body) = request(addr, "GET", "/api/v1/demo").await;
     assert_eq!(status, 200);
     assert_eq!(snapshot_data(&body), Value::Null);
 }
@@ -386,7 +401,7 @@ async fn unavailable_and_corrupt_replays_fail_before_sse_200() {
             .expect("raw open")
             .execute(mutation, [])
             .expect("hostile mutation");
-        let response = raw_request(addr, "GET", &format!("/v1/events?after={after}")).await;
+        let response = raw_request(addr, "GET", &format!("/api/v1/events?after={after}")).await;
         assert!(
             response.starts_with(&format!("HTTP/1.1 {expected}")),
             "{name}: {response}"
@@ -405,19 +420,19 @@ async fn unavailable_and_corrupt_replays_fail_before_sse_200() {
         .expect("raw open")
         .execute("DELETE FROM events WHERE seq = 70", [])
         .expect("late gap");
-    let response = raw_request(start(&late_gap).await, "GET", "/v1/events?after=0").await;
+    let response = raw_request(start(&late_gap).await, "GET", "/api/v1/events?after=0").await;
     assert!(response.starts_with("HTTP/1.1 410"));
     assert!(!response.contains("text/event-stream"));
 
     let db = dir.path().join("bounded.sqlite");
     insert_events(&db, 1_025);
-    let response = raw_request(start(&db).await, "GET", "/v1/events?after=0").await;
+    let response = raw_request(start(&db).await, "GET", "/api/v1/events?after=0").await;
     assert!(response.starts_with("HTTP/1.1 410"));
 
     let future = raw_request(
         start(&dir.path().join("empty.sqlite")).await,
         "GET",
-        "/v1/events?after=1",
+        "/api/v1/events?after=1",
     )
     .await;
     assert!(future.starts_with("HTTP/1.1 410"));
@@ -429,7 +444,7 @@ async fn problem_details_cover_400_404_and_500() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = dir.path().join("ledger.sqlite");
     let addr = start(&db).await;
-    let invalid = raw_request(addr, "GET", "/v1/missions/not-an-id").await;
+    let invalid = raw_request(addr, "GET", "/api/v1/missions/not-an-id").await;
     assert!(invalid.starts_with("HTTP/1.1 400"));
     assert_eq!(
         response_header(&invalid, "content-type").as_deref(),
@@ -454,12 +469,12 @@ async fn problem_details_cover_400_404_and_500() {
             "{field}"
         );
     }
-    let legacy = format!("/v1/missions/mis_{}", "0".repeat(32));
+    let legacy = format!("/api/v1/missions/mis_{}", "0".repeat(32));
     let (status, body) = request(addr, "GET", &legacy).await;
     assert_eq!(status, 400);
     assert_eq!(json_body(&body)["code"], "INVALID_ID");
 
-    let missing = format!("/v1/missions/mis_{}", "0".repeat(64));
+    let missing = format!("/api/v1/missions/mis_{}", "0".repeat(64));
     let (status, body) = request(addr, "GET", &missing).await;
     assert_eq!(status, 404);
     let problem = json_body(&body);
@@ -473,7 +488,7 @@ async fn problem_details_cover_400_404_and_500() {
         [],
     )
     .expect("corrupt row");
-    let (status, body) = request(addr, "GET", "/v1/missions").await;
+    let (status, body) = request(addr, "GET", "/api/v1/missions").await;
     assert_eq!(status, 500);
     let problem = json_body(&body);
     assert_eq!(problem["code"], "STORE_FAILURE");

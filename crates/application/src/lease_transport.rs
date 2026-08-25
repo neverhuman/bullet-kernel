@@ -1,6 +1,6 @@
 //! Kernel-owned signed lease-transport service.
 //!
-//! Public farmd `/v1/leases/*` routes stay absent. The operator-held
+//! Public farmd `/api/v1/leases/*` routes stay absent. The operator-held
 //! signing key never leaves farmd. A Runner may present an unsigned
 //! request; Kernel validates durable package truth, reserves a nonce,
 //! signs, then a separate gateway verifies that permit and applies the

@@ -1,11 +1,11 @@
 # `bullet` CLI reference
 
-Status: committed surface at HEAD `ca380bc`
+Status: committed surface at HEAD `c797d51`
 Owner: Bullet Farm maintainers
 Last reviewed: 2026-08-25
 Source of truth: `apps/bullet/src/{main,authority,provider,maintenance,contracts}.rs`,
 `apps/bullet/src/authority/mint.rs`
-<!-- bullet-doc-review:v1 subject=ca380bc4ffd44909fc2644589fdedc81c44f5d28 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs -->
+<!-- bullet-doc-review:v1 subject=c797d51d75f80eb167f6ac5eb094755aca577688 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs -->
 
 Every command is offline except `provider live-conformance`, which can spawn a
 provider only after the policy, key, lease, admission, grant, and egress steps
@@ -147,6 +147,6 @@ the receipt fields are listed in
 | Binary | Flags | Notes |
 | --- | --- | --- |
 | `bullet-farmd` | `--data-dir` (default `./target/demo`), `--bind` (default `127.0.0.1:7420`; non-loopback refused), `--portal-origin <exact loopback origin>`, `--worker-token-file <protected file>` | routes in [`README.md`](../README.md#farmd-routes); the internal reconciler is inert without the worker token |
-| `bullet-runner` | `--provider sim` (only value), `--farmd <base URL>` | constructs `HttpLeaseClient` against lease routes farmd does not serve; see the defect note in `architecture.md` |
+| `bullet-runner` | legacy arguments remain parseable | returns typed `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, filesystem, provider, or gitd activity; no product lease transport is admitted |
 | `bullet-verifier` | `--stdin` job JSON | refuses the writer identity |
 | `bullet-effects` | — | drives `LocalBareForge` through loss and reconciliation |

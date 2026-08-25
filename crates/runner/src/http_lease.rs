@@ -1,4 +1,4 @@
-//! `HttpLeaseClient`: the leftover unsigned client for farmd `/v1/leases/*`.
+//! `HttpLeaseClient`: the leftover unsigned client for farmd `/api/v1/leases/*`.
 //! Those routes are not mounted (farmd returns `NOT_FOUND`). Do not remount
 //! this client as admission. The signed replacement is
 //! `bullet_application::lease_transport::SignedLeaseService`.
@@ -87,7 +87,7 @@ impl LeaseClient for HttpLeaseClient {
             "idempotency_key": request.idempotency_key,
             "ttl_seconds": request.ttl_seconds,
         });
-        let (status, value) = self.http.post("/v1/leases/acquire", &body).await?;
+        let (status, value) = self.http.post("/api/v1/leases/acquire", &body).await?;
         if status != 200 {
             return Err(problem_error(status, &value));
         }
@@ -97,7 +97,7 @@ impl LeaseClient for HttpLeaseClient {
     async fn heartbeat(&self, call: &HeartbeatCall) -> Result<(), RunnerError> {
         let body = serde_json::to_value(call)
             .map_err(|err| RunnerError::Protocol(format!("encode heartbeat: {err}")))?;
-        let (status, value) = self.http.post("/v1/leases/heartbeat", &body).await?;
+        let (status, value) = self.http.post("/api/v1/leases/heartbeat", &body).await?;
         if status == 204 {
             return Ok(());
         }
@@ -110,7 +110,7 @@ impl LeaseClient for HttpLeaseClient {
         state: AttemptState,
     ) -> Result<(), RunnerError> {
         let body = json!({ "attempt_id": attempt_id.as_str(), "state": state.as_str() });
-        let (status, value) = self.http.post("/v1/attempts/advance", &body).await?;
+        let (status, value) = self.http.post("/api/v1/attempts/advance", &body).await?;
         if status == 204 {
             return Ok(());
         }
@@ -123,7 +123,7 @@ impl LeaseClient for HttpLeaseClient {
             "outcome": call.outcome.as_str(),
             "requeue": call.requeue,
         });
-        let (status, value) = self.http.post("/v1/leases/release", &body).await?;
+        let (status, value) = self.http.post("/api/v1/leases/release", &body).await?;
         if status == 204 {
             return Ok(());
         }
@@ -131,7 +131,7 @@ impl LeaseClient for HttpLeaseClient {
     }
 
     async fn next_ready(&self) -> Result<Option<ReadyView>, RunnerError> {
-        let (status, value) = self.http.get("/v1/ready").await?;
+        let (status, value) = self.http.get("/api/v1/ready").await?;
         match status {
             200 => decode_snapshot(value, "ready snapshot"),
             _ => Err(problem_error(status, &value)),

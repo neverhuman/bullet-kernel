@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use supervisor::Supervisor;
 
+const LEASE_TRANSPORT_ADMISSION_UNAVAILABLE: &str = "LEASE_TRANSPORT_ADMISSION_UNAVAILABLE";
+const LEASE_TRANSPORT_REPAIR: &str = "product Runner dispatch requires an authenticated, descriptor-bound, durable lease transport; the HTTP and Unix component clients are not admission";
+
 #[derive(Parser)]
 #[command(name = "bullet-runner", about = "Bullet Farm attempt runner")]
 struct Args {
@@ -127,6 +130,26 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> ExitCode {
+    // Keep the quarantined attempt path compiler-checked without making it reachable from the
+    // product CLI. Re-enable only after the lease transport has mutual process authentication,
+    // durable request/result reconciliation, and restart-safe read-back.
+    let _preserved_adapter = adapter_for;
+    let _preserved_runner_id_parser = parse_runner_id;
+    let _preserved_attempt_path = run_quarantined;
+    let _ = args;
+    let (code, message) = lease_transport_refusal();
+    eprintln!("bullet-runner: {code}: {message}");
+    ExitCode::from(2)
+}
+
+fn lease_transport_refusal() -> (&'static str, &'static str) {
+    (
+        LEASE_TRANSPORT_ADMISSION_UNAVAILABLE,
+        LEASE_TRANSPORT_REPAIR,
+    )
+}
+
+async fn run_quarantined(args: Args) -> ExitCode {
     let runner_id = match parse_runner_id(&args.runner_id) {
         Ok(runner_id) => runner_id,
         Err(error) => {
@@ -230,16 +253,54 @@ async fn execute(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_runner_id;
+    use super::{lease_transport_refusal, parse_runner_id, run, Args};
     use bullet_domain::RunnerId;
+    use std::process::ExitCode;
 
-    #[test]
-    fn runner_identity_is_exact_and_never_derived_from_malformed_text() {
+    #[tokio::test]
+    async fn runner_identity_is_exact_and_never_derived_from_malformed_text() {
         let expected = RunnerId::from_seed("admitted-runner");
         assert_eq!(parse_runner_id(expected.as_str()).unwrap(), expected);
 
         for invalid in ["", "admitted-runner", "run_short", "run_not-hex"] {
             assert!(parse_runner_id(invalid).is_err(), "{invalid:?} must refuse");
         }
+
+        let (code, message) = lease_transport_refusal();
+        assert_eq!(code, "LEASE_TRANSPORT_ADMISSION_UNAVAILABLE");
+        assert!(message.contains("authenticated"));
+        assert!(message.contains("descriptor-bound"));
+        assert!(message.contains("durable"));
+
+        let root = std::env::temp_dir().join(format!(
+            "bullet-runner-refusal-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        assert!(!root.exists(), "test subject must begin absent");
+        let workspace = root.join("must-not-create-workspace");
+        let journal = root.join("must-not-create-journal");
+        let status = run(Args {
+            farmd: "not-a-url".into(),
+            runner_id: "not-a-runner".into(),
+            runner_epoch: 0,
+            provider: "not-a-provider".into(),
+            workspace_root: workspace.clone(),
+            source_repo: root.join("missing-source"),
+            base_sha: "not-an-oid".into(),
+            objective: "must not dispatch".into(),
+            gate_ids: vec!["not-a-gate".into()],
+            scope: vec![".".into()],
+            data_dir: journal.clone(),
+            idempotency_key: None,
+            ttl_seconds: 0,
+        })
+        .await;
+        assert_eq!(status, ExitCode::from(2));
+        assert!(!workspace.exists(), "workspace must remain absent");
+        assert!(!journal.exists(), "supervisor journal must remain absent");
     }
 }

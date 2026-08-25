@@ -1,7 +1,9 @@
 //! Farmd-internal Unix JSON-RPC for Kernel-minted lease transport.
 //!
-//! Not a public `/v1` route. The operator signing key stays in this process.
-//! The Runner authenticates by Unix peer credentials and a hello binding.
+//! Not a public `/api/v1` route. The operator signing key stays in this process.
+//! The current owner-only socket checks a self-asserted hello binding but does
+//! not yet bind it to `SO_PEERCRED`; product Runner admission therefore stays
+//! disabled.
 
 use crate::api::SharedState;
 use bullet_application::lease_transport::{

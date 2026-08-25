@@ -29,7 +29,7 @@ struct Args {
     /// lease waits at most one tick before it is reclaimed.
     #[arg(long, default_value_t = ReapInterval::policy_default())]
     reap_interval_ms: ReapInterval,
-    /// Optional Unix socket for Kernel-minted lease transport. Not `/v1`.
+    /// Optional Unix socket for Kernel-minted lease transport. Not `/api/v1`.
     #[arg(long)]
     lease_transport_socket: Option<PathBuf>,
 }
@@ -92,7 +92,7 @@ async fn main() -> ExitCode {
         }
     };
     println!("Bullet Farm one-time bootstrap: {bootstrap}");
-    println!("Exchange at: {origin}/v1/auth/bootstrap");
+    println!("Exchange at: {origin}/api/v1/auth/bootstrap");
     if worker_token.is_some() {
         tracing::info!("authenticated internal command reconciler enabled");
     }

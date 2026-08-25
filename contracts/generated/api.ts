@@ -1484,4 +1484,4 @@ export const PUBLIC_API_RUNTIME_REFS = {
   SessionSupervisorView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/SessionSupervisorView",
 } as const;
 
-export const API_PREFIX = "/v1";
+export const API_PREFIX = "/api/v1";

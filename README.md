@@ -1,9 +1,9 @@
 # bullet-kernel
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
-Product-surface claims were last reviewed 2026-08-25 against `ca380bc`; the CI
+Product-surface claims were last reviewed 2026-08-25 against `c797d51`; the CI
 lane and test-inventory section was reviewed against product subject `107c5cd`.
-<!-- bullet-doc-review:v1 subject=ca380bc4ffd44909fc2644589fdedc81c44f5d28 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,crates/runner/src/lib.rs,crates/verifier/src/lib.rs -->
+<!-- bullet-doc-review:v1 subject=c797d51d75f80eb167f6ac5eb094755aca577688 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,crates/runner/src/lib.rs,crates/verifier/src/lib.rs -->
 Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.
@@ -19,7 +19,7 @@ Evidence classes follow
 | `crates/harness-core`, `crates/harness-sim` | adapter trait, provider admission with two evidence-cleared blockers (`admission/`), PASETO v4.public launch-grant verifier (`launch_grant/`), lease-transport permit contract (`lease_transport.rs`), live-turn dispatch ports (`live/`), checkpoint-bound `PatchProposal` (`proposal.rs`), event envelope, argv/supervision gate, deterministic simulator |
 | `crates/harness-egress` | Linux user+net namespace, `slirp4netns` uplink, in-namespace nftables default-drop, host CONNECT proxy, sealed `EgressReceipt`; see [`docs/egress-isolation.md`](docs/egress-isolation.md) |
 | `crates/harness-{claude,codex,cursor,antigravity}` | fail-closed provider contract crates with bounded offline transcript/result subsets and one `LiveDispatcher` each |
-| `crates/runner` | attempt loop, scope check, heartbeat self-fence, proposal-to-checkpoint binding, `bullet-gitd` supervision; its `HttpLeaseClient` targets lease routes farmd does not serve (see [`docs/architecture.md`](docs/architecture.md#runner--farmd-lease-route-defect)) |
+| `crates/runner` | component-testable attempt loop; the product CLI refuses before dispatch because no workload lease transport is admitted (see [`docs/architecture.md`](docs/architecture.md#runner--farmd-lease-admission-refusal)) |
 | `crates/verifier` | clean-room reconstruction and typed gate outcomes |
 | `crates/effects` | effect broker and state machine over `LocalBareForge`; the Jeryu adapter is a typed quarantine |
 | `crates/router`, `fusion`, `behavior`, `projections` | non-authoritative scaffolds: routing fallback, fusion, behaviour catalog, spec §25 `View`/`Surface` types; the served §25 projections live in `apps/bullet-farmd/src/projections/` |
@@ -27,7 +27,7 @@ Evidence classes follow
 | `apps/bullet-farmd` | loopback-only HTTP + SSE daemon; routes in the table below |
 | `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
 | `apps/bullet` | CLI: `farm init\|backup\|restore`, `demo`, `demo-synthetic`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`; every flag is in [`docs/cli.md`](docs/cli.md) |
-| `apps/bullet-runner` | attempt runner process; accepts only the `sim` provider and constructs `HttpLeaseClient` |
+| `apps/bullet-runner` | fail-closed attempt runner; returns `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, filesystem, provider, or gitd activity |
 | `apps/bullet-verifier` | verifier process boundary; refuses the writer identity, reads its job as `--stdin` JSON |
 | `apps/bullet-effects` | effect broker process boundary; drives `LocalBareForge` through loss and reconciliation |
 
@@ -43,24 +43,24 @@ generated client against that YAML.
 | --- | --- | --- | --- |
 | GET | `/health` | yes | liveness `{"status":"ok"}` |
 | GET | `/openapi.yaml` | yes | the embedded contract bytes |
-| GET | `/v1/missions` | yes | mission list snapshot |
-| GET | `/v1/missions/{id}` | yes | one mission; `X-Bullet-As-Of-Sequence` watermark |
-| GET | `/v1/demo` | yes | demo receipt re-derived from ledger rows |
-| POST | `/v1/demo/run` | yes | `410 MUTATION_ENDPOINT_REMOVED`; submit a `run_demo` command instead |
-| POST | `/v1/auth/bootstrap` | yes | one-time local-browser session bootstrap (600 s token, 8 h session, CSRF header) |
-| POST | `/v1/commands` | yes | authenticated command submission; records `PENDING` |
-| GET | `/v1/commands/{id}` | yes | command status |
+| GET | `/api/v1/missions` | yes | mission list snapshot |
+| GET | `/api/v1/missions/{id}` | yes | one mission; `X-Bullet-As-Of-Sequence` watermark |
+| GET | `/api/v1/demo` | yes | demo receipt re-derived from ledger rows |
+| POST | `/api/v1/demo/run` | yes | `410 MUTATION_ENDPOINT_REMOVED`; submit a `run_demo` command instead |
+| POST | `/api/v1/auth/bootstrap` | yes | one-time local-browser session bootstrap (600 s token, 8 h session, CSRF header) |
+| POST | `/api/v1/commands` | yes | authenticated command submission; records `PENDING` |
+| GET | `/api/v1/commands/{id}` | yes | command status |
 | POST | `/internal/v1/commands/{id}/reconcile` | no | worker-bearer reconciler; inert without `--worker-token-file`; settles `UNKNOWN` or `FAILED` only |
-| GET | `/v1/outbox` | yes | outbox snapshot |
-| GET | `/v1/events` | yes | SSE ledger events with bounded replay (64 per batch, 1024 max) |
-| GET | `/v1/ready` | yes | next ready work package; `X-Bullet-As-Of-Sequence` watermark |
-| GET | `/v1/fleet` | yes | §25 projection; one atomic ledger snapshot |
-| GET | `/v1/sessions` | yes | §25 projection; one atomic ledger snapshot |
-| GET | `/v1/merge-rail` | yes | §25 projection; one atomic ledger snapshot |
-| GET | `/v1/quality-lab` | yes | §25 projection; one atomic ledger snapshot |
-| GET | `/v1/audit` | yes | §25 projection; one atomic ledger snapshot |
+| GET | `/api/v1/outbox` | yes | outbox snapshot |
+| GET | `/api/v1/events` | yes | SSE ledger events with bounded replay (64 per batch, 1024 max) |
+| GET | `/api/v1/ready` | yes | next ready work package; `X-Bullet-As-Of-Sequence` watermark |
+| GET | `/api/v1/fleet` | yes | §25 projection; one atomic ledger snapshot |
+| GET | `/api/v1/sessions` | yes | §25 projection; one atomic ledger snapshot |
+| GET | `/api/v1/merge-rail` | yes | §25 projection; one atomic ledger snapshot |
+| GET | `/api/v1/quality-lab` | yes | §25 projection; one atomic ledger snapshot |
+| GET | `/api/v1/audit` | yes | §25 projection; one atomic ledger snapshot |
 
-No `/v1/leases/*` or `/v1/attempts/advance` route is mounted. Runner mutation
+No `/api/v1/leases/*` or `/api/v1/attempts/advance` route is mounted. Runner mutation
 RPC stays off the browser API until a signed lease transport is exposed; the
 committed `SignedLeaseService` is in-process only.
 
@@ -144,7 +144,7 @@ receipts. See [CI and test inventory](docs/testing.md).
 | Launch-grant authority | Offline operator keygen and mint from the durable lease; the verifier binds lease, admission, policy, and a single-use nonce; a constant authority epoch and zero freeze generation until durable counters exist |
 | Egress isolation | Linux-only namespace/nftables/CONNECT-proxy boundary with a sealed receipt; `just egress` on a capable host, else neutral 78 |
 | farmd projections | Five read-only §25 routes, each one atomic ledger snapshot with a sequence watermark; consumed by the Portal; never authority |
-| Runner ↔ farmd leases | Defect: `HttpLeaseClient` posts to routes farmd does not mount; `SignedLeaseService` exists in-process with a process-local acquire index and no production transport |
+| Runner ↔ farmd leases | Refused: product CLI does not construct the dormant unsigned `HttpLeaseClient`; the experimental UDS transport lacks `SO_PEERCRED` identity binding and is not admitted |
 | Exact five-plane transaction | Not implemented or proven |
 | Production | Not eligible; operator-ratified live policy, signed lease transport, durable authority epoch and budgets, online BulletGit authority, freeze, and restore admission are incomplete |
 

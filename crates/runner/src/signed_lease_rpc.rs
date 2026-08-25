@@ -1,7 +1,9 @@
 //! Production Runner client for Kernel-minted Unix lease transport.
 //!
-//! The client never holds `LeaseTransportSigningKey`. Farmd authenticates
-//! the process by peer credentials and mints the permit itself.
+//! The client never holds `LeaseTransportSigningKey`. The current server uses
+//! an owner-only socket and a self-asserted hello identity; it does not yet
+//! authenticate the process with `SO_PEERCRED`, so this client is not exposed
+//! by the product Runner CLI.
 
 use crate::error::RunnerError;
 use crate::lease::{

@@ -163,7 +163,7 @@ async fn same_origin_serving_does_not_weaken_bootstrap_origin_or_session_rules()
     let foreign = raw_json(
         addr,
         "POST",
-        "/v1/auth/bootstrap",
+        "/api/v1/auth/bootstrap",
         "Origin: http://127.0.0.1:5999\r\n",
         &exchange,
     )
@@ -171,13 +171,13 @@ async fn same_origin_serving_does_not_weaken_bootstrap_origin_or_session_rules()
     assert!(foreign.starts_with("HTTP/1.1 403"), "{foreign}");
     assert_eq!(json(&foreign)["code"], "ORIGIN_DENIED");
 
-    let originless = raw_json(addr, "POST", "/v1/auth/bootstrap", "", &exchange).await;
+    let originless = raw_json(addr, "POST", "/api/v1/auth/bootstrap", "", &exchange).await;
     assert_eq!(json(&originless)["code"], "ORIGIN_REQUIRED");
 
     let unauthenticated = raw(
         addr,
         "POST",
-        "/v1/commands",
+        "/api/v1/commands",
         &format!("Origin: {origin}\r\n"),
     )
     .await;

@@ -97,11 +97,11 @@ impl LoopbackFarmd {
     pub async fn read_mission(&self, mission_id: &str) -> Result<Value, ClientError> {
         let id = MissionId::parse(mission_id)
             .map_err(|error| ClientError::InvalidInput(format!("invalid mission id: {error}")))?;
-        self.get(&format!("/v1/missions/{id}")).await
+        self.get(&format!("/api/v1/missions/{id}")).await
     }
 
     async fn get(&self, path: &str) -> Result<Value, ClientError> {
-        debug_assert!(path.starts_with("/v1/"));
+        debug_assert!(path.starts_with("/api/v1/"));
         let raw = tokio::time::timeout(REQUEST_TIMEOUT, async {
             let mut stream = tokio::time::timeout(
                 CONNECT_TIMEOUT,
@@ -175,13 +175,13 @@ pub enum ProjectionRoute {
 impl ProjectionRoute {
     fn path(self) -> &'static str {
         match self {
-            Self::Missions => "/v1/missions",
-            Self::Fleet => "/v1/fleet",
-            Self::Sessions => "/v1/sessions",
-            Self::ContextLineage => "/v1/context-lineage",
-            Self::MergeRail => "/v1/merge-rail",
-            Self::QualityLab => "/v1/quality-lab",
-            Self::Audit => "/v1/audit",
+            Self::Missions => "/api/v1/missions",
+            Self::Fleet => "/api/v1/fleet",
+            Self::Sessions => "/api/v1/sessions",
+            Self::ContextLineage => "/api/v1/context-lineage",
+            Self::MergeRail => "/api/v1/merge-rail",
+            Self::QualityLab => "/api/v1/quality-lab",
+            Self::Audit => "/api/v1/audit",
         }
     }
 }
@@ -384,7 +384,7 @@ mod tests {
             "http://localhost:7420",
             "http://0.0.0.0:7420",
             "http://127.0.0.1:0",
-            "http://127.0.0.1:7420/v1",
+            "http://127.0.0.1:7420/api/v1",
             "http://user@127.0.0.1:7420",
         ] {
             assert!(LoopbackFarmd::new(denied).is_err(), "{denied}");

@@ -75,7 +75,7 @@ async fn ready_is_a_read_only_watermarked_projection() {
     let directory = tempfile::tempdir().expect("tempdir");
     let db = directory.path().join("ready.sqlite");
     let package = seed_graph(&db);
-    let (status, response) = request(start(&db).await, "GET", "/v1/ready").await;
+    let (status, response) = request(start(&db).await, "GET", "/api/v1/ready").await;
     assert_eq!(status, 200);
     let snapshot = json_body(&response);
     assert_eq!(snapshot.as_object().expect("snapshot").len(), 4);
@@ -91,10 +91,10 @@ async fn runner_mutations_are_not_mounted_on_the_public_router() {
     let package = seed_graph(&db);
     let addr = start(&db).await;
     for path in [
-        "/v1/leases/acquire",
-        "/v1/leases/heartbeat",
-        "/v1/leases/release",
-        "/v1/attempts/advance",
+        "/api/v1/leases/acquire",
+        "/api/v1/leases/heartbeat",
+        "/api/v1/leases/release",
+        "/api/v1/attempts/advance",
     ] {
         let (status, response) = request(addr, "POST", path).await;
         assert_eq!(status, 404, "{path}");

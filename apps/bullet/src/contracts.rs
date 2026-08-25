@@ -107,7 +107,7 @@ fn render() -> Result<String, String> {
             .map_err(|err| err.to_string())?;
     }
     out.push_str("} as const;\n\n");
-    out.push_str("export const API_PREFIX = \"/v1\";\n");
+    out.push_str("export const API_PREFIX = \"/api/v1\";\n");
     Ok(out)
 }
 

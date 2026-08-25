@@ -1,4 +1,4 @@
-//! Kernel-minted Unix lease transport. Public `/v1/leases/*` stay absent.
+//! Kernel-minted Unix lease transport. Public `/api/v1/leases/*` stay absent.
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::lease_transport::{KernelLeaseTransport, SignedAcquireBody};
@@ -100,7 +100,7 @@ async fn public_http_has_no_lease_routes() {
     let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     stream
-        .write_all(b"POST /v1/leases/acquire HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+        .write_all(b"POST /api/v1/leases/acquire HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
         .await
         .expect("write");
     let mut bytes = Vec::new();

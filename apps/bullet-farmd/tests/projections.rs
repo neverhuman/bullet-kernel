@@ -15,12 +15,12 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{timeout, Duration};
 
 const ROUTES: [&str; 6] = [
-    "/v1/fleet",
-    "/v1/sessions",
-    "/v1/context-lineage",
-    "/v1/merge-rail",
-    "/v1/quality-lab",
-    "/v1/audit",
+    "/api/v1/fleet",
+    "/api/v1/sessions",
+    "/api/v1/context-lineage",
+    "/api/v1/merge-rail",
+    "/api/v1/quality-lab",
+    "/api/v1/audit",
 ];
 
 async fn start(db: &Path) -> SocketAddr {
@@ -137,14 +137,14 @@ fn insert_events(db: &Path, count: u64) {
 async fn empty_database_projects_zero_rows_at_watermark_zero_on_every_route() {
     let dir = tempfile::tempdir().expect("tempdir");
     let addr = start(&dir.path().join("ledger.sqlite")).await;
-    let (fleet, as_of) = snapshot(addr, "/v1/fleet").await;
+    let (fleet, as_of) = snapshot(addr, "/api/v1/fleet").await;
     assert_eq!(as_of, 0);
     assert_eq!(fleet["leases"], Value::Array(vec![]));
     assert_eq!(fleet["ready_queue"], Value::Array(vec![]));
     chrono::DateTime::parse_from_rfc3339(fleet["authority_time"].as_str().expect("clock"))
         .expect("store clock is RFC 3339");
 
-    let (sessions, as_of) = snapshot(addr, "/v1/sessions").await;
+    let (sessions, as_of) = snapshot(addr, "/api/v1/sessions").await;
     assert_eq!(as_of, 0);
     assert_eq!(sessions["attempts"], Value::Array(vec![]));
     let states = labels(&sessions["state_counts"]);
@@ -152,11 +152,11 @@ async fn empty_database_projects_zero_rows_at_watermark_zero_on_every_route() {
     assert!(states.iter().all(|(_, count)| *count == 0));
     assert!(states.iter().any(|(label, _)| label == "crashed"));
 
-    let (context, as_of) = snapshot(addr, "/v1/context-lineage").await;
+    let (context, as_of) = snapshot(addr, "/api/v1/context-lineage").await;
     assert_eq!(as_of, 0);
     assert_eq!(context["capsules"], Value::Array(vec![]));
 
-    let (rail, as_of) = snapshot(addr, "/v1/merge-rail").await;
+    let (rail, as_of) = snapshot(addr, "/api/v1/merge-rail").await;
     assert_eq!(as_of, 0);
     for field in ["candidates", "effects", "intents", "receipts"] {
         assert_eq!(rail[field], Value::Array(vec![]), "{field}");
@@ -167,14 +167,14 @@ async fn empty_database_projects_zero_rows_at_watermark_zero_on_every_route() {
         .iter()
         .any(|(label, count)| label == "OUTCOME_UNKNOWN" && *count == 0));
 
-    let (lab, as_of) = snapshot(addr, "/v1/quality-lab").await;
+    let (lab, as_of) = snapshot(addr, "/api/v1/quality-lab").await;
     assert_eq!(as_of, 0);
     assert_eq!(lab["evidence"], Value::Array(vec![]));
     let outcomes = labels(&lab["outcome_counts"]);
     assert_eq!(outcomes.len(), 11);
     assert!(outcomes.iter().any(|(label, _)| label == "UNKNOWN"));
 
-    let (audit, as_of) = snapshot(addr, "/v1/audit").await;
+    let (audit, as_of) = snapshot(addr, "/api/v1/audit").await;
     assert_eq!(as_of, 0);
     assert_eq!(audit["latest_sequence"], 0);
     assert_eq!(audit["tail_window"], 64);
@@ -197,7 +197,7 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
     assert!(watermarks[0] > 0);
     assert!(watermarks.iter().all(|w| *w == watermarks[0]));
 
-    let (rail, _) = snapshot(addr, "/v1/merge-rail").await;
+    let (rail, _) = snapshot(addr, "/api/v1/merge-rail").await;
     let candidates = rail["candidates"].as_array().expect("candidates");
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0]["head_sha"], receipt["candidate_head"]);
@@ -215,7 +215,7 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
     assert_eq!(outcomes, ["unknown", "verified"]);
     assert_eq!(rail["intents"], Value::Array(vec![]));
 
-    let (lab, _) = snapshot(addr, "/v1/quality-lab").await;
+    let (lab, _) = snapshot(addr, "/api/v1/quality-lab").await;
     let evidence = lab["evidence"].as_array().expect("evidence");
     assert_eq!(evidence.len(), 1);
     assert_eq!(evidence[0]["result"], receipt["evidence_result"]);
@@ -225,7 +225,7 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
         Value::Bool(receipt["evidence_result"] == "PASS")
     );
 
-    let (sessions, _) = snapshot(addr, "/v1/sessions").await;
+    let (sessions, _) = snapshot(addr, "/api/v1/sessions").await;
     let attempts = sessions["attempts"].as_array().expect("attempts");
     assert!(attempts.len() >= 2);
     assert!(attempts.iter().all(|row| row["lease"] == "none"));
@@ -239,7 +239,7 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
         .sum();
     assert_eq!(total, attempts.len() as u64);
 
-    let (context, _) = snapshot(addr, "/v1/context-lineage").await;
+    let (context, _) = snapshot(addr, "/api/v1/context-lineage").await;
     let capsules = context["capsules"].as_array().expect("context capsules");
     assert_eq!(capsules.len(), 2);
     for capsule in capsules {
@@ -250,7 +250,7 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
         assert_eq!(capsule["content_digest"].as_str().map(str::len), Some(64));
     }
 
-    let (audit, as_of) = snapshot(addr, "/v1/audit").await;
+    let (audit, as_of) = snapshot(addr, "/api/v1/audit").await;
     let events = audit["events"].as_array().expect("events");
     assert_eq!(audit["latest_sequence"], as_of);
     assert_eq!(
@@ -285,7 +285,7 @@ async fn fleet_and_sessions_project_a_live_lease_from_the_database_clock() {
         (graph, attempt)
     };
     let addr = start(&db).await;
-    let (fleet, _) = snapshot(addr, "/v1/fleet").await;
+    let (fleet, _) = snapshot(addr, "/api/v1/fleet").await;
     let leases = fleet["leases"].as_array().expect("leases");
     assert_eq!(leases.len(), 1);
     assert_eq!(leases[0]["attempt_id"], attempt.id.to_string());
@@ -295,7 +295,7 @@ async fn fleet_and_sessions_project_a_live_lease_from_the_database_clock() {
     assert_eq!(leases[0]["mission_id"], graph.mission.id.to_string());
     assert_eq!(fleet["ready_queue"], Value::Array(vec![]));
 
-    let (sessions, _) = snapshot(addr, "/v1/sessions").await;
+    let (sessions, _) = snapshot(addr, "/api/v1/sessions").await;
     let rows = sessions["attempts"].as_array().expect("attempts");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["lease"], "held");
@@ -318,10 +318,10 @@ async fn corrupt_rows_are_typed_500_problems_not_shorter_lists() {
         params!["a".repeat(64)],
     )
     .expect("corrupt context capsule");
-    let response = raw_get(addr, "/v1/context-lineage").await;
+    let response = raw_get(addr, "/api/v1/context-lineage").await;
     assert_eq!(status_of(&response), 500);
     assert_eq!(body_json(&response)["code"], "STORE_FAILURE");
-    let response = raw_get(addr, "/v1/quality-lab").await;
+    let response = raw_get(addr, "/api/v1/quality-lab").await;
     assert_eq!(status_of(&response), 200, "unrelated routes stay readable");
 
     raw.execute(
@@ -329,17 +329,17 @@ async fn corrupt_rows_are_typed_500_problems_not_shorter_lists() {
         [],
     )
     .expect("corrupt candidate");
-    let response = raw_get(addr, "/v1/merge-rail").await;
+    let response = raw_get(addr, "/api/v1/merge-rail").await;
     assert_eq!(status_of(&response), 500);
     assert_eq!(body_json(&response)["code"], "STORE_FAILURE");
     assert!(!response.contains("expected value"), "parser detail leaked");
 
     raw.execute("UPDATE events SET event_id = 'bad' WHERE seq = 1", [])
         .expect("corrupt event");
-    let response = raw_get(addr, "/v1/audit").await;
+    let response = raw_get(addr, "/api/v1/audit").await;
     assert_eq!(status_of(&response), 500);
     assert_eq!(body_json(&response)["code"], "STORE_FAILURE");
-    let response = raw_get(addr, "/v1/quality-lab").await;
+    let response = raw_get(addr, "/api/v1/quality-lab").await;
     assert_eq!(status_of(&response), 200, "unrelated routes stay readable");
 }
 
@@ -349,7 +349,7 @@ async fn audit_tail_is_bounded_to_the_newest_sixty_four_events() {
     let db = dir.path().join("ledger.sqlite");
     insert_events(&db, 100);
     let addr = start(&db).await;
-    let (audit, as_of) = snapshot(addr, "/v1/audit").await;
+    let (audit, as_of) = snapshot(addr, "/api/v1/audit").await;
     assert_eq!(as_of, 100);
     assert_eq!(audit["latest_sequence"], 100);
     let events = audit["events"].as_array().expect("events");
@@ -360,7 +360,7 @@ async fn audit_tail_is_bounded_to_the_newest_sixty_four_events() {
         .expect("raw")
         .execute("DELETE FROM events WHERE seq = 70", [])
         .expect("gap");
-    let response = raw_get(addr, "/v1/audit").await;
+    let response = raw_get(addr, "/api/v1/audit").await;
     assert_eq!(
         status_of(&response),
         500,

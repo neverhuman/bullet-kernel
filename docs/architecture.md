@@ -1,9 +1,9 @@
 # Kernel architecture
 
-Last reviewed: 2026-08-25 against HEAD `ca380bc`. Every claim names the code
+Last reviewed: 2026-08-25 against HEAD `c797d51`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
-<!-- bullet-doc-review:v1 subject=ca380bc4ffd44909fc2644589fdedc81c44f5d28 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs -->
+<!-- bullet-doc-review:v1 subject=c797d51d75f80eb167f6ac5eb094755aca577688 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs -->
 
 ## Ledger core
 
@@ -50,7 +50,7 @@ its restore epoch.
 
 `apps/bullet-farmd` is the loopback-only HTTP + SSE edge (`--bind` refuses a
 non-loopback address). Errors are typed problem details with stable reason
-codes; `/v1/missions/{id}`, `/v1/ready`, and the five projections carry an
+codes; `/api/v1/missions/{id}`, `/api/v1/ready`, and the five projections carry an
 `X-Bullet-As-Of-Sequence` watermark. The exact mounted route set is the table
 in [`README.md`](../README.md#farmd-routes); the router fallback answers
 `NOT_FOUND`. `contracts/openapi.yaml` is the contract source of truth for every
@@ -70,8 +70,8 @@ corruption failures remain retryable `500 STORE_FAILURE`.
 
 Source: `apps/bullet-farmd/src/projections/{mod,fleet,sessions,merge_rail,quality_lab,audit}.rs`.
 
-`/v1/fleet`, `/v1/sessions`, `/v1/merge-rail`, `/v1/quality-lab`, and
-`/v1/audit` are read-only spec §25 surfaces. Each route performs exactly one
+`/api/v1/fleet`, `/api/v1/sessions`, `/api/v1/merge-rail`, `/api/v1/quality-lab`, and
+`/api/v1/audit` are read-only spec §25 surfaces. Each route performs exactly one
 atomic ledger snapshot (`read_snapshot`) and returns the standard envelope with
 its `as_of_sequence`, so a response never mixes two ledger states. Label
 tallies are `LabelCount` rows built by `count_labels` against a complete
@@ -324,18 +324,14 @@ There is no admitted live provider dispatch, online-authorized BulletGit
 mutation, or connected runner -> BulletGit -> independent verifier -> effect
 transaction, so none supplies production Evidence or integration truth.
 
-## Runner ↔ farmd lease-route defect
+## Runner ↔ farmd lease admission refusal
 
-At HEAD `ca380bc`, `crates/runner/src/http_lease.rs` (`HttpLeaseClient`,
-constructed by `apps/bullet-runner/src/main.rs` from `--farmd`) still POSTs
-`/v1/leases/acquire`, `/v1/leases/heartbeat`, `/v1/leases/release`, and
-`/v1/attempts/advance`. `apps/bullet-farmd/src/api.rs` mounts none of them;
-only `GET /v1/ready` exists, and `apps/bullet-farmd/src/leases.rs` states that
-runner mutation RPC stays off the public browser API until a separate
-authenticated transport is implemented. A `bullet-runner` pointed at farmd
-therefore reads the ready snapshot and then fails every acquire with the
-router's `NOT_FOUND` problem detail. The client's own module comment now
-records this and forbids remounting it as admission.
+`apps/bullet-runner/src/main.rs` returns typed
+`LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before it contacts farmd or touches the
+filesystem, provider, or gitd. The dormant unsigned `HttpLeaseClient` uses the
+operator `/api/v1` prefix, but its lease and advance routes are deliberately not
+mounted and the product CLI never constructs it. This prevents a retired `/v1`
+response or a public browser route from being mistaken for workload authority.
 
 The committed predecessor (`419d8a6`, V1-S4) is a quarantined signed
 lease-transport contract: `crates/harness-core/src/lease_transport.rs`
@@ -350,9 +346,12 @@ after a restart is `UNKNOWN`), its nonce ledger is in-memory, permit issuance
 exists only under `test-seams` (`issue_permit`), and `crates/runner/src/
 signed_lease.rs` (`SignedLeaseClient`, `test-seams` only) co-locates the
 signing key with the verifier, which makes it a simulator, never an admission
-path. `DirectLeaseClient` remains unsigned and test/embedded-only. No public
-`/v1/leases` route is remounted, no production permit issuer or transport
-exists, and this closes no five-plane gate.
+path. `DirectLeaseClient` remains unsigned and test/embedded-only. A newer
+internal UDS prototype keeps the signing key in farmd and persists grant/nonces,
+but its owner-only socket still accepts a self-asserted hello without
+`SO_PEERCRED`, its client state is process-local, and it is not exposed by
+`bullet-runner`. No public `/api/v1/leases` route is remounted, no production
+workload transport is admitted, and this closes no five-plane gate.
 
 ## Scaffolds
 

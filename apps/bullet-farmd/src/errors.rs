@@ -117,6 +117,7 @@ fn title_for(code: &str) -> &'static str {
         "WORKER_AUTHORITY_REQUIRED" => "Worker authority required",
         "WORKER_AUTHORITY_INVALID" => "Invalid worker authority",
         "MUTATION_ENDPOINT_REMOVED" => "Mutation endpoint removed",
+        "API_VERSION_RETIRED" => "API version retired",
         _ => "Request failed",
     }
 }

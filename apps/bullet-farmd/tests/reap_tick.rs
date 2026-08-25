@@ -2,7 +2,7 @@
 //! effect. These tests prove it reclaims a dead incarnation exactly once even
 //! while an acquirer contends for the same lease, never touches a live one, is
 //! silent when nothing is due, reports itself on `/health` only additively, and
-//! that `/v1/fleet` drops the lease it reclaimed.
+//! that `/api/v1/fleet` drops the lease it reclaimed.
 //!
 //! Raw SQL places an exact expired window without sleeping, exactly as the
 //! adapter's own `lease_reaper.rs` already does.
@@ -375,7 +375,8 @@ async fn fleet_drops_the_lease_the_tick_reclaimed_and_shows_the_work_ready() {
         bullet_farmd::api::daemon(&path, None, LOCAL_ORIGIN.to_string(), None).expect("daemon");
     let addr = serve(app).await;
 
-    let before: Value = serde_json::from_str(&get(addr, "/v1/fleet").await).expect("fleet json");
+    let before: Value =
+        serde_json::from_str(&get(addr, "/api/v1/fleet").await).expect("fleet json");
     let leases = before["data"]["leases"].as_array().expect("leases");
     assert_eq!(leases.len(), 1, "the dead holder row is still there");
     assert_eq!(leases[0]["liveness"], "expired");
@@ -391,7 +392,7 @@ async fn fleet_drops_the_lease_the_tick_reclaimed_and_shows_the_work_ready() {
 
     assert_eq!(reaper::run_once(&state).await.expect("tick").len(), 1);
 
-    let after: Value = serde_json::from_str(&get(addr, "/v1/fleet").await).expect("fleet json");
+    let after: Value = serde_json::from_str(&get(addr, "/api/v1/fleet").await).expect("fleet json");
     assert!(
         after["data"]["leases"]
             .as_array()
