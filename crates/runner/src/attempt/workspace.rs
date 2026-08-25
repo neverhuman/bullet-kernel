@@ -1,9 +1,12 @@
 //! Private workspace port; production has exactly one implementation.
 
 use crate::error::RunnerError;
-use crate::gitd::{ApplyProposalReceipt, CandidateReceipt, GitdSession};
+use crate::gitd::{
+    ApplyProposalReceipt, CandidateReceipt, CheckpointBinding, GitdSession,
+    PrepareCandidateRequest, PreservationReceipt,
+};
 use bullet_harness_core::PatchProposal;
-use serde_json::Value;
+use std::path::Path;
 
 #[async_trait::async_trait]
 pub(super) trait WorkspaceSession: Send {
@@ -12,13 +15,14 @@ pub(super) trait WorkspaceSession: Send {
         proposal: &PatchProposal,
     ) -> Result<ApplyProposalReceipt, RunnerError>;
 
-    async fn checkpoint(&mut self) -> Result<Value, RunnerError>;
+    async fn checkpoint(&mut self) -> Result<CheckpointBinding, RunnerError>;
 
     async fn prepare_candidate(
         &mut self,
-        change_seed: &str,
-        mission: &str,
+        request: &PrepareCandidateRequest,
     ) -> Result<CandidateReceipt, RunnerError>;
+
+    async fn preserve(&mut self, destination: &Path) -> Result<PreservationReceipt, RunnerError>;
 }
 
 #[async_trait::async_trait]
@@ -30,15 +34,18 @@ impl WorkspaceSession for GitdSession {
         GitdSession::apply_proposal(self, proposal).await
     }
 
-    async fn checkpoint(&mut self) -> Result<Value, RunnerError> {
+    async fn checkpoint(&mut self) -> Result<CheckpointBinding, RunnerError> {
         GitdSession::checkpoint(self).await
     }
 
     async fn prepare_candidate(
         &mut self,
-        change_seed: &str,
-        mission: &str,
+        request: &PrepareCandidateRequest,
     ) -> Result<CandidateReceipt, RunnerError> {
-        GitdSession::prepare_candidate(self, change_seed, mission).await
+        GitdSession::prepare_candidate(self, request).await
+    }
+
+    async fn preserve(&mut self, destination: &Path) -> Result<PreservationReceipt, RunnerError> {
+        GitdSession::preserve(self, destination).await
     }
 }

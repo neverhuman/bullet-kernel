@@ -25,7 +25,9 @@ pub use clock::{Clock, ManualClock, MonotonicClock, SelfKillDeadline};
 pub use error::RunnerError;
 pub use gate::{run_gate, GateRegistry, GateReport, REPOSITORY_GATE_ID};
 pub use gitd::{
-    gitd_available, gitd_binary, gitd_fixture_binary, CandidateReceipt, GitdSession, WorkspaceInfo,
+    gitd_available, gitd_binary, gitd_fixture_binary, CandidateBindings,
+    CandidateProvenanceRequest, CandidateReceipt, ChangeRequest, GitdSession,
+    PrepareCandidateRequest, PreservationReceipt, SuccessorResume, WorkspaceInfo,
 };
 pub use heartbeat::{start_heartbeat, FreezeReason, HeartbeatConfig, HeartbeatHandle};
 pub use http::HttpJson;

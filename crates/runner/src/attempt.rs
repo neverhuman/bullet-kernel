@@ -11,7 +11,10 @@ use crate::capsule::Capsule;
 use crate::clock::Clock;
 use crate::error::RunnerError;
 use crate::gate::{run_gate, GateRegistry, GateReport};
-use crate::gitd::{CandidateReceipt, GitdSession, WorkspaceInfo};
+use crate::gitd::{
+    CandidateBindings, CandidateReceipt, CheckpointBinding, GitdSession, PrepareCandidateRequest,
+    SuccessorResume, WorkspaceInfo,
+};
 use crate::heartbeat::{start_heartbeat, HeartbeatConfig, HeartbeatHandle};
 use crate::journal::JournalSink;
 use crate::lease::{AcquireGrant, AcquireRequest, HeartbeatCall, LeaseClient, ReleaseCall};
@@ -49,6 +52,8 @@ pub struct AttemptConfig {
     pub turn_timeout: Duration,
     /// Heartbeat cadence and lease TTL.
     pub heartbeat: HeartbeatConfig,
+    /// Subjects the grant does not carry in gitd wire shape.
+    pub bindings: CandidateBindings,
 }
 
 impl AttemptConfig {
@@ -72,6 +77,7 @@ impl AttemptConfig {
             max_repair_rounds: 2,
             turn_timeout: Duration::from_secs(600),
             heartbeat: HeartbeatConfig::default(),
+            bindings: CandidateBindings::default(),
         }
     }
 
@@ -223,6 +229,7 @@ async fn run_cloned_attempt(
                 adapter.as_ref(),
                 gitd,
                 grant,
+                config,
                 journal.as_ref(),
                 &session,
                 &err,
@@ -274,9 +281,18 @@ async fn drive_and_finish(
     client
         .advance(&grant.attempt.id, AttemptState::Preparing)
         .await?;
-    let candidate = gitd
-        .prepare_candidate(grant.attempt.id.as_str(), &capsule.objective)
-        .await?;
+    let checkpoint = CheckpointBinding {
+        id: capsule.base_checkpoint_id.clone(),
+        digest: capsule.base_checkpoint_digest.clone(),
+    };
+    let request = PrepareCandidateRequest::from_grant(
+        grant,
+        ws,
+        &checkpoint,
+        &config.scope_prefixes,
+        &config.bindings,
+    )?;
+    let candidate = gitd.prepare_candidate(&request).await?;
     journal.record("candidate_prepared", &candidate.id);
     client
         .release(&ReleaseCall {
@@ -467,19 +483,63 @@ async fn latest_proposal(
     PatchProposal::from_value(&value).map_err(RunnerError::from)
 }
 
+async fn salvage_workspace(
+    gitd: &mut dyn WorkspaceSession,
+    grant: &AcquireGrant,
+    config: &AttemptConfig,
+) -> Result<SuccessorResume, RunnerError> {
+    let checkpoint = gitd.checkpoint().await?;
+    let destination = config
+        .workspace_root
+        .join("salvage")
+        .join(grant.attempt.id.as_str());
+    if destination.exists() {
+        return Err(RunnerError::Protocol(format!(
+            "salvage destination already exists: {}",
+            destination.display()
+        )));
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| RunnerError::Io {
+            context: "create salvage parent".into(),
+            reason: error.to_string(),
+        })?;
+    }
+    let preservation = gitd.preserve(&destination).await?;
+    Ok(SuccessorResume {
+        checkpoint,
+        preservation,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn cleanup_failure(
     client: &dyn LeaseClient,
     adapter: &dyn HarnessAdapter,
     gitd: &mut dyn WorkspaceSession,
     grant: &AcquireGrant,
+    config: &AttemptConfig,
     journal: &dyn JournalSink,
     session: &SessionHandle,
     err: &RunnerError,
 ) {
     if err.is_frozen() {
         journal.record("frozen", err.reason_code());
-        match gitd.checkpoint().await {
-            Ok(checkpoint) => journal.record("salvage_checkpoint", &checkpoint.to_string()),
+        match salvage_workspace(gitd, grant, config).await {
+            Ok(resume) => {
+                journal.record(
+                    "salvage_checkpoint",
+                    &format!("{} {}", resume.checkpoint.id, resume.checkpoint.digest),
+                );
+                journal.record(
+                    "salvage_preserved",
+                    &format!(
+                        "{} {}",
+                        resume.preservation.digest,
+                        resume.preservation.destination.display()
+                    ),
+                );
+            }
             Err(salvage_err) => journal.record("salvage_failed", &salvage_err.to_string()),
         }
         let _ = adapter.terminate(session).await;

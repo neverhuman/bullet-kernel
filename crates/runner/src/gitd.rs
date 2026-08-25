@@ -4,7 +4,8 @@
 //! initial clone token and refuses every stale call.
 
 use crate::error::RunnerError;
-use bullet_domain::AuthorityToken;
+use crate::lease::AcquireGrant;
+use bullet_domain::{AuthorityToken, Digest};
 use bullet_harness_core::PatchProposal;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -60,7 +61,7 @@ pub struct WorkspaceInfo {
 }
 
 /// Exact checkpoint binding returned after a successful proposal.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointBinding {
     /// Full-width checkpoint identity.
     pub id: String,
@@ -79,17 +80,22 @@ pub struct ApplyProposalReceipt {
     pub checkpoint: CheckpointBinding,
 }
 
-/// Exact candidate receipt from `prepare_candidate` (subset of the
-/// BulletGit Candidate; unknown fields are ignored).
+/// Exact candidate receipt from `prepare_candidate`.
+///
+/// Production gitd returns a nested Candidate (`id` + `manifest`). The
+/// flattened fields are copied from that manifest; they are never accepted
+/// as a legacy top-level `{change_seed,mission}` response.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CandidateReceipt {
-    /// Content-derived candidate id.
+    /// Provenance-bound candidate id (`can_` + 64 hex).
     pub id: String,
-    /// Base commit SHA.
+    /// Reusable content id (`cnt_` + 64 hex).
+    pub content_id: String,
+    /// Algorithm-tagged base commit.
     pub base_commit: String,
-    /// Head commit SHA on the private branch.
+    /// Algorithm-tagged head commit.
     pub head_commit: String,
-    /// Tree SHA of the head commit.
+    /// Algorithm-tagged tree of the head commit.
     pub tree_hash: String,
     /// BLAKE3 of the `git diff base..head` bytes (hex).
     pub patch_hash: String,
@@ -99,6 +105,109 @@ pub struct CandidateReceipt {
     /// Preparation timestamp.
     #[serde(default)]
     pub prepared_at: String,
+}
+
+/// Logical Change sent to gitd. Narrative only; not Candidate identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangeRequest {
+    /// `chg_` + 64 lowercase hex.
+    pub id: String,
+    /// Mission seed or id already bound on the grant.
+    pub mission: String,
+    /// 64-hex acceptance digest taken from the grant contract body.
+    pub acceptance_root: String,
+}
+
+/// Kernel-owned provenance. Repository-derived fields are absent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateProvenanceRequest {
+    /// Must be `1`.
+    pub schema_version: u32,
+    /// `rep_` subject from the grant.
+    pub repository_id: String,
+    /// `atm_` subject from the grant.
+    pub producing_attempt_id: String,
+    /// Permanent fence from the grant.
+    pub attempt_fence: u64,
+    /// `wpk_` subject from the grant.
+    pub work_package_id: String,
+    /// `var_` subject from the grant.
+    pub variant_id: String,
+    /// `pln_` subject from the grant.
+    pub plan_revision_id: String,
+    /// `grf_` subject supplied by the caller (token has only a sequence).
+    pub graph_revision_id: String,
+    /// Active daemon checkpoint.
+    pub base_checkpoint_id: String,
+    /// Algorithm-tagged base commit.
+    pub base_commit: String,
+    /// Predecessor Candidates.
+    pub parent_candidate_ids: Vec<String>,
+    /// Scope granted to this Attempt.
+    pub granted_scope: Vec<String>,
+    /// `cnt_` context capsule.
+    pub context_capsule_id: String,
+    /// `cnt_` configuration snapshot.
+    pub configuration_snapshot_id: String,
+    /// `cnt_` policy snapshot.
+    pub policy_snapshot_id: String,
+    /// `cnt_` routing snapshot.
+    pub routing_snapshot_id: String,
+    /// 64-hex environment digest.
+    pub environment_digest: String,
+    /// 64-hex toolchain digest.
+    pub toolchain_digest: String,
+}
+
+/// Exact `prepare_candidate` params gitd admits.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrepareCandidateRequest {
+    /// Logical Change.
+    pub change: ChangeRequest,
+    /// Kernel-owned provenance.
+    pub provenance: CandidateProvenanceRequest,
+}
+
+/// Subjects the grant does not carry in gitd wire shape.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CandidateBindings {
+    /// `chg_` + 64 hex.
+    pub change_id: String,
+    /// `grf_` + 64 hex.
+    pub graph_revision_id: String,
+    /// `cnt_` + 64 hex.
+    pub context_capsule_id: String,
+    /// 64 hex.
+    pub environment_digest: String,
+    /// 64 hex.
+    pub toolchain_digest: String,
+    /// `can_` predecessors.
+    pub parent_candidate_ids: Vec<String>,
+}
+
+/// Sealed preserve receipt required before cleanup.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreservationReceipt {
+    /// Opaque token returned by `preserve`.
+    pub token: String,
+    /// Digest of the sealed token.
+    pub digest: String,
+    /// Digest of the preserved artifact.
+    pub artifact_digest: String,
+    /// External destination that must already exist.
+    pub destination: PathBuf,
+}
+
+/// Byte-resume binding after freeze salvage.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuccessorResume {
+    /// Daemon checkpoint at freeze.
+    pub checkpoint: CheckpointBinding,
+    /// External preservation that cleanup must present.
+    pub preservation: PreservationReceipt,
 }
 
 /// One spawned daemon serving one workspace session.
@@ -193,12 +302,17 @@ impl GitdSession {
     /// # Errors
     ///
     /// Typed daemon refusal or IO failure.
-    pub async fn preserve(&mut self, destination: &Path) -> Result<Value, RunnerError> {
-        self.call(
-            "preserve",
-            json!({ "destination": destination.display().to_string() }),
-        )
-        .await
+    pub async fn preserve(
+        &mut self,
+        destination: &Path,
+    ) -> Result<PreservationReceipt, RunnerError> {
+        let ok = self
+            .call(
+                "preserve",
+                json!({ "destination": destination.display().to_string() }),
+            )
+            .await?;
+        parse_preservation_receipt(ok, destination)
     }
 
     /// One request/response round trip with an explicit token. Exposed so
@@ -360,44 +474,46 @@ impl GitdSession {
     /// # Errors
     ///
     /// Typed daemon refusal or IO failure.
-    pub async fn checkpoint(&mut self) -> Result<Value, RunnerError> {
-        self.call("checkpoint", json!({})).await
+    pub async fn checkpoint(&mut self) -> Result<CheckpointBinding, RunnerError> {
+        let ok = self.call("checkpoint", json!({})).await?;
+        parse_checkpoint_binding(&ok)
     }
 
-    /// Prepare the exact candidate: real SHAs plus the BLAKE3 patch digest.
+    /// Prepare the exact candidate from Kernel-owned change + provenance.
     ///
     /// # Errors
     ///
-    /// Typed daemon refusal or IO failure.
+    /// Typed daemon refusal or IO failure. Legacy `{change_seed,mission}`
+    /// is never encoded.
     pub async fn prepare_candidate(
         &mut self,
-        change_seed: &str,
-        mission: &str,
+        request: &PrepareCandidateRequest,
     ) -> Result<CandidateReceipt, RunnerError> {
         let ok = self
-            .call(
-                "prepare_candidate",
-                json!({ "change_seed": change_seed, "mission": mission }),
-            )
+            .call("prepare_candidate", prepare_candidate_params(request)?)
             .await?;
-        serde_json::from_value(ok)
-            .map_err(|err| RunnerError::Protocol(format!("prepare_candidate result: {err}")))
+        parse_candidate_receipt(ok)
     }
 
-    /// Preserve a bundle receipt and delete the workspace.
+    /// Delete the workspace only after presenting the sealed preserve token.
     ///
     /// # Errors
     ///
-    /// Typed daemon refusal or IO failure.
+    /// Typed daemon refusal or IO failure. A `bundle_path` is never sent.
     pub async fn cleanup(
         &mut self,
-        bundle_path: &Path,
+        receipt: &PreservationReceipt,
         deleted_at: &str,
     ) -> Result<Value, RunnerError> {
+        if receipt.token.is_empty() {
+            return Err(RunnerError::Protocol(
+                "cleanup requires a sealed preservation_receipt".into(),
+            ));
+        }
         self.call(
             "cleanup",
             json!({
-                "bundle_path": bundle_path.display().to_string(),
+                "preservation_receipt": receipt.token,
                 "deleted_at": deleted_at,
             }),
         )
@@ -405,9 +521,239 @@ impl GitdSession {
     }
 }
 
+impl PrepareCandidateRequest {
+    /// Build the gitd request from grant, workspace, and caller bindings.
+    ///
+    /// Snapshot hashes already on the token become `cnt_<hex>` content ids.
+    /// Graph revision, change id, context capsule, environment, and toolchain
+    /// are refused unless the caller supplies valid subjects. No seed string
+    /// is hashed into a missing field.
+    ///
+    /// # Errors
+    ///
+    /// Missing or malformed subjects.
+    pub fn from_grant(
+        grant: &AcquireGrant,
+        workspace: &WorkspaceInfo,
+        checkpoint: &CheckpointBinding,
+        granted_scope: &[String],
+        bindings: &CandidateBindings,
+    ) -> Result<Self, RunnerError> {
+        let token = &grant.authority_token;
+        let change = ChangeRequest {
+            id: require_prefixed("change_id", "chg", &bindings.change_id)?,
+            mission: token.mission_id.to_string(),
+            acceptance_root: hex_body(
+                "acceptance_contract_id",
+                "acc",
+                token.acceptance_contract_id.as_str(),
+            )?,
+        };
+        let provenance = CandidateProvenanceRequest {
+            schema_version: 1,
+            repository_id: token.repository_id.to_string(),
+            producing_attempt_id: token.attempt_id.to_string(),
+            attempt_fence: token.attempt_fence,
+            work_package_id: token.work_package_id.to_string(),
+            variant_id: token.variant_id.to_string(),
+            plan_revision_id: token.plan_revision_id.to_string(),
+            graph_revision_id: require_prefixed(
+                "graph_revision_id",
+                "grf",
+                &bindings.graph_revision_id,
+            )?,
+            base_checkpoint_id: checkpoint.id.clone(),
+            base_commit: tagged_git_oid(&workspace.base_sha)?,
+            parent_candidate_ids: bindings
+                .parent_candidate_ids
+                .iter()
+                .map(|id| require_prefixed("parent_candidate_id", "can", id))
+                .collect::<Result<Vec<_>, _>>()?,
+            granted_scope: granted_scope.to_vec(),
+            context_capsule_id: require_prefixed(
+                "context_capsule_id",
+                "cnt",
+                &bindings.context_capsule_id,
+            )?,
+            configuration_snapshot_id: content_id_from_digest(token.config_snapshot_hash),
+            policy_snapshot_id: content_id_from_digest(token.policy_snapshot_hash),
+            routing_snapshot_id: content_id_from_digest(token.routing_policy_hash),
+            environment_digest: require_hex("environment_digest", &bindings.environment_digest)?,
+            toolchain_digest: require_hex("toolchain_digest", &bindings.toolchain_digest)?,
+        };
+        if provenance.attempt_fence == 0 {
+            return Err(RunnerError::Protocol(
+                "attempt_fence must be nonzero".into(),
+            ));
+        }
+        Ok(Self { change, provenance })
+    }
+}
+
 fn apply_proposal_params(proposal: &PatchProposal) -> Result<Value, RunnerError> {
     let authoritative = proposal.authoritative_value()?;
     Ok(json!({ "proposal": authoritative }))
+}
+
+fn prepare_candidate_params(request: &PrepareCandidateRequest) -> Result<Value, RunnerError> {
+    serde_json::to_value(request)
+        .map_err(|err| RunnerError::Protocol(format!("encode prepare_candidate: {err}")))
+}
+
+fn parse_candidate_receipt(ok: Value) -> Result<CandidateReceipt, RunnerError> {
+    if ok.get("change_seed").is_some()
+        || ok.get("mission").is_some() && ok.get("manifest").is_none()
+    {
+        return Err(RunnerError::Protocol(
+            "prepare_candidate returned a legacy flattened receipt".into(),
+        ));
+    }
+    let nested: NestedCandidate = serde_json::from_value(ok)
+        .map_err(|err| RunnerError::Protocol(format!("prepare_candidate result: {err}")))?;
+    require_prefixed("candidate.id", "can", &nested.id)?;
+    require_prefixed("candidate.content_id", "cnt", &nested.content_id)?;
+    Ok(CandidateReceipt {
+        id: nested.id,
+        content_id: nested.content_id,
+        base_commit: nested.manifest.base_commit,
+        head_commit: nested.manifest.head_commit,
+        tree_hash: nested.manifest.tree_oid,
+        patch_hash: nested.manifest.patch_digest,
+        actual_scope: nested.manifest.actual_scope,
+        prepared_at: nested.prepared_at,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct NestedCandidate {
+    id: String,
+    content_id: String,
+    #[serde(default)]
+    prepared_at: String,
+    manifest: NestedManifest,
+}
+
+#[derive(Debug, Deserialize)]
+struct NestedManifest {
+    base_commit: String,
+    head_commit: String,
+    tree_oid: String,
+    patch_digest: String,
+    #[serde(default)]
+    actual_scope: Vec<String>,
+}
+
+fn parse_checkpoint_binding(ok: &Value) -> Result<CheckpointBinding, RunnerError> {
+    let id = ok
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RunnerError::Protocol("checkpoint missing id".into()))?;
+    let digest = ok
+        .get("digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RunnerError::Protocol("checkpoint missing digest".into()))?;
+    validate_checkpoint_binding(id, digest)?;
+    Ok(CheckpointBinding {
+        id: id.to_string(),
+        digest: digest.to_string(),
+    })
+}
+
+fn parse_preservation_receipt(
+    ok: Value,
+    requested: &Path,
+) -> Result<PreservationReceipt, RunnerError> {
+    if ok.get("bundle_path").is_some() {
+        return Err(RunnerError::Protocol(
+            "preserve returned a legacy bundle_path".into(),
+        ));
+    }
+    let token = ok
+        .get("preservation_receipt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RunnerError::Protocol("preserve missing preservation_receipt".into()))?;
+    if token.is_empty() {
+        return Err(RunnerError::Protocol(
+            "preservation_receipt is empty".into(),
+        ));
+    }
+    let digest = ok
+        .get("preservation_receipt_digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            RunnerError::Protocol("preserve missing preservation_receipt_digest".into())
+        })?;
+    let artifact = ok
+        .get("artifact_digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RunnerError::Protocol("preserve missing artifact_digest".into()))?;
+    require_hex("preservation_receipt_digest", digest)?;
+    require_hex("artifact_digest", artifact)?;
+    let destination = ok
+        .get("destination")
+        .and_then(Value::as_str)
+        .map_or_else(|| requested.to_path_buf(), PathBuf::from);
+    Ok(PreservationReceipt {
+        token: token.to_string(),
+        digest: digest.to_string(),
+        artifact_digest: artifact.to_string(),
+        destination,
+    })
+}
+
+fn content_id_from_digest(digest: Digest) -> String {
+    format!("cnt_{}", digest.to_hex())
+}
+
+fn tagged_git_oid(raw: &str) -> Result<String, RunnerError> {
+    if let Some(hex) = raw.strip_prefix("sha1:") {
+        if is_lower_hex(hex, 40) {
+            return Ok(raw.to_string());
+        }
+    }
+    if let Some(hex) = raw.strip_prefix("sha256:") {
+        if is_lower_hex(hex, 64) {
+            return Ok(raw.to_string());
+        }
+    }
+    if is_lower_hex(raw, 40) {
+        return Ok(format!("sha1:{raw}"));
+    }
+    Err(RunnerError::Protocol(format!(
+        "base commit must be sha1:<40 hex>, sha256:<64 hex>, or raw 40-hex: {raw}"
+    )))
+}
+
+fn require_prefixed(field: &str, prefix: &str, value: &str) -> Result<String, RunnerError> {
+    let expected = format!("{prefix}_");
+    let Some(body) = value.strip_prefix(&expected) else {
+        return Err(RunnerError::Protocol(format!(
+            "{field} must be {prefix}_<64 hex>"
+        )));
+    };
+    require_hex(field, body)?;
+    Ok(value.to_string())
+}
+
+fn hex_body(field: &str, prefix: &str, value: &str) -> Result<String, RunnerError> {
+    let id = require_prefixed(field, prefix, value)?;
+    Ok(id[prefix.len() + 1..].to_string())
+}
+
+fn require_hex(field: &str, value: &str) -> Result<String, RunnerError> {
+    if !is_lower_hex(value, 64) {
+        return Err(RunnerError::Protocol(format!(
+            "{field} must be 64 lowercase hex"
+        )));
+    }
+    Ok(value.to_string())
+}
+
+fn is_lower_hex(value: &str, len: usize) -> bool {
+    value.len() == len
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn validate_checkpoint_binding(id: &str, digest: &str) -> Result<(), RunnerError> {
@@ -485,5 +831,101 @@ mod protocol_tests {
         ] {
             assert!(validate_checkpoint_binding(&id, &digest).is_err());
         }
+    }
+
+    #[test]
+    fn prepare_candidate_encodes_change_and_provenance_never_legacy_seeds() {
+        let request = PrepareCandidateRequest {
+            change: ChangeRequest {
+                id: format!("chg_{}", "1".repeat(64)),
+                mission: format!("mis_{}", "2".repeat(64)),
+                acceptance_root: "3".repeat(64),
+            },
+            provenance: CandidateProvenanceRequest {
+                schema_version: 1,
+                repository_id: format!("rep_{}", "4".repeat(64)),
+                producing_attempt_id: format!("atm_{}", "5".repeat(64)),
+                attempt_fence: 1,
+                work_package_id: format!("wpk_{}", "6".repeat(64)),
+                variant_id: format!("var_{}", "7".repeat(64)),
+                plan_revision_id: format!("pln_{}", "8".repeat(64)),
+                graph_revision_id: format!("grf_{}", "9".repeat(64)),
+                base_checkpoint_id: format!("ckp_{}", "a".repeat(64)),
+                base_commit: format!("sha1:{}", "b".repeat(40)),
+                parent_candidate_ids: vec![],
+                granted_scope: vec!["src".into()],
+                context_capsule_id: format!("cnt_{}", "c".repeat(64)),
+                configuration_snapshot_id: format!("cnt_{}", "d".repeat(64)),
+                policy_snapshot_id: format!("cnt_{}", "e".repeat(64)),
+                routing_snapshot_id: format!("cnt_{}", "f".repeat(64)),
+                environment_digest: "1".repeat(64),
+                toolchain_digest: "2".repeat(64),
+            },
+        };
+        let params = prepare_candidate_params(&request).expect("encode");
+        assert!(params.get("change_seed").is_none());
+        assert!(params.get("mission").is_none());
+        assert_eq!(params["change"]["id"], request.change.id);
+        assert_eq!(
+            params["provenance"]["producing_attempt_id"],
+            request.provenance.producing_attempt_id
+        );
+        assert_eq!(params.as_object().map(|object| object.len()), Some(2));
+    }
+
+    #[test]
+    fn nested_candidate_receipt_is_required_and_legacy_flat_shape_is_refused() {
+        let ok = json!({
+            "id": format!("can_{}", "1".repeat(64)),
+            "content_id": format!("cnt_{}", "2".repeat(64)),
+            "prepared_at": "2026-08-25T00:00:00Z",
+            "manifest": {
+                "base_commit": format!("sha1:{}", "a".repeat(40)),
+                "head_commit": format!("sha1:{}", "b".repeat(40)),
+                "tree_oid": format!("sha1:{}", "c".repeat(40)),
+                "patch_digest": "d".repeat(64),
+                "actual_scope": ["src/lib.rs"]
+            }
+        });
+        let receipt = parse_candidate_receipt(ok).expect("nested");
+        assert_eq!(receipt.tree_hash, format!("sha1:{}", "c".repeat(40)));
+        assert_eq!(receipt.actual_scope, vec!["src/lib.rs"]);
+
+        let legacy = json!({
+            "id": format!("can_{}", "1".repeat(64)),
+            "base_commit": "a".repeat(40),
+            "head_commit": "b".repeat(40),
+            "tree_hash": "c".repeat(40),
+            "patch_hash": "d".repeat(64),
+            "change_seed": "atm_x",
+            "mission": "synthetic"
+        });
+        assert!(parse_candidate_receipt(legacy).is_err());
+    }
+
+    #[test]
+    fn cleanup_and_preserve_refuse_bundle_path_and_require_sealed_token() {
+        let preserve = json!({
+            "preservation_receipt": "sealed-token",
+            "preservation_receipt_digest": "a".repeat(64),
+            "artifact_digest": "b".repeat(64),
+            "destination": "/tmp/preserve"
+        });
+        let receipt = parse_preservation_receipt(preserve, Path::new("/tmp/preserve")).expect("ok");
+        assert_eq!(receipt.token, "sealed-token");
+
+        let legacy = json!({"bundle_path": "/tmp/bundle"});
+        assert!(parse_preservation_receipt(legacy, Path::new("/tmp/x")).is_err());
+    }
+
+    #[test]
+    fn missing_candidate_bindings_are_refused_instead_of_synthesized() {
+        let empty = CandidateBindings::default();
+        assert!(require_prefixed("change_id", "chg", &empty.change_id).is_err());
+        assert!(require_prefixed("graph_revision_id", "grf", &empty.graph_revision_id).is_err());
+        assert_eq!(
+            tagged_git_oid(&"a".repeat(40)).unwrap(),
+            format!("sha1:{}", "a".repeat(40))
+        );
     }
 }

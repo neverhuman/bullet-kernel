@@ -190,11 +190,24 @@ fn assert_salvaged_without_apply(fixture: &FrozenFixture) {
     assert!(fixture.adapter.was_terminated());
     assert_eq!(fixture.adapter.prompts().len(), 1);
     assert!(!fixture.repo_dir.join("PONG.txt").exists());
+    assert!(
+        stages.contains(&"salvage_preserved".to_string()),
+        "{stages:?}"
+    );
 
     let checkpoint = std::fs::read_to_string(fixture.runtime_dir.join("checkpoint.json"))
         .expect("preserved test checkpoint");
     assert!(checkpoint.contains("TEST_ONLY_SIMULATOR"));
     assert!(checkpoint.contains(fixture.attempt_id.as_str()));
+    let salvage = fixture
+        .farm_root
+        .join("salvage")
+        .join(fixture.attempt_id.as_str())
+        .join("preservation.json");
+    assert!(
+        salvage.is_file(),
+        "freeze must preserve bytes outside the live workspace"
+    );
 
     let ledger = fixture.ledger.lock().expect("ledger");
     let attempt = ledger
@@ -226,11 +239,12 @@ async fn successor_uses_fence_two_while_salvaged_workspace_stays_inert() {
         .await
         .expect("successor lease");
     assert_eq!(grant.attempt.fence, 2);
-    let config = config(
+    let mut config = config(
         fixture.origin.clone(),
         fixture.base_sha.clone(),
         fixture.farm_root.clone(),
     );
+    config.bindings = super::test_only_bindings(&grant);
     let mut workspace = SimWorkspace::new(grant.attempt.id.clone());
     let info = workspace
         .clone_workspace(

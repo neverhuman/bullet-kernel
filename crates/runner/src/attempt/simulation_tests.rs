@@ -7,7 +7,10 @@ mod harness;
 mod orchestration;
 
 use super::*;
-use crate::gitd::{ApplyProposalReceipt, CheckpointBinding};
+use crate::gitd::{
+    ApplyProposalReceipt, CandidateBindings, CheckpointBinding, PrepareCandidateRequest,
+    PreservationReceipt,
+};
 use crate::{DirectLeaseClient, MemoryJournal, MonotonicClock, REPOSITORY_GATE_ID};
 use bullet_application::{materialize_plan, MemoryLedger, PlanInput};
 use bullet_domain::{Digest, RunnerId, TaskClass, WorkPackageId};
@@ -220,10 +223,12 @@ impl WorkspaceSession for SimWorkspace {
         })
     }
 
-    async fn checkpoint(&mut self) -> Result<Value, RunnerError> {
+    async fn checkpoint(&mut self) -> Result<CheckpointBinding, RunnerError> {
         let receipt = serde_json::json!({
             "classification": "TEST_ONLY_SIMULATOR",
             "attempt_id": self.attempt_id.as_str(),
+            "id": self.checkpoint_id,
+            "digest": self.checkpoint_digest,
         });
         let runtime = self
             .runtime_dir
@@ -235,14 +240,17 @@ impl WorkspaceSession for SimWorkspace {
                 reason: error.to_string(),
             }
         })?;
-        Ok(receipt)
+        Ok(CheckpointBinding {
+            id: self.checkpoint_id.clone(),
+            digest: self.checkpoint_digest.clone(),
+        })
     }
 
     async fn prepare_candidate(
         &mut self,
-        change_seed: &str,
-        _mission: &str,
+        request: &PrepareCandidateRequest,
     ) -> Result<CandidateReceipt, RunnerError> {
+        let change_seed = request.provenance.producing_attempt_id.as_str();
         self.git(&["add", "-A"])?;
         self.git(&[
             "-c",
@@ -272,6 +280,7 @@ impl WorkspaceSession for SimWorkspace {
         let digest = Digest::of(&patch).to_hex();
         Ok(CandidateReceipt {
             id: format!("can_{}", Digest::of(change_seed.as_bytes()).to_hex()),
+            content_id: format!("cnt_{}", Digest::of(change_seed.as_bytes()).to_hex()),
             base_commit: self.base_sha.clone(),
             head_commit: head,
             tree_hash: tree,
@@ -279,6 +288,47 @@ impl WorkspaceSession for SimWorkspace {
             actual_scope: paths,
             prepared_at: "TEST_ONLY_SIMULATOR".into(),
         })
+    }
+
+    async fn preserve(&mut self, destination: &Path) -> Result<PreservationReceipt, RunnerError> {
+        if destination.exists() {
+            return Err(RunnerError::Protocol(
+                "test simulator preserve destination exists".into(),
+            ));
+        }
+        std::fs::create_dir_all(destination).map_err(|error| RunnerError::Io {
+            context: "test simulator preserve".into(),
+            reason: error.to_string(),
+        })?;
+        let token = format!("TEST_ONLY_PRESERVE:{}", self.attempt_id);
+        let digest = Digest::of(token.as_bytes()).to_hex();
+        let artifact = Digest::of(destination.display().to_string().as_bytes()).to_hex();
+        std::fs::write(destination.join("preservation.json"), token.as_bytes()).map_err(
+            |error| RunnerError::Io {
+                context: "test simulator preserve receipt".into(),
+                reason: error.to_string(),
+            },
+        )?;
+        Ok(PreservationReceipt {
+            token,
+            digest,
+            artifact_digest: artifact,
+            destination: destination.to_path_buf(),
+        })
+    }
+}
+
+fn test_only_bindings(grant: &crate::AcquireGrant) -> CandidateBindings {
+    let hex = |label: &str| {
+        Digest::of(format!("TEST_ONLY:{label}:{}", grant.attempt.id).as_bytes()).to_hex()
+    };
+    CandidateBindings {
+        change_id: format!("chg_{}", hex("chg")),
+        graph_revision_id: format!("grf_{}", hex("grf")),
+        context_capsule_id: format!("cnt_{}", hex("ctx")),
+        environment_digest: hex("env"),
+        toolchain_digest: hex("tool"),
+        parent_candidate_ids: vec![],
     }
 }
 
@@ -436,7 +486,7 @@ async fn run_simulated(
         idempotency_key: format!("{seed}-1"),
         ttl_seconds: 15,
     };
-    let config = AttemptConfig::new(
+    let mut config = AttemptConfig::new(
         origin,
         base,
         root.join("farm"),
@@ -445,6 +495,7 @@ async fn run_simulated(
         gate_ids,
     );
     let grant = client.acquire(&request).await.expect("test lease");
+    config.bindings = test_only_bindings(&grant);
     journal.record("lease_acquired", "TEST_ONLY_SIMULATOR");
     let mut workspace = SimWorkspace::new(grant.attempt.id.clone());
     let info = workspace
