@@ -3,7 +3,9 @@
 //! admission, launch-grant mint/verify, egress isolation, and exactly one
 //! dispatched read-only turn — then a sealed, fsync'd receipt. Under the
 //! checked-in v1alpha1 policy this refuses at `POLICY_LIVE_ADMISSION_DISABLED`
-//! before any key read, probe, namespace, or spawn.
+//! before any key read, probe, namespace, or spawn; a v1alpha2 policy that
+//! enables live admission (ADR 0012) must also be active at the run instant
+//! with an active `provider-runner` key, or the run fails at the same step.
 
 mod steps;
 
@@ -12,6 +14,8 @@ pub mod egress;
 #[cfg(any(test, feature = "test-seams"))]
 pub mod seam;
 
+#[cfg(test)]
+mod policy_tests;
 #[cfg(test)]
 mod tests;
 

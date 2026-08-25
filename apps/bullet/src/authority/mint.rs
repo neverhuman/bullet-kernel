@@ -1,5 +1,7 @@
-//! `bullet authority mint-launch-grant`: policy, operator key, exact receipt,
-//! durable lease, then one signed grant on stdout. No process is spawned.
+//! `bullet authority mint-launch-grant`: policy (reported on stderr with its
+//! schema version and generation, and required to be active now), operator
+//! key, exact receipt, durable lease, then one signed grant on stdout. No
+//! process is spawned.
 
 use super::MintArgs;
 use bullet_adapters::SqliteLedger;
@@ -26,6 +28,14 @@ pub(super) fn run(args: &MintArgs) -> Result<(), String> {
     let now_unix_ms = u64::try_from(now.timestamp_millis())
         .map_err(|_| "system clock precedes the epoch".to_string())?;
     let policy = load_policy_from_environment(&args.data_dir).map_err(coded)?;
+    eprintln!(
+        "bullet: policy schema_version={} generation={} live_admission_enabled={} digest={}",
+        policy.schema().as_str(),
+        policy.generation(),
+        policy.live_admission_enabled(),
+        policy.digest()
+    );
+    policy.validate_at(now_unix_ms).map_err(coded)?;
     let key = load_signing_key(&args.data_dir, &args.issuer, &args.key_id).map_err(coded)?;
     let admitted = policy
         .authority_key_at(

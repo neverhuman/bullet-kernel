@@ -1,6 +1,8 @@
 //! `bullet provider live-conformance`: the operator entry point to the positive
-//! live-conformance path. It loads the on-disk policy (v1alpha1 today), selects
-//! the provider adapter and the real `bullet-harness-egress` backend, and drives
+//! live-conformance path. It loads the on-disk policy (v1alpha1 or an
+//! operator-ratified v1alpha2 generation, ADR 0012), reports its schema
+//! version, generation, and digest, selects the provider adapter and the real
+//! `bullet-harness-egress` backend, and drives
 //! `bullet_application::run_live_conformance`. Under v1alpha1 every provider
 //! refuses at `POLICY_LIVE_ADMISSION_DISABLED` (exit 78) before any key read,
 //! probe, namespace, or spawn.
@@ -75,6 +77,13 @@ fn live_conformance(args: &LiveConformanceArgs) -> Result<u8, String> {
     )?;
     let policy = load_policy_from_environment(&args.data_dir)
         .map_err(|error| format!("{}: {error}", error.reason_code()))?;
+    println!(
+        "policy: schema_version={} generation={} live_admission_enabled={} digest={}",
+        policy.schema().as_str(),
+        policy.generation(),
+        policy.live_admission_enabled(),
+        policy.digest()
+    );
     let mut ledger = SqliteLedger::open(args.data_dir.join("ledger.sqlite"))
         .map_err(|error| format!("{}: {error}", error.reason_code()))?;
     let egress = RealEgressBackend;

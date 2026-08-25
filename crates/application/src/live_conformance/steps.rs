@@ -55,17 +55,24 @@ pub(super) fn run_steps<L>(
 where
     L: Ledger + LaunchGrantNonceStore,
 {
-    // 1. POLICY — refuse before any key read, probe, namespace, or spawn.
+    // 1. POLICY — refuse before any key read, probe, namespace, or spawn. A
+    // policy that keeps live admission disabled is the designed, neutral,
+    // clock-independent refusal; a live-enabled policy must additionally be
+    // active at `now` with an active provider-runner key (bullet-wire
+    // `validate_at`), otherwise the run fails here.
     policy
         .require_live_admission()
         .map_err(|error| StepFailure::refusal(LiveStep::Policy, &error))?;
+    let now_ms =
+        datetime_unix_ms(now).map_err(|error| StepFailure::issue(LiveStep::Policy, &error))?;
+    policy
+        .validate_at(now_ms)
+        .map_err(|error| StepFailure::harness(LiveStep::Policy, &error))?;
     fields.policy_snapshot_digest = Some(policy.digest().to_string());
     fields.policy_generation = Some(policy.generation());
     log.pass(LiveStep::Policy);
 
     // 2. OPERATOR KEY — load 0600 custody and confirm the policy admits it.
-    let now_ms =
-        datetime_unix_ms(now).map_err(|error| StepFailure::issue(LiveStep::OperatorKey, &error))?;
     let key = load_signing_key(data_dir, &options.issuer, &options.key_id)
         .map_err(|error| StepFailure::harness(LiveStep::OperatorKey, &error))?;
     let vkey = policy

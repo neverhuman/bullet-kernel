@@ -1,16 +1,16 @@
-//! Test-only policy seam. Builds a live-admission-enabled `LoadedPolicy`
-//! directly from an operator signing key, bypassing the v1alpha1 loader.
+//! Test-only policy builder. Derives a v1alpha2 live-admission policy from the
+//! v1alpha1 fixture for a caller-supplied operator key and loads it through
+//! the production loader (`policy_snapshot::LoadedPolicy::from_bytes`).
 //!
-//! The production loader (`policy_snapshot::LoadedPolicy::from_bytes`) is
-//! unchanged and still rejects any snapshot with
-//! `sandbox_policy.live_admission_enabled = true` as `UNSAFE_POLICY`; this seam
-//! exists solely so tests can drive the positive path without an
-//! operator-ratified policy generation. It is compiled only under `test` or the
-//! `test-seams` feature and is never wired into the CLI.
+//! There is no bypass: every policy a test drives through the positive
+//! live-conformance path satisfies exactly the bullet-wire rules (ADR 0012),
+//! so a generation below `LIVE_ADMISSION_MIN_GENERATION`, a missing
+//! provider-runner key, or any conservatism relaxation is refused here the
+//! same way an operator's on-disk policy would be. It is compiled only under
+//! `test` or the `test-seams` feature and is never wired into the CLI.
 
-use crate::policy_snapshot::LoadedPolicy;
-use bullet_domain::schema_bundle::PolicySnapshotV1;
-use bullet_harness_core::launch_grant::LaunchGrantSigningKey;
+use crate::policy_snapshot::{LoadedPolicy, POLICY_SCHEMA_VERSION_V1ALPHA2};
+use bullet_harness_core::launch_grant::{canonical_json, LaunchGrantSigningKey};
 use bullet_harness_core::HarnessError;
 use serde_json::json;
 
@@ -18,13 +18,16 @@ const FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/policy-v1alpha1.json
 const WIDE_EXPIRY_MS: u64 = 4_000_000_000_000;
 const WIDE_RETENTION_MS: u64 = 4_000_100_000_000;
 
-/// Build a live-admission policy that admits `key` for the `provider-runner`
-/// audience across a wide window (so the deterministic simulation clock lands
-/// inside it). Test seam only.
+/// Build a v1alpha2 policy at `generation` that enables live admission and
+/// admits `key` for the `provider-runner` audience across a wide window (so
+/// the deterministic simulation clock lands inside it), then load it through
+/// the production loader.
 ///
 /// # Errors
 ///
-/// `POLICY_INVALID` when the modified snapshot cannot be decoded or encoded.
+/// `POLICY_INVALID` exactly as the production loader refuses it (for example
+/// `LIVE_ADMISSION_REQUIRES_GENERATION` below generation 2), or when the
+/// fixture cannot be decoded or encoded.
 pub fn live_admission_policy(
     key: &LaunchGrantSigningKey,
     generation: u64,
@@ -33,6 +36,10 @@ pub fn live_admission_policy(
     let object = value
         .as_object_mut()
         .ok_or_else(|| decode_str("policy fixture is not an object"))?;
+    object.insert(
+        "schema_version".into(),
+        json!(POLICY_SCHEMA_VERSION_V1ALPHA2),
+    );
     object.insert("policy_generation".into(), json!(generation));
     object.insert("activation_at_unix_ms".into(), json!(0));
     object.insert("expires_at_unix_ms".into(), json!(WIDE_EXPIRY_MS));
@@ -61,8 +68,9 @@ pub fn live_admission_policy(
         .ok_or_else(|| decode_str("policy fixture lacks issuer_keys"))?
         .push(provider_key);
 
-    let snapshot: PolicySnapshotV1 = serde_json::from_value(value).map_err(decode)?;
-    LoadedPolicy::from_snapshot_for_tests(snapshot)
+    let bytes = canonical_json(&value)
+        .map_err(|error| decode_str(&format!("canonical encoding failed: {error}")))?;
+    LoadedPolicy::from_bytes(&bytes)
 }
 
 fn decode(error: serde_json::Error) -> HarnessError {
@@ -71,6 +79,6 @@ fn decode(error: serde_json::Error) -> HarnessError {
 
 fn decode_str(reason: &str) -> HarnessError {
     HarnessError::PolicyInvalid {
-        reason: format!("TEST_SEAM: {reason}"),
+        reason: format!("TEST_FIXTURE: {reason}"),
     }
 }

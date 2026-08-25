@@ -126,6 +126,13 @@ fn mint_refuses_without_policy_admitted_key_or_strict_custody() {
         "{}",
         stderr(&unadmitted)
     );
+    assert!(
+        stderr(&unadmitted).contains(
+            "policy schema_version=v1alpha1 generation=1 live_admission_enabled=false digest="
+        ),
+        "{}",
+        stderr(&unadmitted)
+    );
 
     let key = data_dir.join("authority/launch-grant.key");
     fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();

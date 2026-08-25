@@ -1,7 +1,8 @@
 //! Full-path live-conformance tests. No real provider binary is spawned: a
 //! fake `claude` shell script emits a canned stream-JSON transcript. The
-//! test-seam policy enables live admission without the v1alpha1 loader; a
-//! no-op egress backend supplies well-formed containment evidence.
+//! v1alpha2 test policy is loaded through the production loader (no bypass);
+//! a no-op egress backend supplies well-formed containment evidence. The
+//! fake-binary harness is shared with `policy_tests`.
 
 use super::egress::NoopEgressBackend;
 use super::seam::live_admission_policy;
@@ -23,7 +24,7 @@ use std::process::Command;
 use tempfile::TempDir;
 
 const V1ALPHA1_POLICY: &[u8] = include_bytes!("../../tests/fixtures/policy-v1alpha1.json");
-const HAPPY_CANARY: &str = "bullet-conformance-canary-happy-0001";
+pub(super) const HAPPY_CANARY: &str = "bullet-conformance-canary-happy-0001";
 const EXPOSED_CANARY: &str = "bullet-conformance-canary-exposed-e2e-0001";
 
 const INIT_PREFIX: &str = r#"{"type":"system","subtype":"init","uuid":"00000000-0000-4000-8000-000000000002","session_id":"00000000-0000-4000-8000-000000000001","apiKeySource":"none","claude_code_version":"2.1.243","cwd":""#;
@@ -31,20 +32,20 @@ const INIT_SUFFIX: &str = r#"","tools":["Read","Glob","Grep"],"mcp_servers":[],"
 const ASSISTANT: &str = r#"{"type":"assistant","uuid":"00000000-0000-4000-8000-000000000003","session_id":"00000000-0000-4000-8000-000000000001","parent_tool_use_id":null,"message":{"id":"msg-000000000003","type":"message","role":"assistant","model":"claude-offline-model","content":[{"type":"text","text":"PONG"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":5}}}"#;
 const RESULT: &str = r#"{"type":"result","subtype":"success","uuid":"00000000-0000-4000-8000-000000000004","session_id":"00000000-0000-4000-8000-000000000001","duration_ms":20,"duration_api_ms":10,"is_error":false,"num_turns":1,"result":"PONG","stop_reason":"end_turn","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5},"modelUsage":{"claude-offline-model":{"inputTokens":10,"outputTokens":5}},"permission_denials":[],"structured_output":{"intent_summary":"pong","changes":[{"path":"PONG.txt","op":"create","contents":"PONG\n"}],"gate_ids":["bullet.conformance.pong"],"claims":[],"uncertainties":[],"done":true},"terminal_reason":"completed"}"#;
 
-enum FakeMode {
+pub(super) enum FakeMode {
     Pong,
     Canary,
 }
 
-struct Harness {
+pub(super) struct Harness {
     _root: TempDir,
-    data_dir: std::path::PathBuf,
-    executable: std::path::PathBuf,
+    pub(super) data_dir: std::path::PathBuf,
+    pub(super) executable: std::path::PathBuf,
     marker: std::path::PathBuf,
 }
 
 impl Harness {
-    fn new(mode: FakeMode) -> Self {
+    pub(super) fn new(mode: FakeMode) -> Self {
         let root = TempDir::new().unwrap();
         let base = root.path().canonicalize().unwrap();
         let data_dir = base.join("data");
@@ -63,7 +64,7 @@ impl Harness {
         }
     }
 
-    fn marker_runs(&self) -> usize {
+    pub(super) fn marker_runs(&self) -> usize {
         fs::read_to_string(&self.marker)
             .map(|text| text.lines().count())
             .unwrap_or(0)
@@ -103,7 +104,7 @@ fn now() -> DateTime<Utc> {
     Utc.timestamp_millis_opt(1_000).single().unwrap()
 }
 
-fn options(harness: &Harness, canary: &str) -> LiveConformanceOptions {
+pub(super) fn options(harness: &Harness, canary: &str) -> LiveConformanceOptions {
     LiveConformanceOptions {
         provider: "claude".into(),
         executable: harness.executable.clone(),
@@ -160,7 +161,7 @@ fn v1alpha1_policy_refuses_before_key_probe_or_spawn() {
 }
 
 #[test]
-fn test_seam_policy_dispatches_pong_and_consumes_the_nonce() {
+fn v1alpha2_test_policy_dispatches_pong_and_consumes_the_nonce() {
     let harness = Harness::new(FakeMode::Pong);
     let key = operator_key(&harness.data_dir);
     let policy = live_admission_policy(&key, 7).unwrap();

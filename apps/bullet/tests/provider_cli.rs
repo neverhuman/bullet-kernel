@@ -1,7 +1,9 @@
 //! `bullet provider live-conformance` is a fail-closed process boundary: under
 //! the checked-in v1alpha1 policy it refuses (exit 78) before spawning any
-//! provider, writes a receipt, and never touches the real provider binary. It
-//! runs only the `bullet` binary itself, pointed at a marker executable.
+//! provider, writes a receipt, and never touches the real provider binary. A
+//! v1alpha2 policy (ADR 0012) is admitted only by the production loader's
+//! rules and is reported with its schema version and generation. It runs only
+//! the `bullet` binary itself, pointed at a marker executable.
 
 #![cfg(unix)]
 
@@ -13,6 +15,11 @@ use tempfile::TempDir;
 
 const POLICY: &[u8] =
     include_bytes!("../../../crates/application/tests/fixtures/policy-v1alpha1.json");
+const V1ALPHA2_POLICY: &[u8] =
+    include_bytes!("../../../crates/application/tests/fixtures/policy-v1alpha2-live-enabled.json");
+const WIDE_EXPIRY_MS: u64 = 4_000_000_000_000;
+
+type Mutate = fn(&mut serde_json::Value);
 
 fn bullet(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bullet"))
@@ -21,6 +28,52 @@ fn bullet(args: &[&str]) -> Output {
         .env_remove("BULLET_DATA_DIR")
         .output()
         .unwrap()
+}
+
+fn bullet_with_policy(args: &[&str], policy: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_bullet"))
+        .args(args)
+        .env("BULLET_POLICY_PATH", policy)
+        .env_remove("BULLET_DATA_DIR")
+        .output()
+        .unwrap()
+}
+
+/// The v1alpha2 fixture with the policy and runner-key windows widened so the
+/// wall clock always lands inside them; `mutate` applies the case under test.
+fn v1alpha2_policy(mutate: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(V1ALPHA2_POLICY).unwrap();
+    value["activation_at_unix_ms"] = serde_json::json!(0);
+    value["expires_at_unix_ms"] = serde_json::json!(WIDE_EXPIRY_MS);
+    for key in value["issuer_keys"].as_array_mut().unwrap() {
+        key["activates_at_unix_ms"] = serde_json::json!(0);
+        key["expires_at_unix_ms"] = serde_json::json!(WIDE_EXPIRY_MS);
+        key["retain_until_unix_ms"] = serde_json::json!(WIDE_EXPIRY_MS + 100_000_000);
+    }
+    mutate(&mut value);
+    bullet_harness_core::launch_grant::canonical_json(&value).unwrap()
+}
+
+fn live_conformance_args<'a>(data: &'a str, executable: &'a str) -> [&'a str; 8] {
+    [
+        "provider",
+        "live-conformance",
+        "--data-dir",
+        data,
+        "--provider",
+        "claude",
+        "--executable",
+        executable,
+    ]
+}
+
+fn receipt_json(data_dir: &Path) -> String {
+    let receipt = fs::read_dir(data_dir.join("live"))
+        .expect("live directory")
+        .filter_map(Result::ok)
+        .find(|entry| entry.file_name().to_string_lossy().starts_with("claude-"))
+        .expect("a receipt was written");
+    fs::read_to_string(receipt.path()).unwrap()
 }
 
 fn write_marker(path: &Path, spawned: &Path) {
@@ -66,19 +119,116 @@ fn live_conformance_refuses_under_v1alpha1_without_spawning() {
         "stdout: {stdout}"
     );
     assert!(
+        stdout.contains(
+            "policy: schema_version=v1alpha1 generation=1 live_admission_enabled=false digest="
+        ),
+        "stdout: {stdout}"
+    );
+    assert!(
         !spawned.exists(),
         "the provider binary must never be spawned"
     );
 
-    let live_dir = data_dir.join("live");
-    let receipt = fs::read_dir(&live_dir)
-        .expect("live directory")
-        .filter_map(Result::ok)
-        .find(|entry| entry.file_name().to_string_lossy().starts_with("claude-"))
-        .expect("a receipt was written");
-    let json = fs::read_to_string(receipt.path()).unwrap();
+    let json = receipt_json(&data_dir);
     assert!(json.contains("\"outcome\": \"REFUSED\""), "{json}");
     assert!(json.contains("\"failed_step\": \"POLICY\""), "{json}");
+}
+
+#[test]
+fn live_conformance_admits_a_ratified_v1alpha2_policy_and_reports_it() {
+    let directory = TempDir::new().unwrap();
+    let base = directory.path().canonicalize().unwrap();
+    let data_dir = base.join("data");
+    fs::create_dir_all(&data_dir).unwrap();
+    let policy = base.join("policy-v1alpha2.json");
+    fs::write(&policy, v1alpha2_policy(|_| {})).unwrap();
+    let marker = base.join("claude");
+    let spawned = base.join("SPAWNED");
+    write_marker(&marker, &spawned);
+
+    // No operator key is installed: the path must pass POLICY and stop at
+    // OPERATOR_KEY, still before any spawn.
+    let data = data_dir.to_string_lossy().into_owned();
+    let executable = marker.to_string_lossy().into_owned();
+    let output = bullet_with_policy(&live_conformance_args(&data, &executable), &policy);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "policy: schema_version=v1alpha2 generation=2 live_admission_enabled=true digest="
+        ),
+        "stdout: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("failed at OperatorKey"), "stderr: {stderr}");
+    assert!(
+        !spawned.exists(),
+        "the provider binary must never be spawned"
+    );
+    let json = receipt_json(&data_dir);
+    assert!(json.contains("\"outcome\": \"FAILED\""), "{json}");
+    assert!(json.contains("\"failed_step\": \"OPERATOR_KEY\""), "{json}");
+    assert!(json.contains("\"policy_generation\": 2"), "{json}");
+}
+
+#[test]
+fn live_conformance_refuses_v1alpha2_policies_the_hub_validator_rejects() {
+    let cases: [(&str, Mutate, &str); 4] = [
+        (
+            "generation 1",
+            |p| p["policy_generation"] = serde_json::json!(1),
+            "LIVE_ADMISSION_REQUIRES_GENERATION",
+        ),
+        (
+            "no runner key",
+            |p| {
+                p["issuer_keys"].as_array_mut().unwrap().pop();
+            },
+            "LIVE_ADMISSION_REQUIRES_RUNNER_KEY",
+        ),
+        (
+            "evolutionary authority",
+            |p| p["route_policy"]["evolutionary_authority"] = serde_json::json!(true),
+            "UNSAFE_POLICY",
+        ),
+        (
+            "v1alpha1 with live admission",
+            |p| p["schema_version"] = serde_json::json!("v1alpha1"),
+            "UNSAFE_POLICY",
+        ),
+    ];
+    for (name, mutate, expected) in cases {
+        let directory = TempDir::new().unwrap();
+        let base = directory.path().canonicalize().unwrap();
+        let data_dir = base.join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let policy = base.join("policy.json");
+        fs::write(&policy, v1alpha2_policy(mutate)).unwrap();
+        let marker = base.join("claude");
+        let spawned = base.join("SPAWNED");
+        write_marker(&marker, &spawned);
+
+        let data = data_dir.to_string_lossy().into_owned();
+        let executable = marker.to_string_lossy().into_owned();
+        let output = bullet_with_policy(&live_conformance_args(&data, &executable), &policy);
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("POLICY_INVALID") && stderr.contains(&format!("{expected}: ")),
+            "{name}: {stderr}"
+        );
+        assert!(!spawned.exists(), "{name}: the provider binary was spawned");
+        assert!(
+            !data_dir.join("live").exists(),
+            "{name}: the loader refused before the path started"
+        );
+        assert!(!data_dir.join("ledger.sqlite").exists(), "{name}");
+    }
 }
 
 #[test]

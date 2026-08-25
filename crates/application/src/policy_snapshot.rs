@@ -1,13 +1,19 @@
-//! v1alpha1 policy snapshot loader over the generated `PolicySnapshotV1`.
+//! Policy snapshot loader over the generated `PolicySnapshotV1`, mirroring the
+//! bullet-wire validator (ADR 0012).
 //!
-//! The loader enforces the same conservatism rule as bullet-wire
-//! (`UNSAFE_POLICY`): a policy that enables live admission, arbitrary shell
-//! gates, headroom-from-unknown-quota, evolutionary authority, or any other
-//! relaxation is refused as `POLICY_INVALID`. Because v1alpha1 therefore
-//! always carries `sandbox_policy.live_admission_enabled = false`, every
-//! otherwise-valid launch grant ends in `POLICY_LIVE_ADMISSION_DISABLED`.
+//! Two schema versions are accepted. Both enforce the immutable conservatism
+//! set (`UNSAFE_POLICY`): lease TTL above 15 s, headroom-from-unknown-quota,
+//! arbitrary shell gates, author evidence as independent, unknown satisfying a
+//! gate, no sealed product holdout, a non-`T0` incumbent, or evolutionary
+//! authority. `v1alpha1` additionally refuses live admission as
+//! `UNSAFE_POLICY`; `v1alpha2` admits it only at generation
+//! [`LIVE_ADMISSION_MIN_GENERATION`] or later with a qualifying
+//! `provider-runner` authority key (`live`). Every refusal is `POLICY_INVALID`
+//! whose reason starts with the bullet-wire code; the Kernel cannot import
+//! bullet-wire, so equivalence is proven by `tests/policy_v1alpha2.rs`.
 
 mod keys;
+mod live;
 mod load;
 
 use bullet_domain::schema_bundle::PolicySnapshotV1;
@@ -17,17 +23,23 @@ use bullet_harness_core::launch_grant::{
 };
 use bullet_harness_core::HarnessError;
 
+pub use live::{
+    validate_policy_at, PolicySchemaVersion, LIVE_ADMISSION_MIN_GENERATION,
+    POLICY_SCHEMA_VERSION_V1ALPHA2,
+};
 pub use load::{load_policy, load_policy_from_environment, POLICY_PATH_ENV};
 
-/// Frozen policy schema version.
+/// Gate 0 policy schema version; also the only version nested records and
+/// issuer keys may carry.
 pub const POLICY_SCHEMA_VERSION: &str = "v1alpha1";
-/// The exact policy field that refuses live admission in v1alpha1.
+/// The exact policy field that gates live admission.
 pub const LIVE_ADMISSION_FIELD: &str = "sandbox_policy.live_admission_enabled";
 
 /// A validated policy snapshot plus the digest of its exact bytes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedPolicy {
     snapshot: PolicySnapshotV1,
+    schema: PolicySchemaVersion,
     digest: String,
 }
 
@@ -39,19 +51,24 @@ impl LoadedPolicy {
     /// `POLICY_INVALID` whose reason starts with the bullet-wire code
     /// (`UNSUPPORTED_POLICY_SCHEMA`, `INVALID_POLICY_WINDOW`,
     /// `INVALID_ISSUER_KEY_LIFECYCLE`, `INVALID_AUTHORITY_PUBLIC_KEY`,
-    /// `INVALID_RELEASE_PUBLIC_KEY`, `INVALID_KEY_USE`, `UNSAFE_POLICY`, or
-    /// `NON_CANONICAL_POLICY`).
+    /// `INVALID_RELEASE_PUBLIC_KEY`, `INVALID_KEY_USE`, `UNSAFE_POLICY`,
+    /// `LIVE_ADMISSION_REQUIRES_GENERATION`,
+    /// `LIVE_ADMISSION_REQUIRES_RUNNER_KEY`, or `NON_CANONICAL_POLICY`).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, HarnessError> {
         let snapshot: PolicySnapshotV1 = decode_canonical(bytes).map_err(|error| {
             invalid(
                 "NON_CANONICAL_POLICY",
-                &format!("policy.json must be canonical RFC 8785 v1alpha1 bytes: {error}"),
+                &format!("policy.json must be canonical RFC 8785 bytes: {error}"),
             )
         })?;
-        validate_policy(&snapshot)?;
+        let schema = validate_policy(&snapshot)?;
         let digest = policy_snapshot_digest(bytes)
             .map_err(|error| invalid("NON_CANONICAL_POLICY", &error.to_string()))?;
-        Ok(Self { snapshot, digest })
+        Ok(Self {
+            snapshot,
+            schema,
+            digest,
+        })
     }
 
     /// The validated snapshot.
@@ -70,6 +87,12 @@ impl LoadedPolicy {
     #[must_use]
     pub fn generation(&self) -> u64 {
         self.snapshot.policy_generation
+    }
+
+    /// The accepted snapshot schema version.
+    #[must_use]
+    pub fn schema(&self) -> PolicySchemaVersion {
+        self.schema
     }
 
     /// Whether the loaded policy permits live provider admission at all.
@@ -103,6 +126,19 @@ impl LoadedPolicy {
         })
     }
 
+    /// The time-bound checks of bullet-wire `validate_at` at `now_unix_ms`
+    /// (the structural half already ran in [`LoadedPolicy::from_bytes`]).
+    ///
+    /// # Errors
+    ///
+    /// `POLICY_INVALID` (`POLICY_NOT_ACTIVE`) outside the policy window;
+    /// `POLICY_INVALID` (`LIVE_ADMISSION_REQUIRES_RUNNER_KEY`) when live
+    /// admission is enabled and no qualifying provider-runner key is active
+    /// at the instant.
+    pub fn validate_at(&self, now_unix_ms: u64) -> Result<(), HarnessError> {
+        live::require_active_at(&self.snapshot, now_unix_ms)
+    }
+
     /// Resolve the verification key for `(issuer, key_id)` admitted for
     /// `audience` at `now_unix_ms`.
     ///
@@ -122,35 +158,15 @@ impl LoadedPolicy {
     }
 }
 
-#[cfg(any(test, feature = "test-seams"))]
-impl LoadedPolicy {
-    /// TEST-ONLY seam: construct a validated policy directly from a snapshot,
-    /// bypassing the v1alpha1 loader. The production loader
-    /// ([`LoadedPolicy::from_bytes`]) is unchanged and still rejects any
-    /// snapshot that enables live admission (`UNSAFE_POLICY`); this seam exists
-    /// solely so tests can drive the positive live-conformance path without an
-    /// operator-ratified policy generation. It is compiled only under `test` or
-    /// the `test-seams` feature and is never used by the CLI.
-    ///
-    /// # Errors
-    ///
-    /// `POLICY_INVALID` when the snapshot cannot be canonically encoded.
-    pub fn from_snapshot_for_tests(snapshot: PolicySnapshotV1) -> Result<Self, HarnessError> {
-        let bytes = bullet_harness_core::launch_grant::canonical_json(&snapshot)
-            .map_err(|error| invalid("NON_CANONICAL_POLICY", &error.to_string()))?;
-        let digest = policy_snapshot_digest(&bytes)
-            .map_err(|error| invalid("NON_CANONICAL_POLICY", &error.to_string()))?;
-        Ok(Self { snapshot, digest })
-    }
-}
-
-/// Validate a decoded snapshot with the bullet-wire rules.
+/// Validate a decoded snapshot with the bullet-wire rules and return its
+/// schema version. The conservatism set is checked before the live-admission
+/// rule, so no v1alpha2 policy can trade one for the other.
 ///
 /// # Errors
 ///
 /// `POLICY_INVALID` with the bullet-wire code as the reason prefix.
-pub fn validate_policy(policy: &PolicySnapshotV1) -> Result<(), HarnessError> {
-    require_v1alpha1(&policy.schema_version, "PolicySnapshotV1")?;
+pub fn validate_policy(policy: &PolicySnapshotV1) -> Result<PolicySchemaVersion, HarnessError> {
+    let schema = PolicySchemaVersion::parse(&policy.schema_version)?;
     if policy.policy_generation == 0
         || policy.policy_generation > MAX_SAFE_INTEGER
         || policy.activation_at_unix_ms >= policy.expires_at_unix_ms
@@ -191,7 +207,6 @@ pub fn validate_policy(policy: &PolicySnapshotV1) -> Result<(), HarnessError> {
     keys::validate_issuer_keys(&policy.issuer_keys)?;
     if policy.budget_policy.maximum_lease_ttl_seconds > 15
         || policy.budget_policy.unknown_quota_is_headroom
-        || policy.sandbox_policy.live_admission_enabled
         || policy.sandbox_policy.arbitrary_shell_gates
         || policy.evidence_policy.author_evidence_is_independent
         || policy.evidence_policy.unknown_satisfies_gate
@@ -199,22 +214,41 @@ pub fn validate_policy(policy: &PolicySnapshotV1) -> Result<(), HarnessError> {
         || policy.route_policy.universal_incumbent != "T0"
         || policy.route_policy.evolutionary_authority
     {
-        return Err(invalid(
-            "UNSAFE_POLICY",
-            "v1alpha1 Gate 0 policy must remain offline, conservative, and T0-anchored",
-        ));
+        return Err(unsafe_policy(schema));
     }
-    Ok(())
+    if !policy.sandbox_policy.live_admission_enabled {
+        return Ok(schema);
+    }
+    match schema {
+        PolicySchemaVersion::V1Alpha1 => Err(unsafe_policy(schema)),
+        PolicySchemaVersion::V1Alpha2 => live::validate_live_admission(policy).map(|()| schema),
+    }
+}
+
+fn unsafe_policy(schema: PolicySchemaVersion) -> HarnessError {
+    let reason = match schema {
+        PolicySchemaVersion::V1Alpha1 => {
+            "v1alpha1 Gate 0 policy must remain offline, conservative, and T0-anchored"
+        }
+        PolicySchemaVersion::V1Alpha2 => {
+            "v1alpha2 policy must remain conservative, T0-anchored, and without evolutionary authority"
+        }
+    };
+    invalid("UNSAFE_POLICY", reason)
 }
 
 fn require_v1alpha1(actual: &str, kind: &str) -> Result<(), HarnessError> {
     if actual != POLICY_SCHEMA_VERSION {
-        return Err(invalid(
-            "UNSUPPORTED_POLICY_SCHEMA",
-            &format!("{kind} schema {actual:?} is unsupported"),
-        ));
+        return Err(unsupported_schema(actual, kind));
     }
     Ok(())
+}
+
+fn unsupported_schema(actual: &str, kind: &str) -> HarnessError {
+    invalid(
+        "UNSUPPORTED_POLICY_SCHEMA",
+        &format!("{kind} schema {actual:?} is unsupported"),
+    )
 }
 
 pub(crate) fn invalid(code: &str, message: &str) -> HarnessError {
