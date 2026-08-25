@@ -67,9 +67,11 @@ protocol subjects and accept a `PatchProposal` only from exact structured
 terminal output with ordered admitted `gate_ids`; free text is never authority,
 and a proposal is not Evidence. Their feature-gated tests are non-ignored refusal
 contracts, not live smokes or runtime conformance. Installed-version and schema
-observations only freeze test inputs. Strict duplicate-key JSON, signed admission,
-credential and egress containment, transport supervision, and live receipts
-remain absent.
+observations only freeze test inputs. All raw provider frames use strict recursive
+decoding that rejects decoded-equivalent duplicate object keys and trailing data;
+Codex applies it again to its inner proposal text. RFC 8785 byte/numeric-lexeme
+identity, signed admission, credential and egress containment, transport
+supervision, and live receipts remain absent.
 
 The argv boundary additionally enforces the kill switch, worktree/tmux deny
 list, exact admitted executable, and default refusal of live provider programs.
