@@ -26,6 +26,18 @@ if [[ "$resolved" != "$BULLET_GITD_BIN" ]]; then
   refuse BULLET_GITD_BIN_NOT_CANONICAL "expected $resolved"
   exit 1
 fi
+if [[ ! "${BULLET_GITD_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then
+  refuse BULLET_GITD_SHA256_REQUIRED "set BULLET_GITD_SHA256 to the Hub-built daemon digest"
+  exit 1
+fi
+if [[ "$(sha256_file "$BULLET_GITD_BIN")" != "$BULLET_GITD_SHA256" ]]; then
+  refuse BULLET_GITD_DIGEST_MISMATCH before-family
+  exit 1
+fi
 export BULLET_GITD_BIN
 run_partition_tests family family "$EXPECTED_FAMILY_TESTS" "$FAMILY_FILTER"
+if [[ "$(sha256_file "$BULLET_GITD_BIN")" != "$BULLET_GITD_SHA256" ]]; then
+  refuse BULLET_GITD_DIGEST_MISMATCH after-family
+  exit 1
+fi
 log "family lane passed with BULLET_GITD_BIN=$BULLET_GITD_BIN"

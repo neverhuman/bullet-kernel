@@ -13,17 +13,28 @@ that aggregator fail.
 
 | Partition | Selected | Meaning |
 | --- | ---: | --- |
-| standalone | 496 | all tests except provider-contract/simulation and family tests; 493 execute and three reviewed live-egress tests remain ignored |
+| standalone | 503 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped |
+| egress | 3 | the exact host-dependent namespace/nftables/CONNECT-proxy identities; only the capability-admitted `egress` lane executes them |
 | contract | 34 | four offline provider protocol binaries plus `bullet-test-simulation` |
-| family | 4 | `heartbeat_stale`, `kill_retry`, `loop_sim`, and `synthetic_e2e` |
-| total | 534 | complete nextest inventory, including ignored tests |
+| family | 9 | five `transaction_demo` identities plus `heartbeat_stale`, `kill_retry`, `loop_sim`, and `synthetic_e2e` |
+| total | 549 | exact union of the four disjoint partitions above |
 
-`ops/ci/inventory-test.sh` independently lists all four sets, requires every
-set to be nonzero, checks pairwise disjointness and exact union, digest-binds
-all identities, locks the four family and three ignored test identities, and
+`ops/ci/inventory-test.sh` independently lists all four partitions, requires
+every set to be nonzero, checks pairwise disjointness and exact union,
+digest-binds all identities, locks the nine family and three egress identities, and
 scans test sources for every `bullet-gitd` resolution site. A new, removed,
 renamed, ignored, or silently reclassified test makes `lint` fail until the
 inventory is reviewed.
+
+`bash scripts/ci-local.sh egress` performs host admission, then runs exactly:
+
+```bash
+cargo nextest run --locked --workspace --run-ignored all --no-tests fail -E "$EGRESS_FILTER"
+```
+
+`EGRESS_FILTER` is the three-name expression digest-bound in
+`ops/ci/inventory.sh`. Missing tools or unavailable unprivileged namespaces
+produce typed neutral 78; green means all three selected probes actually ran.
 
 `fast`, `contract`, and coverage export a checked nonexistent absolute
 `BULLET_GITD_BIN` sentinel. That overrides the product's canonical-family
@@ -32,11 +43,13 @@ finding a sibling repository. The family lane is separate and fail-closed:
 
 ```bash
 BULLET_GITD_BIN=/canonical/absolute/path/to/bullet-gitd \
+BULLET_GITD_SHA256=<lowercase-sha256> \
   bash scripts/ci-local.sh family
 ```
 
-The path must already be canonical, name a regular executable, and exist. The
-lane never falls back to `../bullet-git/target/...`. Family CI remains blocked
+The path must already be canonical, name a regular executable, and exist. Its
+bytes must match the supplied digest immediately before and after the family
+partition. The lane never falls back to `../bullet-git/target/...`. Family CI remains blocked
 until the Hub can provision immutable authenticated repository subjects and
 pass the exact daemon path.
 
@@ -44,7 +57,7 @@ pass the exact daemon path.
 
 | Lane | Scope |
 | --- | --- |
-| `fast` | standalone nextest partition only |
+| `fast` | exactly 503 standalone nextest identities, all executed with zero skipped |
 | `lint` | rustfmt, all-target Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow policy, inventory/observation/nightly meta-tests |
 | `contract` | exactly 34 offline provider-contract and simulation tests |
 | `security` | current-tree gitleaks 8.21.2; full cargo-deny 0.19.8 advisories/bans/licenses/sources with independently proved RustSec freshness; zizmor 1.25.2 |

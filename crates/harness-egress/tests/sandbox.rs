@@ -3,8 +3,10 @@
 //!
 //! These tests need `unshare`, `nsenter`, `slirp4netns`, `nft`, `curl`,
 //! `cat`, `kill`, and unprivileged user namespaces, so they are `#[ignore]`d
-//! in the plain workspace run and executed by `ops/ci/egress.sh` with
-//! `-- --ignored`. They fail loudly (never skip-green) when a tool is missing.
+//! in the plain workspace run. `ops/ci/egress.sh` admits host capabilities and
+//! executes their exact three-name filter with `cargo nextest run --locked
+//! --workspace --run-ignored all --no-tests fail -E "$EGRESS_FILTER"`.
+//! Unavailable capability is typed neutral 78; green means all three ran.
 //! Only `curl`/`sh`/`sleep` run inside the namespace; no provider CLI.
 
 use bullet_harness_egress::{
