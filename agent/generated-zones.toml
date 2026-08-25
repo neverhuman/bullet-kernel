@@ -23,6 +23,22 @@ read_only = true
 write_policy = "generator_only"
 
 [[zone]]
+path = "crates/application/tests/fixtures/policy-v1alpha1.json"
+source = "bullet-farm:policy/v1alpha1/policy.json"
+command = "bash ../bullet-farm/scripts/sync-family-contracts.sh"
+owner = "application"
+read_only = true
+write_policy = "generator_only"
+
+[[zone]]
+path = "crates/application/tests/fixtures/policy-v1alpha2-live-enabled.json"
+source = "bullet-farm:crates/bullet-wire/tests/fixtures/policy-v1alpha2-live-enabled.json"
+command = "bash ../bullet-farm/scripts/sync-family-contracts.sh"
+owner = "application"
+read_only = true
+write_policy = "generator_only"
+
+[[zone]]
 path = "crates/adapters/tests/fixtures/formal/"
 source = "bullet-farm:formal/traces"
 command = "bash ../bullet-farm/scripts/sync-family-contracts.sh"
