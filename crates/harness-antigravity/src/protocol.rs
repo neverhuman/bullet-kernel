@@ -2,10 +2,9 @@
 //!
 //! Installed-runtime help and embedded 1.1.19 strings were observed read-only.
 //! They establish the argv features and `structured_output` field used here,
-//! but are not executable admission or live conformance. Locked
-//! `serde_json::Value` decoding overwrites duplicate object keys; strict
-//! duplicate-key-safe JSON and RFC 8785 parsing are explicitly unsupported and
-//! keep production dispatch blocked.
+//! but are not executable admission or live conformance. Raw results use the
+//! shared recursive duplicate-key-rejecting decoder, but are not RFC 8785
+//! canonicalized. Production dispatch remains blocked.
 
 use bullet_domain::{Digest, ProfileId};
 use bullet_harness_core::{

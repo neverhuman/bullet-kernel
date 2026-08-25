@@ -6,7 +6,9 @@ use crate::protocol::{
     ClaudeStreamTranscript, Phase, MAX_ASSISTANT_CONTENT_ITEMS, MAX_ASSISTANT_MESSAGES,
     MAX_STREAM_JSON_FRAMES, MAX_STREAM_JSON_FRAME_BYTES,
 };
-use bullet_harness_core::{AgentEvent, AgentEventKind, HarnessError, PatchProposal};
+use bullet_harness_core::{
+    decode_strict_json, AgentEvent, AgentEventKind, HarnessError, PatchProposal,
+};
 use serde_json::{json, Map, Value};
 
 impl ClaudeStreamTranscript {
@@ -36,7 +38,7 @@ impl ClaudeStreamTranscript {
         if self.inbound_frames > MAX_STREAM_JSON_FRAMES {
             return self.fail("stream-JSON transcript frame limit exceeded");
         }
-        let value: Value = match serde_json::from_str(line) {
+        let value: Value = match decode_strict_json(line) {
             Ok(value) => value,
             Err(error) => return self.fail(format!("malformed stream-JSON: {error}")),
         };

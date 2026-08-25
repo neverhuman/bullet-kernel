@@ -4,7 +4,9 @@ use crate::protocol::{
     exact_fields, protocol, AgyHeadlessBinding, AgyHeadlessOutcome, AgyHeadlessTranscript, Phase,
     MAX_OUTPUT_FRAME_BYTES,
 };
-use bullet_harness_core::{AgentEvent, AgentEventKind, HarnessError, NativeMeta, PatchProposal};
+use bullet_harness_core::{
+    decode_strict_json, AgentEvent, AgentEventKind, HarnessError, NativeMeta, PatchProposal,
+};
 use serde_json::{json, Value};
 
 impl AgyHeadlessTranscript {
@@ -42,7 +44,7 @@ impl AgyHeadlessTranscript {
         {
             return Err(protocol("invalid one-line JSON result boundary"));
         }
-        let value: Value = serde_json::from_str(line)
+        let value: Value = decode_strict_json(line)
             .map_err(|error| protocol(format!("malformed JSON result: {error}")))?;
         let object = value
             .as_object()

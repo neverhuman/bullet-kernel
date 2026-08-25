@@ -314,6 +314,11 @@ fn free_text_smuggling_gate_mutation_unknown_fields_and_replay_fail_closed() {
             "response": "untrusted",
         }))
         .expect("JSON"),
+        result_line(proposal()).replacen(
+            r#""gate_ids":["repo.gate.v1"]"#,
+            r#""gate_ids":["different.gate"],"gate_ids":["repo.gate.v1"]"#,
+            1,
+        ),
         result_line(wrong_gates),
     ];
     for raw in cases {

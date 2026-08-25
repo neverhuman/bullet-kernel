@@ -180,6 +180,7 @@ fn malformed_wrong_duplicate_and_late_frames_poison_the_transcript() {
         "[]",
         "{\"id\":1}",
         "{\"method\":1,\"params\":{}}",
+        r#"{"id":1,"result":{"codexHome":"/x","platformFamily":"unix","platformOs":"bad","platformOs":"linux","userAgent":"codex-test"}}"#,
     ] {
         let mut machine = machine();
         machine.initialize_request().unwrap();
@@ -343,6 +344,7 @@ fn proposal_and_gate_mismatches_never_complete() {
         "not-json",
         r#"{"intent_summary":"x","changes":[],"gate_ids":["cargo test"],"claims":[],"uncertainties":[],"done":true}"#,
         r#"{"intent_summary":"x","changes":[],"gate_ids":["other.gate"],"claims":[],"uncertainties":[],"done":true}"#,
+        r#"{"intent_summary":"x","changes":[],"gate_ids":["other.gate"],"gate_ids":["repo.gate.v1"],"claims":[],"uncertainties":[],"done":true}"#,
     ] {
         let mut machine = machine();
         establish(&mut machine);

@@ -309,6 +309,19 @@ fn malformed_duplicate_wrong_subject_and_late_frames_poison_permanently() {
     let mut oversized = machine();
     assert!(oversized.ingest_line(&"x".repeat(1024 * 1024 + 1)).is_err());
 
+    let mut nested = machine();
+    establish(&mut nested);
+    nested
+        .ingest_line(&line(assistant_event(ASSISTANT_EVENT, "done")))
+        .unwrap();
+    let terminal = line(success_result(RESULT_EVENT, proposal())).replacen(
+        r#""gate_ids":["repo.gate.v1"]"#,
+        r#""gate_ids":["other.gate"],"gate_ids":["repo.gate.v1"]"#,
+        1,
+    );
+    assert!(nested.ingest_line(&terminal).is_err());
+    assert!(nested.ingest_line("{}").is_err());
+
     let mut duplicate = machine();
     establish(&mut duplicate);
     let assistant = line(assistant_event(ASSISTANT_EVENT, "x"));

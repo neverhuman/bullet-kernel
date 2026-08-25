@@ -1,7 +1,7 @@
 //! Pure stable Codex App Server JSONL request/state boundary.
 use bullet_harness_core::{
-    proposal::validate_gate_ids, AgentEvent, AgentEventKind, AgentSessionId, EventNormalizer,
-    HarnessError, InvocationId, NativeMeta, PatchProposal,
+    decode_strict_json, proposal::validate_gate_ids, AgentEvent, AgentEventKind, AgentSessionId,
+    EventNormalizer, HarnessError, InvocationId, NativeMeta, PatchProposal,
 };
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -296,7 +296,11 @@ impl CodexAppServerTranscript {
         if !self.terminal_items_match(params, &item_id, &text) {
             return self.fail("terminal items differ from completed item set");
         }
-        let proposal = match PatchProposal::parse_json(&text) {
+        let proposal_value = match decode_strict_json(&text) {
+            Ok(value) => value,
+            Err(_) => return self.fail("proposal refused: malformed or duplicate-key JSON"),
+        };
+        let proposal = match PatchProposal::from_value(&proposal_value) {
             Ok(proposal) => proposal,
             Err(error) => return self.fail(format!("proposal refused: {}", error.reason_code())),
         };
@@ -396,7 +400,7 @@ pub(super) fn parse_frame(line: &str) -> Result<Frame, String> {
     {
         return Err("malformed or oversized JSONL frame".into());
     }
-    let value: Value = serde_json::from_str(line).map_err(|_| "malformed JSON")?;
+    let value: Value = decode_strict_json(line).map_err(|_| "malformed or duplicate-key JSON")?;
     let object = value.as_object().ok_or("JSONL frame must be an object")?;
     if object.contains_key("jsonrpc") {
         return Err("stable App Server frames omit jsonrpc".into());

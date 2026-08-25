@@ -287,6 +287,17 @@ fn malformed_unknown_duplicate_conflicting_and_late_frames_poison() {
         assert!(machine.ingest_line(&valid).is_err());
     }
 
+    let mut nested = machine();
+    nested.initialize_request().unwrap();
+    let valid = line(json!({"jsonrpc": "2.0", "id": 1, "result": initialize_result()}));
+    let duplicate = valid.replacen(
+        r#""readOnly":true"#,
+        r#""readOnly":false,"readOnly":true"#,
+        1,
+    );
+    assert!(nested.ingest_line(&duplicate).is_err());
+    assert!(nested.ingest_line(&valid).is_err());
+
     let mut malformed_capability = machine();
     malformed_capability.initialize_request().unwrap();
     let mut init = initialize_result();

@@ -1,8 +1,7 @@
 //! Pure, bounded Cursor ACP v1 JSONL transcript state machine.
 //!
-//! `serde_json::Value` uses last-key-wins object decoding. Duplicate-key-safe
-//! recursive decoding is therefore a production admission blocker; the public
-//! adapter remains blocked and this offline subset makes no contrary claim.
+//! Raw frames use the shared recursive duplicate-key-rejecting decoder. This
+//! is ordinary JSON validation, not RFC 8785 canonicalization or live admission.
 
 use crate::protocol::{
     bounded_string, exact_fields, object, protocol, valid_cwd, valid_native_id,
@@ -10,8 +9,8 @@ use crate::protocol::{
     validate_capabilities,
 };
 use bullet_harness_core::{
-    proposal::validate_gate_ids, AgentEvent, AgentEventKind, AgentSessionId, EventNormalizer,
-    HarnessError, InvocationId, PatchProposal,
+    decode_strict_json, proposal::validate_gate_ids, AgentEvent, AgentEventKind, AgentSessionId,
+    EventNormalizer, HarnessError, InvocationId, PatchProposal,
 };
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -232,7 +231,7 @@ impl CursorAcpTranscript {
         {
             return self.fail("inbound frame/count or JSONL delimiter limit exceeded");
         }
-        let value: Value = match serde_json::from_str(line) {
+        let value: Value = match decode_strict_json(line) {
             Ok(value) => value,
             Err(error) => return self.fail(format!("malformed JSON-RPC frame: {error}")),
         };
