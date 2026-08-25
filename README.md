@@ -3,6 +3,7 @@
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
 Product-surface claims were last reviewed 2026-08-25 against `ca380bc`; the CI
 lane and test-inventory section was reviewed against product subject `107c5cd`.
+<!-- bullet-doc-review:v1 subject=ca380bc4ffd44909fc2644589fdedc81c44f5d28 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,crates/runner/src/lib.rs,crates/verifier/src/lib.rs -->
 Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.

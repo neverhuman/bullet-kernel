@@ -3,6 +3,7 @@
 Last reviewed: 2026-08-25 against HEAD `ca380bc`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
+<!-- bullet-doc-review:v1 subject=ca380bc4ffd44909fc2644589fdedc81c44f5d28 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs -->
 
 ## Ledger core
 

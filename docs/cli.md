@@ -5,6 +5,7 @@ Owner: Bullet Farm maintainers
 Last reviewed: 2026-08-25
 Source of truth: `apps/bullet/src/{main,authority,provider,maintenance,contracts}.rs`,
 `apps/bullet/src/authority/mint.rs`
+<!-- bullet-doc-review:v1 subject=ca380bc4ffd44909fc2644589fdedc81c44f5d28 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs -->
 
 Every command is offline except `provider live-conformance`, which can spawn a
 provider only after the policy, key, lease, admission, grant, and egress steps
