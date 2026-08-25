@@ -1,7 +1,7 @@
 //! Test-only Runner orchestration after a simulated private clone.
 
 use super::harness::ScriptedSim;
-use super::{SimWorkspace, build_origin, proposal, seeded_ledger};
+use super::{build_origin, proposal, seeded_ledger, SimWorkspace};
 use crate::journal::JournalSink;
 use crate::{DirectLeaseClient, HeartbeatConfig, LeaseClient, MemoryJournal, MonotonicClock};
 use bullet_application::{Ledger, MemoryLedger};
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::super::{AttemptConfig, run_cloned_attempt};
+use super::super::{run_cloned_attempt, AttemptConfig};
 
 type SharedLedger = Arc<Mutex<MemoryLedger>>;
 type TestClient = Arc<DirectLeaseClient<MemoryLedger>>;
@@ -252,12 +252,10 @@ fn assert_failed_and_requeued(
         .expect("attempt read")
         .expect("attempt row");
     assert_eq!(attempt.state, AttemptState::Failed);
-    assert!(
-        ledger
-            .get_lease(&attempt.variant_id)
-            .expect("lease read")
-            .is_none()
-    );
+    assert!(ledger
+        .get_lease(&attempt.variant_id)
+        .expect("lease read")
+        .is_none());
     assert_eq!(ledger.ready_rows().expect("ready rows").len(), 1);
     assert!(journal.stages().contains(&"released".to_string()));
 }
@@ -284,11 +282,9 @@ async fn provider_start_failure_aborts_heartbeat_and_releases_lease() {
 
     assert_eq!(error.reason_code(), "PROTOCOL_ERROR");
     assert!(!adapter.was_terminated(), "no session existed to terminate");
-    assert!(
-        journal
-            .stages()
-            .contains(&"session_start_refused".to_string())
-    );
+    assert!(journal
+        .stages()
+        .contains(&"session_start_refused".to_string()));
     assert_failed_and_requeued(&ledger, &grant.attempt.id, journal.as_ref());
 }
 
@@ -372,12 +368,10 @@ fn assert_salvaged_without_apply(fixture: &FrozenFixture) {
         .expect("attempt read")
         .expect("attempt row");
     assert_eq!(attempt.state, AttemptState::Crashed);
-    assert!(
-        ledger
-            .get_lease(&attempt.variant_id)
-            .expect("lease read")
-            .is_none()
-    );
+    assert!(ledger
+        .get_lease(&attempt.variant_id)
+        .expect("lease read")
+        .is_none());
     assert_eq!(ledger.ready_rows().expect("ready rows").len(), 1);
 }
 

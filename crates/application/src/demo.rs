@@ -1,9 +1,9 @@
 //! Component-only ledger demonstration. It proves replay and fencing without
 //! fabricating a Candidate, Evidence, Effect, or transaction receipt.
 
-use crate::graph_delta::{GraphDelta, GraphOp, apply_graph_delta, graph_digest};
+use crate::graph_delta::{apply_graph_delta, graph_digest, GraphDelta, GraphOp};
 use crate::leases::LeaseService;
-use crate::materializer::{PlanInput, materialize_plan};
+use crate::materializer::{materialize_plan, PlanInput};
 use crate::records::StoredGraph;
 use crate::simulators::ProviderSimulator;
 use crate::store::{Ledger, LedgerError, ProjectionReader};

@@ -4,15 +4,15 @@
 //! typed 500 problems rather than shorter lists.
 
 use bullet_adapters::SqliteLedger;
-use bullet_application::{LeaseService, PlanInput, materialize_plan, run_demo};
+use bullet_application::{materialize_plan, run_demo, LeaseService, PlanInput};
 use bullet_domain::{Digest, TaskClass};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{Duration, timeout};
+use tokio::time::{timeout, Duration};
 
 const ROUTES: [&str; 6] = [
     "/api/v1/fleet",
@@ -163,11 +163,9 @@ async fn empty_database_projects_zero_rows_at_watermark_zero_on_every_route() {
     }
     let states = labels(&rail["intent_state_counts"]);
     assert_eq!(states.len(), 13);
-    assert!(
-        states
-            .iter()
-            .any(|(label, count)| label == "OUTCOME_UNKNOWN" && *count == 0)
-    );
+    assert!(states
+        .iter()
+        .any(|(label, count)| label == "OUTCOME_UNKNOWN" && *count == 0));
 
     let (lab, as_of) = snapshot(addr, "/api/v1/quality-lab").await;
     assert_eq!(as_of, 0);
@@ -216,11 +214,9 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
     assert!(attempts.len() >= 2);
     assert!(attempts.iter().all(|row| row["lease"] == "none"));
     assert!(attempts.iter().any(|row| row["state"] == "superseded"));
-    assert!(
-        attempts
-            .iter()
-            .all(|row| row["mission_id"] == receipt["mission_id"])
-    );
+    assert!(attempts
+        .iter()
+        .all(|row| row["mission_id"] == receipt["mission_id"]));
     let total: u64 = labels(&sessions["state_counts"])
         .iter()
         .map(|(_, count)| count)
@@ -245,22 +241,18 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
         events.last().map(|e| e["seq"].clone()),
         Some(Value::from(as_of))
     );
-    assert!(
-        events
-            .iter()
-            .any(|e| e["kind"] == "demo_stale_authority_refused")
-    );
+    assert!(events
+        .iter()
+        .any(|e| e["kind"] == "demo_stale_authority_refused"));
     assert!(events.iter().all(|e| {
         !matches!(
             e["kind"].as_str(),
             Some("candidate_prepared" | "evidence_attached" | "effect_receipt")
         )
     }));
-    assert!(
-        events
-            .iter()
-            .all(|e| e["id"].as_str().is_some_and(|id| id.len() == 64))
-    );
+    assert!(events
+        .iter()
+        .all(|e| e["id"].as_str().is_some_and(|id| id.len() == 64)));
 }
 
 #[tokio::test]

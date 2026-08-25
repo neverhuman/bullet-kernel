@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use bullet_adapters::SqliteLedger;
-use bullet_application::{Ledger, LedgerError, LedgerEvent, OutboxItem, derive_receipt};
+use bullet_application::{derive_receipt, Ledger, LedgerError, LedgerEvent, OutboxItem};
 use bullet_domain::{Digest, Mission, MissionId};
 use chrono::{DateTime, Utc};
 use futures_util::stream::Stream;

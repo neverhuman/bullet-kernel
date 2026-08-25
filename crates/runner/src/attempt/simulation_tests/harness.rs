@@ -10,8 +10,8 @@ use bullet_harness_sim::SimAdapter;
 use futures::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 pub(super) struct ScriptedSim {

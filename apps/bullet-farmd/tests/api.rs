@@ -3,13 +3,13 @@
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
 use bullet_domain::Digest;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{Duration, timeout};
+use tokio::time::{timeout, Duration};
 
 async fn start(db: &Path) -> SocketAddr {
     let app = bullet_farmd::api::router(db).expect("router");
@@ -501,12 +501,10 @@ async fn problem_details_cover_400_404_and_500() {
     let problem = json_body(&body);
     assert_eq!(problem["code"], "STORE_FAILURE");
     assert_eq!(problem["retryable"], true);
-    assert!(
-        problem["correlation_id"]
-            .as_str()
-            .expect("corr")
-            .starts_with("corr_")
-    );
+    assert!(problem["correlation_id"]
+        .as_str()
+        .expect("corr")
+        .starts_with("corr_"));
     assert!(
         !body.contains("expected value"),
         "raw parser detail must not leak"

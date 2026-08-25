@@ -3,8 +3,8 @@
 
 use bullet_application::store::ProjectionReader;
 use bullet_application::{
-    EffectIntentRecord, EffectReceiptRecord, EffectState, LeaseService, Ledger, MemoryLedger,
-    PlanInput, ReceiptVerdict, ZERO_OID, materialize_plan, run_demo,
+    materialize_plan, run_demo, EffectIntentRecord, EffectReceiptRecord, EffectState, LeaseService,
+    Ledger, MemoryLedger, PlanInput, ReceiptVerdict, ZERO_OID,
 };
 use bullet_domain::{
     AttemptId, AttemptState, Candidate, CandidateId, Digest, EffectId, EffectReceiptId, TaskClass,

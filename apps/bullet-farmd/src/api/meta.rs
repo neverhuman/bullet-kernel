@@ -2,9 +2,9 @@
 
 use crate::api::SharedState;
 use crate::errors::ApiError;
-use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
+use axum::Json;
 use serde::Serialize;
 
 const OPENAPI: &str = include_str!("../../../../contracts/openapi.yaml");

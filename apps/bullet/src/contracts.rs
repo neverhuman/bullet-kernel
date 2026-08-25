@@ -1,7 +1,7 @@
 //! Deterministic TypeScript generation from `contracts/openapi.yaml`.
 //! The YAML is the source of truth; `check` regenerates in memory and diffs.
 
-use serde_json::{Map as JsonMap, Value as JsonValue, json};
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -392,11 +392,9 @@ mod tests {
             assert!(bundle.pointer(&format!("/$defs/{root}")).is_some());
         }
         assert!(bundle.pointer("/$defs/DemoReceipt").is_none());
-        assert!(
-            !serde_json::to_string(&bundle)
-                .expect("serialize bundle")
-                .contains(COMPONENT_REF_PREFIX)
-        );
+        assert!(!serde_json::to_string(&bundle)
+            .expect("serialize bundle")
+            .contains(COMPONENT_REF_PREFIX));
         assert!(component_name("https://example.invalid/schema").is_err());
         assert!(component_name("#/components/schemas/").is_err());
         assert!(component_name("#/components/schemas/Mission/id").is_err());

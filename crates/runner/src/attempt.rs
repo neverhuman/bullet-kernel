@@ -10,12 +10,12 @@ mod workspace;
 use crate::capsule::Capsule;
 use crate::clock::Clock;
 use crate::error::RunnerError;
-use crate::gate::{GateRegistry, GateReport, run_gate};
+use crate::gate::{run_gate, GateRegistry, GateReport};
 use crate::gitd::{
     CandidateBindings, CandidateReceipt, CheckpointBinding, GitdSession, PrepareCandidateRequest,
     SuccessorResume, WorkspaceInfo,
 };
-use crate::heartbeat::{HeartbeatConfig, HeartbeatHandle, start_heartbeat};
+use crate::heartbeat::{start_heartbeat, HeartbeatConfig, HeartbeatHandle};
 use crate::journal::JournalSink;
 use crate::lease::{AcquireGrant, AcquireRequest, HeartbeatCall, LeaseClient, ReleaseCall};
 use crate::scope;

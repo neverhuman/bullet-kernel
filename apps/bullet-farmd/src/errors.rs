@@ -2,9 +2,9 @@
 //! are 500s and never leak raw store strings; domain refusals map to stable
 //! reason codes.
 
-use axum::Json;
-use axum::http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
+use axum::http::{header::CONTENT_TYPE, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use bullet_application::LedgerError;
 use bullet_domain::{Digest, DomainError};
 use serde::Serialize;
