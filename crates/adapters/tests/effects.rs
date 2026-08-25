@@ -63,6 +63,14 @@ fn effect_rows_survive_reopen_with_state_and_retries() {
         }
         assert!(ledger.record_effect_receipt(&receipt).expect("receipt"));
     }
+    let raw = rusqlite::Connection::open(&path).expect("raw reopen");
+    let persisted_receipt_id: String = raw
+        .query_row("SELECT id FROM effect_receipts", [], |row| row.get(0))
+        .expect("persisted receipt id");
+    assert_eq!(persisted_receipt_id, receipt.id.as_str());
+    assert!(persisted_receipt_id.starts_with("efr_"));
+    assert_eq!(persisted_receipt_id.len(), 68);
+    drop(raw);
     let mut ledger = SqliteLedger::open(&path).expect("reopen");
     let stored = ledger
         .get_effect_intent_by_id(&intent.id)

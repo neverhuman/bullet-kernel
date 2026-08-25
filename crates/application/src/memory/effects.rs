@@ -119,7 +119,7 @@ impl MemoryLedger {
         self.effect_receipts.push(receipt.clone());
         self.push_event(
             "effect_receipt_recorded",
-            &receipt.id,
+            receipt.id.as_str(),
             Some(receipt.effect_intent_id.to_string()),
             None,
             None,

@@ -1,6 +1,7 @@
 use super::{migration_checksum, Migration, CREATE_METADATA, MIGRATIONS};
 use crate::sqlite::SqliteLedger;
 use bullet_application::LedgerError;
+use bullet_domain::{EffectId, EffectReceiptId};
 use rusqlite::{params, Connection, Error};
 use tempfile::TempDir;
 
@@ -195,9 +196,9 @@ fn altered_name_and_checksum_are_refused() {
 #[test]
 fn partial_future_and_unrecognized_versions_are_refused() {
     for statement in [
-        "DELETE FROM schema_version WHERE version = 8",
-        "INSERT INTO schema_version VALUES (9, 'future.sql', '00', 'future')",
-        "UPDATE schema_version SET version = 99 WHERE version = 8",
+        "DELETE FROM schema_version WHERE version = 9",
+        "INSERT INTO schema_version VALUES (10, 'future.sql', '00', 'future')",
+        "UPDATE schema_version SET version = 99 WHERE version = 9",
     ] {
         let (_directory, path) = database();
         drop(SqliteLedger::open(&path).unwrap());
@@ -213,6 +214,8 @@ fn missing_or_corrupt_identity_contract_is_refused() {
     for statement in [
         "DELETE FROM identity_contract",
         "UPDATE identity_contract SET identity_format = 'legacy-short-ids'",
+        "DELETE FROM effect_receipt_identity_contract",
+        "UPDATE effect_receipt_identity_contract SET identity_format = 'legacy-rcp-ids'",
     ] {
         let (_directory, path) = database();
         drop(SqliteLedger::open(&path).unwrap());
@@ -335,8 +338,8 @@ fn configured_connection_enforces_the_receipt_foreign_key() {
                verification_method, verification_result, adopted_after_unknown, recorded_at
              ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, 0, ?6)",
             params![
-                "receipt_missing_intent",
-                "effect_missing",
+                EffectReceiptId::from_seed("missing-intent-receipt").to_string(),
+                EffectId::from_seed("missing-intent").to_string(),
                 "remote",
                 "read_back",
                 "pass",
@@ -371,8 +374,8 @@ fn preexisting_foreign_key_violation_prevents_reopen() {
            verification_method, verification_result, adopted_after_unknown, recorded_at
          ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, 0, ?6)",
         params![
-            "receipt_missing_intent",
-            "effect_missing",
+            EffectReceiptId::from_seed("orphan-receipt").to_string(),
+            EffectId::from_seed("orphan-intent").to_string(),
             "remote",
             "read_back",
             "pass",

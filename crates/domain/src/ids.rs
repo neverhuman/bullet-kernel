@@ -11,6 +11,10 @@ use std::{
 /// Persisted identity encoding admitted by this Kernel schema.
 pub const IDENTITY_FORMAT_VERSION: &str = "bullet-wire-v1alpha1-blake3-256-lower";
 
+/// Persisted effect-receipt identity encoding admitted by schema 9.
+pub const EFFECT_RECEIPT_IDENTITY_FORMAT_VERSION: &str =
+    "bullet-wire-v1alpha1-effect-receipt-efr-blake3-256-lower";
+
 macro_rules! typed_id {
     ($name:ident, $prefix:literal) => {
         #[doc = concat!("Typed `", $prefix, "` identifier.")]
@@ -102,6 +106,7 @@ typed_id!(WorkspaceId, "wsp");
 typed_id!(CandidateId, "can");
 typed_id!(EvidenceId, "evd");
 typed_id!(EffectId, "efi");
+typed_id!(EffectReceiptId, "efr");
 typed_id!(CommandId, "cmd");
 typed_id!(CognitiveTaskId, "cog");
 typed_id!(ProfileId, "prf");
@@ -131,6 +136,7 @@ mod tests {
             (CandidateId::from_seed("subject").to_string(), "can"),
             (EvidenceId::from_seed("subject").to_string(), "evd"),
             (EffectId::from_seed("subject").to_string(), "efi"),
+            (EffectReceiptId::from_seed("subject").to_string(), "efr"),
             (CommandId::from_seed("subject").to_string(), "cmd"),
             (CognitiveTaskId::from_seed("subject").to_string(), "cog"),
             (ProfileId::from_seed("subject").to_string(), "prf"),
@@ -184,5 +190,26 @@ mod tests {
         assert!(RepositoryId::parse(format!("repo_{}", "a".repeat(64))).is_err());
         assert!(WorkspaceId::parse(format!("wks_{}", "a".repeat(64))).is_err());
         assert!(EffectId::parse(format!("eff_{}", "a".repeat(64))).is_err());
+    }
+
+    #[test]
+    fn effect_receipt_rejects_legacy_uppercase_and_wrong_prefix_subjects() {
+        let valid = EffectReceiptId::from_seed("receipt");
+        assert_eq!(
+            serde_json::from_str::<EffectReceiptId>(
+                &serde_json::to_string(&valid).expect("serialize")
+            )
+            .expect("deserialize"),
+            valid
+        );
+        for raw in [
+            format!("rcp_{}", "a".repeat(32)),
+            format!("efr_{}", "a".repeat(32)),
+            format!("efr_{}", "A".repeat(64)),
+            format!("efi_{}", "a".repeat(64)),
+        ] {
+            assert!(EffectReceiptId::parse(&raw).is_err(), "admitted {raw}");
+            assert!(serde_json::from_value::<EffectReceiptId>(raw.into()).is_err());
+        }
     }
 }

@@ -4,7 +4,7 @@
 //! same key is a typed idempotency conflict.
 
 use crate::effect_state::EffectState;
-use bullet_domain::{AttemptId, Digest, DomainError, EffectId};
+use bullet_domain::{AttemptId, Digest, DomainError, EffectId, EffectReceiptId};
 use serde::{Deserialize, Serialize};
 
 /// The all-zeros git OID: as an expected precondition it means the target
@@ -121,8 +121,8 @@ impl ReceiptVerdict {
 /// One durable effect receipt row (append-only).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectReceiptRecord {
-    /// Identity (`rcp_` + 32 hex).
-    pub id: String,
+    /// Frozen wire identity (`efr_` + 64 lowercase hex).
+    pub id: EffectReceiptId,
     /// Intent the receipt settles or annotates.
     pub effect_intent_id: EffectId,
     /// Remote identity that was read back, e.g. the ref name.
@@ -141,11 +141,8 @@ pub struct EffectReceiptRecord {
 
 /// Deterministic receipt id from a seed.
 #[must_use]
-pub fn receipt_id(seed: &str) -> String {
-    format!(
-        "rcp_{}",
-        &Digest::of(format!("rcp:{seed}").as_bytes()).to_hex()[..32]
-    )
+pub fn receipt_id(seed: &str) -> EffectReceiptId {
+    EffectReceiptId::from_seed(seed)
 }
 
 #[cfg(test)]
@@ -193,8 +190,8 @@ mod tests {
     #[test]
     fn receipt_id_is_prefixed_and_stable() {
         let id = receipt_id("seed-1");
-        assert!(id.starts_with("rcp_"));
-        assert_eq!(id.len(), 4 + 32);
+        assert!(id.as_str().starts_with("efr_"));
+        assert_eq!(id.as_str().len(), 4 + 64);
         assert_eq!(id, receipt_id("seed-1"));
         assert_ne!(id, receipt_id("seed-2"));
     }

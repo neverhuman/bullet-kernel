@@ -6,7 +6,7 @@ use super::{events, store};
 use bullet_application::{
     EffectIntentRecord, EffectReceiptRecord, EffectState, LedgerError, ReceiptVerdict,
 };
-use bullet_domain::{AttemptId, DomainError, EffectId};
+use bullet_domain::{AttemptId, DomainError, EffectId, EffectReceiptId};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 const INTENT_COLUMNS: &str = "id, logical_effect_key, provider, target_identity, \
@@ -287,7 +287,7 @@ fn receipt_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiptRow> {
 fn read_receipt(row: ReceiptRow) -> Result<EffectReceiptRecord, LedgerError> {
     let (id, intent, identity, observed, method, verdict, adopted, recorded) = row;
     Ok(EffectReceiptRecord {
-        id,
+        id: EffectReceiptId::parse(&id)?,
         effect_intent_id: EffectId::parse(&intent)?,
         observed_remote_identity: identity,
         observed_state_hash: observed,
@@ -317,7 +317,7 @@ pub(super) fn record_effect_receipt(
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(id) DO NOTHING",
             params![
-                receipt.id,
+                receipt.id.as_str(),
                 receipt.effect_intent_id.to_string(),
                 receipt.observed_remote_identity,
                 receipt.observed_state_hash,
@@ -332,7 +332,7 @@ pub(super) fn record_effect_receipt(
         events::insert_event(
             &tx,
             "effect_receipt_recorded",
-            &receipt.id,
+            receipt.id.as_str(),
             Some(&receipt.effect_intent_id.to_string()),
             None,
             None,
@@ -343,7 +343,7 @@ pub(super) fn record_effect_receipt(
     let existing = tx
         .query_row(
             &format!("SELECT {RECEIPT_COLUMNS} FROM effect_receipts WHERE id = ?1"),
-            params![receipt.id],
+            params![receipt.id.as_str()],
             receipt_row,
         )
         .map_err(store)

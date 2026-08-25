@@ -2,10 +2,12 @@
 
 use super::store;
 use bullet_application::LedgerError;
-use bullet_domain::{Digest, IDENTITY_FORMAT_VERSION};
+use bullet_domain::Digest;
 use chrono::DateTime;
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, TransactionBehavior};
+
+mod identity;
 
 const CHECKSUM_DOMAIN: &[u8] = b"bullet-kernel.sqlite-migration.v1";
 const CREATE_METADATA: &str = "CREATE TABLE schema_version (
@@ -62,6 +64,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 8,
         name: "0008_identity_contract.sql",
         sql: include_str!("../../../../db/migrations/0008_identity_contract.sql"),
+    },
+    Migration {
+        version: 9,
+        name: "0009_effect_receipt_identity.sql",
+        sql: include_str!("../../../../db/migrations/0009_effect_receipt_identity.sql"),
     },
 ];
 
@@ -136,7 +143,7 @@ pub(super) fn verify_existing(
     verify_applied_migrations(conn)?;
     verify_product_schema(conn)?;
     verify_foreign_key_integrity(conn)?;
-    verify_identity_contract(conn)?;
+    identity::verify(conn)?;
     let state = read_restore_state(conn)?;
     if state.pending_admission && !allow_pending_restore {
         return Err(store(
@@ -145,36 +152,6 @@ pub(super) fn verify_existing(
         ));
     }
     Ok(state)
-}
-
-fn verify_identity_contract(conn: &Connection) -> Result<(), LedgerError> {
-    let mut statement = conn
-        .prepare("SELECT singleton, identity_format FROM identity_contract ORDER BY singleton")
-        .map_err(store)?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, Value>(0)?, row.get::<_, Value>(1)?))
-        })
-        .map_err(store)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(store)?;
-    let [row] = rows.as_slice() else {
-        return Err(unsupported(
-            "identity_contract must contain exactly its singleton row",
-        ));
-    };
-    if exact_integer(&row.0, "identity_contract.singleton")? != 1 {
-        return Err(unsupported("identity_contract singleton is invalid"));
-    }
-    let Value::Text(identity_format) = &row.1 else {
-        return Err(unsupported(
-            "identity_contract format has the wrong SQLite type",
-        ));
-    };
-    if identity_format != IDENTITY_FORMAT_VERSION {
-        return Err(unsupported("persisted identity contract is unrecognized"));
-    }
-    Ok(())
 }
 
 pub(super) fn schema_contract_digest() -> String {
