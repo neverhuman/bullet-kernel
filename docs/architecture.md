@@ -61,7 +61,9 @@ public route (the internal reconciler is deliberately absent from it);
 `--worker-token-file`) atomically settles the command, outbox, and audit
 event, but has no execution/read-back adapter: known demo work becomes only
 `UNKNOWN`, and unsupported kinds only `FAILED`. It cannot emit `APPLIED` or
-`VERIFIED`.
+`VERIFIED`. After worker authentication and identifier validation, an absent
+command returns non-retryable RFC 9457 `404 NOT_FOUND`; durable store or
+corruption failures remain retryable `500 STORE_FAILURE`.
 
 ## Projections
 

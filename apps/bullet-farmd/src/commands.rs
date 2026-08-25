@@ -143,6 +143,9 @@ pub(crate) async fn reconcile(
     let id = CommandId::parse(id)?;
     let now = bullet_application::LeaseService::rfc3339(chrono::Utc::now());
     let mut ledger = state.ledger.lock().await;
+    if ledger.get_command_by_id(&id)?.is_none() {
+        return Err(ApiError::NotFound(format!("command {id}")));
+    }
     let record = ledger.reconcile_offline_command(&id, &now)?;
     Ok(Json(status_view(record)?))
 }

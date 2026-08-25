@@ -407,6 +407,55 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
 }
 
 #[tokio::test]
+async fn missing_command_reconciliation_is_typed_not_found_without_mutation() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let server = start(&directory.path().join("worker.sqlite")).await;
+    let bearer = format!("Bearer {WORKER}");
+    let missing_id = format!("cmd_{}", "f".repeat(64));
+    let missing_path = format!("/internal/v1/commands/{missing_id}/reconcile");
+    let hidden = request(&server, "POST", &missing_path, &[], None).await;
+    assert_eq!(hidden.status, 401, "{}", hidden.text);
+    assert_eq!(hidden.body["code"], "WORKER_AUTHORITY_REQUIRED");
+    let missing = request(
+        &server,
+        "POST",
+        &missing_path,
+        &[("Authorization", &bearer)],
+        None,
+    )
+    .await;
+    assert_eq!(missing.status, 404, "{}", missing.text);
+    assert_eq!(
+        header(&missing, "content-type").as_deref(),
+        Some("application/problem+json")
+    );
+    assert_eq!(missing.body["status"], 404);
+    assert_eq!(missing.body["code"], "NOT_FOUND");
+    assert_eq!(missing.body["retryable"], false);
+    assert_eq!(
+        missing.body["type"],
+        "https://bullet.farm/problems/not-found"
+    );
+    assert_eq!(
+        missing.body["repair"],
+        "Refresh the owning projection and retry only if the resource appears there."
+    );
+    assert_eq!(
+        missing.body["detail"],
+        format!("command {missing_id} was not found")
+    );
+    let connection = Connection::open(&server.db).expect("open missing ledger");
+    for table in ["commands", "outbox", "events"] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("count missing-command truth");
+        assert_eq!(count, 0, "missing reconciliation mutated {table}");
+    }
+}
+
+#[tokio::test]
 async fn only_independent_worker_authority_can_reconcile_and_replay() {
     let directory = tempfile::tempdir().expect("tempdir");
     let server = start(&directory.path().join("worker.sqlite")).await;
