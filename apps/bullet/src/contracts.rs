@@ -15,6 +15,7 @@ const RUNTIME_SCHEMA_ID: &str = "https://bullet.farm/schemas/public-api-runtime-
 const RUNTIME_SCHEMA_ROOTS: &[&str] = &[
     "AuditView",
     "CommandStatus",
+    "ContextLineageView",
     "FleetView",
     "MergeRailView",
     "Mission",
@@ -318,6 +319,8 @@ mod tests {
             "AuditView",
             "CandidateRow",
             "CommandStatus",
+            "ContextCapsuleRow",
+            "ContextLineageView",
             "EffectIntentRow",
             "EffectReceiptRow",
             "EffectRow",
@@ -348,5 +351,41 @@ mod tests {
         assert!(component_name("https://example.invalid/schema").is_err());
         assert!(component_name("#/components/schemas/").is_err());
         assert!(component_name("#/components/schemas/Mission/id").is_err());
+    }
+
+    #[test]
+    fn context_lineage_runtime_root_closes_the_task_class_catalog() {
+        let bundle = runtime_schema(&openapi_schemas()).expect("runtime schema");
+        let task_classes = bundle
+            .pointer("/$defs/TaskClass/enum")
+            .and_then(JsonValue::as_array)
+            .expect("TaskClass enum");
+        assert_eq!(
+            task_classes,
+            &[
+                "deterministic_transform",
+                "extract_structured",
+                "classify_route",
+                "summarize_local",
+                "compress_context",
+                "mechanical_code_edit",
+                "bounded_bug_fix",
+                "feature_implementation",
+                "broad_refactor",
+                "architecture_design",
+                "security_analysis",
+                "migration_design",
+                "code_review",
+                "fusion_rank",
+                "fusion_synthesize",
+                "completion_assessment",
+            ]
+            .map(JsonValue::from)
+        );
+        assert_eq!(
+            bundle.pointer("/$defs/ContextCapsuleRow/properties/task_class/$ref"),
+            Some(&JsonValue::String("#/$defs/TaskClass".into()))
+        );
+        assert!(RUNTIME_SCHEMA_ROOTS.contains(&"ContextLineageView"));
     }
 }

@@ -1011,6 +1011,25 @@ components:
         as_of_sequence: { type: integer }
         observed_at: { type: string, format: date-time }
         source: { type: string, enum: [bullet-kernel/sqlite-ledger] }
+    TaskClass:
+      type: string
+      enum:
+        - deterministic_transform
+        - extract_structured
+        - classify_route
+        - summarize_local
+        - compress_context
+        - mechanical_code_edit
+        - bounded_bug_fix
+        - feature_implementation
+        - broad_refactor
+        - architecture_design
+        - security_analysis
+        - migration_design
+        - code_review
+        - fusion_rank
+        - fusion_synthesize
+        - completion_assessment
     ContextCapsuleRow:
       type: object
       additionalProperties: false
@@ -1047,7 +1066,8 @@ components:
           maximum: 1
         parent_id:
           type: "null"
-        task_class: { type: string }
+        task_class:
+          $ref: "#/components/schemas/TaskClass"
         objective_digest:
           $ref: "#/components/schemas/Digest"
         package_title_digest:

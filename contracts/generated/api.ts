@@ -266,6 +266,8 @@ export type SessionSupervisorSnapshot = {
   source: "bullet-kernel/sqlite-ledger";
 };
 
+export type TaskClass = "deterministic_transform" | "extract_structured" | "classify_route" | "summarize_local" | "compress_context" | "mechanical_code_edit" | "bounded_bug_fix" | "feature_implementation" | "broad_refactor" | "architecture_design" | "security_analysis" | "migration_design" | "code_review" | "fusion_rank" | "fusion_synthesize" | "completion_assessment";
+
 export type ContextCapsuleRow = {
   schema_version: "bullet.context-capsule.initial.v1";
   id: ContextCapsuleId;
@@ -274,7 +276,7 @@ export type ContextCapsuleRow = {
   plan_revision_id: PlanRevisionId;
   revision: number;
   parent_id: null;
-  task_class: string;
+  task_class: TaskClass;
   objective_digest: Digest;
   package_title_digest: Digest;
   content_digest: Digest;
@@ -661,6 +663,102 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
         "kind",
         "payload_digest",
         "result"
+      ],
+      "type": "object"
+    },
+    "ContextCapsuleId": {
+      "pattern": "^ctx_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ContextCapsuleRow": {
+      "additionalProperties": false,
+      "properties": {
+        "compression": {
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        "content_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "dropped_decision_digests": {
+          "items": {
+            "$ref": "#/$defs/Digest"
+          },
+          "maxItems": 0,
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/ContextCapsuleId"
+        },
+        "mission_id": {
+          "$ref": "#/$defs/MissionId"
+        },
+        "objective_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "package_title_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "parent_id": {
+          "type": "null"
+        },
+        "plan_revision_id": {
+          "$ref": "#/$defs/PlanRevisionId"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "revision": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "schema_version": {
+          "enum": [
+            "bullet.context-capsule.initial.v1"
+          ],
+          "type": "string"
+        },
+        "task_class": {
+          "$ref": "#/$defs/TaskClass"
+        },
+        "work_package_id": {
+          "$ref": "#/$defs/WorkPackageId"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "mission_id",
+        "work_package_id",
+        "plan_revision_id",
+        "revision",
+        "parent_id",
+        "task_class",
+        "objective_digest",
+        "package_title_digest",
+        "content_digest",
+        "compression",
+        "dropped_decision_digests",
+        "recorded_at"
+      ],
+      "type": "object"
+    },
+    "ContextLineageView": {
+      "additionalProperties": false,
+      "properties": {
+        "capsules": {
+          "items": {
+            "$ref": "#/$defs/ContextCapsuleRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "capsules"
       ],
       "type": "object"
     },
@@ -1303,6 +1401,27 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       ],
       "type": "object"
     },
+    "TaskClass": {
+      "enum": [
+        "deterministic_transform",
+        "extract_structured",
+        "classify_route",
+        "summarize_local",
+        "compress_context",
+        "mechanical_code_edit",
+        "bounded_bug_fix",
+        "feature_implementation",
+        "broad_refactor",
+        "architecture_design",
+        "security_analysis",
+        "migration_design",
+        "code_review",
+        "fusion_rank",
+        "fusion_synthesize",
+        "completion_assessment"
+      ],
+      "type": "string"
+    },
     "VariantId": {
       "pattern": "^var_[0-9a-f]{64}$",
       "type": "string"
@@ -1355,6 +1474,7 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
 export const PUBLIC_API_RUNTIME_REFS = {
   AuditView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/AuditView",
   CommandStatus: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandStatus",
+  ContextLineageView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ContextLineageView",
   FleetView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/FleetView",
   MergeRailView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/MergeRailView",
   Mission: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/Mission",
