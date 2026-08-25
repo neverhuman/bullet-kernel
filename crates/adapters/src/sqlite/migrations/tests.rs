@@ -1,4 +1,4 @@
-use super::{migration_checksum, Migration, MIGRATIONS};
+use super::{migration_checksum, Migration, CREATE_METADATA, MIGRATIONS};
 use crate::sqlite::SqliteLedger;
 use bullet_application::LedgerError;
 use rusqlite::{params, Connection, Error};
@@ -128,6 +128,56 @@ fn legacy_schema_without_metadata_is_refused_without_mutation() {
 }
 
 #[test]
+fn schema_seven_with_legacy_subject_is_refused_byte_for_byte() {
+    let (_directory, path) = database();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(CREATE_METADATA).unwrap();
+    for migration in &MIGRATIONS[..7] {
+        conn.execute_batch(migration.sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_version (version, name, checksum, applied_at)
+             VALUES (?1, ?2, ?3, 'prior-schema')",
+            params![
+                migration.version,
+                migration.name,
+                migration_checksum(migration)
+            ],
+        )
+        .unwrap();
+    }
+    let legacy_attempt = format!("atm_{}", "a".repeat(32));
+    conn.execute(
+        "INSERT INTO attempts (
+           id, variant_id, work_package_id, fence, runner_id, runner_epoch,
+           workspace_id, workspace_nonce, scope_revision, context_revision, state
+         ) VALUES (?1, ?2, ?3, 1, ?4, 1, ?5, zeroblob(32), 1, 1, 'CREATED')",
+        params![
+            legacy_attempt,
+            format!("var_{}", "b".repeat(32)),
+            format!("wpk_{}", "c".repeat(32)),
+            format!("run_{}", "d".repeat(32)),
+            format!("wks_{}", "e".repeat(32)),
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let bytes_before = std::fs::read(&path).unwrap();
+    assert!(!sidecar(&path, "-wal").exists());
+    assert!(!sidecar(&path, "-journal").exists());
+    unsupported(SqliteLedger::open(&path));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes_before);
+    assert!(!sidecar(&path, "-wal").exists());
+    assert!(!sidecar(&path, "-journal").exists());
+
+    let conn = Connection::open(path).unwrap();
+    let persisted: String = conn
+        .query_row("SELECT id FROM attempts", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(persisted, legacy_attempt);
+}
+
+#[test]
 fn altered_name_and_checksum_are_refused() {
     for statement in [
         "UPDATE schema_version SET name = 'renamed.sql' WHERE version = 2",
@@ -145,13 +195,30 @@ fn altered_name_and_checksum_are_refused() {
 #[test]
 fn partial_future_and_unrecognized_versions_are_refused() {
     for statement in [
-        "DELETE FROM schema_version WHERE version = 7",
-        "INSERT INTO schema_version VALUES (8, 'future.sql', '00', 'future')",
-        "UPDATE schema_version SET version = 99 WHERE version = 7",
+        "DELETE FROM schema_version WHERE version = 8",
+        "INSERT INTO schema_version VALUES (9, 'future.sql', '00', 'future')",
+        "UPDATE schema_version SET version = 99 WHERE version = 8",
     ] {
         let (_directory, path) = database();
         drop(SqliteLedger::open(&path).unwrap());
         let conn = Connection::open(&path).unwrap();
+        conn.execute(statement, []).unwrap();
+        drop(conn);
+        unsupported(SqliteLedger::open(path));
+    }
+}
+
+#[test]
+fn missing_or_corrupt_identity_contract_is_refused() {
+    for statement in [
+        "DELETE FROM identity_contract",
+        "UPDATE identity_contract SET identity_format = 'legacy-short-ids'",
+    ] {
+        let (_directory, path) = database();
+        drop(SqliteLedger::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "ignore_check_constraints", "ON")
+            .unwrap();
         conn.execute(statement, []).unwrap();
         drop(conn);
         unsupported(SqliteLedger::open(path));

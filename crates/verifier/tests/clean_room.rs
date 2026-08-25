@@ -67,7 +67,11 @@ fn request(dir: &Path, base: &str, head: &str, tree: &str, gate: &str) -> Verifi
         tree_sha: tree.into(),
         gate_command: gate.into(),
         timeout_secs: 20,
-        author_attempt_id: "atm_00000000000000000000000000000000".into(),
+        author_attempt_id: concat!(
+            "atm_",
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        )
+        .into(),
     }
 }
 

@@ -317,7 +317,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let missing_session = request(
         &server,
         "GET",
-        &format!("/v1/commands/cmd_{}", "0".repeat(32)),
+        &format!("/v1/commands/cmd_{}", "0".repeat(64)),
         &[],
         None,
     )
@@ -327,13 +327,23 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
     let missing = request(
         &server,
         "GET",
-        &format!("/v1/commands/cmd_{}", "0".repeat(32)),
+        &format!("/v1/commands/cmd_{}", "0".repeat(64)),
         &[("Cookie", &cookie)],
         None,
     )
     .await;
     assert_eq!(missing.status, 404);
     assert_eq!(missing.body["code"], "NOT_FOUND");
+    let legacy = request(
+        &server,
+        "GET",
+        &format!("/v1/commands/cmd_{}", "0".repeat(32)),
+        &[("Cookie", &cookie)],
+        None,
+    )
+    .await;
+    assert_eq!(legacy.status, 400);
+    assert_eq!(legacy.body["code"], "INVALID_ID");
 
     let admitted = request(
         &server,

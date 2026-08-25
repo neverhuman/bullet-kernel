@@ -44,7 +44,10 @@ fn fixture(dir: &Path) -> serde_json::Value {
         "tree_sha": git_out(dir, &["rev-parse", "HEAD^{tree}"]),
         "gate_command": "test -f f",
         "timeout_secs": 20,
-        "author_attempt_id": "atm_00000000000000000000000000000000",
+        "author_attempt_id": concat!(
+            "atm_",
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        ),
     })
 }
 

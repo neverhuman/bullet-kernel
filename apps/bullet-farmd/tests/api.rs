@@ -454,7 +454,12 @@ async fn problem_details_cover_400_404_and_500() {
             "{field}"
         );
     }
-    let missing = format!("/v1/missions/mis_{}", "0".repeat(32));
+    let legacy = format!("/v1/missions/mis_{}", "0".repeat(32));
+    let (status, body) = request(addr, "GET", &legacy).await;
+    assert_eq!(status, 400);
+    assert_eq!(json_body(&body)["code"], "INVALID_ID");
+
+    let missing = format!("/v1/missions/mis_{}", "0".repeat(64));
     let (status, body) = request(addr, "GET", &missing).await;
     assert_eq!(status, 404);
     let problem = json_body(&body);
