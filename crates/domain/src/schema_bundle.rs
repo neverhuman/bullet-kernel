@@ -4,11 +4,11 @@
 // DO NOT EDIT BY HAND.
 pub const SCHEMA_VERSION: &str = "v1alpha1";
 pub const SCHEMA_BUNDLE_HASH: &str =
-    "e75054c8887cbb034105b3bc01012e425cb14fd97ebe2422999947fe000e575f";
+    "10b1d059d7a621a7bc65492ae87715c14a8e41eaa9d52b773d7ae96a67806103";
 pub const INVARIANT_REGISTRY_HASH: &str =
     "978a8b4ebb14ff0c978afb431c154647adef2f9839de322356a765c59a0c3858";
 pub const POLICY_SNAPSHOT_HASH: &str =
-    "55d42dc1827360fdb42f76a0e4be8bd549e6432f33734af82e10edafd92c51c1";
+    "5b007a784003f42a2e4f7781718178f533b899df334afad5127cd466d192ed31";
 pub const CANONICAL_GOLDEN_JSON: &str = r##"{"a":"é","array":[true,null,17],"z":"last"}"##;
 pub const CANONICAL_GOLDEN_HASH: &str =
     "1d800cb94962906f78d42cb8cc84c2c078311a50e35ca515240b800abc3d2263";
