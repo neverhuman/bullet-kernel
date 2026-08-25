@@ -4,11 +4,11 @@
 // DO NOT EDIT BY HAND.
 pub const SCHEMA_VERSION: &str = "v1alpha1";
 pub const SCHEMA_BUNDLE_HASH: &str =
-    "b9949c496a6cf7026d2dcafd2163860620c0fa85f93466e1ffb3b3e339f3507b";
+    "0942b0662628b82bc882bc02935db276adf01772ee27f9b257b0e5e9c6a32ce0";
 pub const INVARIANT_REGISTRY_HASH: &str =
     "978a8b4ebb14ff0c978afb431c154647adef2f9839de322356a765c59a0c3858";
 pub const POLICY_SNAPSHOT_HASH: &str =
-    "a7438c2368c6838fd78a5368327523df9584a9d66f9a47e1990f7a3ecbc932bd";
+    "6a1611c849f121d95b23488b090703dda000a67f27c1502c85000597f925b1a2";
 pub const CANONICAL_GOLDEN_JSON: &str = r##"{"a":"é","array":[true,null,17],"z":"last"}"##;
 pub const CANONICAL_GOLDEN_HASH: &str =
     "1d800cb94962906f78d42cb8cc84c2c078311a50e35ca515240b800abc3d2263";
@@ -144,6 +144,7 @@ pub enum ReleaseRegistryObjectKindV1 {
     GateReceiptSignature,
     GateSpec,
     ProfileGraph,
+    ReleaseBundleManifestV2,
     SignerPolicy,
     TrustedTimeObservation,
     TrustedTimeSignature,
