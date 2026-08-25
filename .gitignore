@@ -1,4 +1,5 @@
 /target
+.bullet-family/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
