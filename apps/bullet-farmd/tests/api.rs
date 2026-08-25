@@ -3,13 +3,13 @@
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
 use bullet_domain::Digest;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 async fn start(db: &Path) -> SocketAddr {
     let app = bullet_farmd::api::router(db).expect("router");
@@ -178,7 +178,10 @@ async fn demo_projection_uses_durable_rows_and_direct_mutation_is_gone() {
     assert_eq!(receipt["fence_first"], 1);
     assert_eq!(receipt["fence_second"], 2);
     assert_eq!(receipt["stale_refused"], true);
-    assert_eq!(receipt["effect_unknown_outcome"], "unknown");
+    assert_eq!(receipt["candidate_head"], "NOT_PRODUCED");
+    assert_eq!(receipt["evidence_result"], "NOT_RUN");
+    assert_eq!(receipt["effect_outcome"], "NOT_DISPATCHED");
+    assert_eq!(receipt["effect_unknown_outcome"], "NOT_DISPATCHED");
     let (status, body) = request(addr, "GET", "/api/v1/demo").await;
     assert_eq!(status, 200);
     assert_eq!(snapshot_data(&body)["fence_second"], 2);
@@ -195,9 +198,14 @@ async fn demo_projection_uses_durable_rows_and_direct_mutation_is_gone() {
     assert_eq!(status, 200);
     let outbox = snapshot_data(&body);
     let items = outbox["items"].as_array().expect("items");
-    assert!(items.iter().any(|item| item["kind"] == "dispatch_attempt"));
-    assert!(items.iter().any(|item| item["phase"] == "verified"));
-    assert!(items.iter().any(|item| item["phase"] == "unknown"));
+    let dispatches: Vec<_> = items
+        .iter()
+        .filter(|item| item["kind"] == "dispatch_attempt")
+        .collect();
+    assert_eq!(dispatches.len(), 2);
+    assert!(dispatches.iter().all(|item| item["phase"] == "pending"));
+    assert!(items.iter().all(|item| item["phase"] != "verified"));
+    assert!(items.iter().all(|item| item["phase"] != "unknown"));
 }
 
 #[tokio::test]
@@ -493,10 +501,12 @@ async fn problem_details_cover_400_404_and_500() {
     let problem = json_body(&body);
     assert_eq!(problem["code"], "STORE_FAILURE");
     assert_eq!(problem["retryable"], true);
-    assert!(problem["correlation_id"]
-        .as_str()
-        .expect("corr")
-        .starts_with("corr_"));
+    assert!(
+        problem["correlation_id"]
+            .as_str()
+            .expect("corr")
+            .starts_with("corr_")
+    );
     assert!(
         !body.contains("expected value"),
         "raw parser detail must not leak"

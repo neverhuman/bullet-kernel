@@ -1,19 +1,59 @@
 //! Test-only Runner orchestration after a simulated private clone.
 
 use super::harness::ScriptedSim;
-use super::{build_origin, proposal, seeded_ledger, SimWorkspace};
+use super::{SimWorkspace, build_origin, proposal, seeded_ledger};
 use crate::journal::JournalSink;
 use crate::{DirectLeaseClient, HeartbeatConfig, LeaseClient, MemoryJournal, MonotonicClock};
 use bullet_application::{Ledger, MemoryLedger};
 use bullet_domain::{AttemptId, AttemptState, RunnerId, WorkPackageId};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::super::{run_cloned_attempt, AttemptConfig};
+use super::super::{AttemptConfig, run_cloned_attempt};
 
 type SharedLedger = Arc<Mutex<MemoryLedger>>;
 type TestClient = Arc<DirectLeaseClient<MemoryLedger>>;
+
+struct FailAdvanceClient {
+    inner: TestClient,
+    releases: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl LeaseClient for FailAdvanceClient {
+    async fn acquire(
+        &self,
+        request: &crate::AcquireRequest,
+    ) -> Result<crate::AcquireGrant, crate::RunnerError> {
+        self.inner.acquire(request).await
+    }
+
+    async fn heartbeat(&self, call: &crate::HeartbeatCall) -> Result<(), crate::RunnerError> {
+        self.inner.heartbeat(call).await
+    }
+
+    async fn advance(
+        &self,
+        _attempt_id: &AttemptId,
+        _state: AttemptState,
+    ) -> Result<(), crate::RunnerError> {
+        Err(crate::RunnerError::Lease {
+            code: "TEST_ADVANCE_REFUSED".into(),
+            message: "injected Running transition refusal".into(),
+        })
+    }
+
+    async fn release(&self, call: &crate::ReleaseCall) -> Result<(), crate::RunnerError> {
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        self.inner.release(call).await
+    }
+
+    async fn next_ready(&self) -> Result<Option<crate::ReadyView>, crate::RunnerError> {
+        self.inner.next_ready().await
+    }
+}
 
 struct FrozenFixture {
     _temp: tempfile::TempDir,
@@ -164,6 +204,123 @@ async fn freeze_after_clone(seed: &str) -> FrozenFixture {
     }
 }
 
+async fn cloned_attempt(
+    seed: &str,
+) -> (
+    tempfile::TempDir,
+    SharedLedger,
+    TestClient,
+    crate::AcquireGrant,
+    AttemptConfig,
+    SimWorkspace,
+    crate::WorkspaceInfo,
+    Arc<MemoryJournal>,
+) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (origin, base_sha) = build_origin(temp.path());
+    let (ledger, package) = seeded_ledger(seed);
+    let client = Arc::new(DirectLeaseClient::new(ledger.clone()));
+    let grant = client
+        .acquire(&request(package, &format!("{seed}-attempt")))
+        .await
+        .expect("test lease");
+    let config = config(origin, base_sha, temp.path().join("farm"));
+    let mut workspace = SimWorkspace::new(grant.attempt.id.clone());
+    let info = workspace
+        .clone_workspace(
+            &config.source_repo,
+            &config.base_sha,
+            &config.workspace_root,
+            &config.scope_prefixes,
+        )
+        .await
+        .expect("test-only clone");
+    let journal = Arc::new(MemoryJournal::new());
+    (
+        temp, ledger, client, grant, config, workspace, info, journal,
+    )
+}
+
+fn assert_failed_and_requeued(
+    ledger: &SharedLedger,
+    attempt_id: &AttemptId,
+    journal: &MemoryJournal,
+) {
+    let ledger = ledger.lock().expect("ledger");
+    let attempt = ledger
+        .get_attempt(attempt_id)
+        .expect("attempt read")
+        .expect("attempt row");
+    assert_eq!(attempt.state, AttemptState::Failed);
+    assert!(
+        ledger
+            .get_lease(&attempt.variant_id)
+            .expect("lease read")
+            .is_none()
+    );
+    assert_eq!(ledger.ready_rows().expect("ready rows").len(), 1);
+    assert!(journal.stages().contains(&"released".to_string()));
+}
+
+#[tokio::test]
+async fn provider_start_failure_aborts_heartbeat_and_releases_lease() {
+    let (_temp, ledger, client, grant, config, mut workspace, info, journal) =
+        cloned_attempt("provider-start-failure").await;
+    let adapter = Arc::new(ScriptedSim::new());
+    adapter.fail_start("injected start refusal");
+
+    let error = run_cloned_attempt(
+        client,
+        adapter.clone(),
+        journal.clone(),
+        Arc::new(MonotonicClock::new()),
+        &grant,
+        &config,
+        &mut workspace,
+        &info,
+    )
+    .await
+    .expect_err("start failure must fail the attempt");
+
+    assert_eq!(error.reason_code(), "PROTOCOL_ERROR");
+    assert!(!adapter.was_terminated(), "no session existed to terminate");
+    assert!(
+        journal
+            .stages()
+            .contains(&"session_start_refused".to_string())
+    );
+    assert_failed_and_requeued(&ledger, &grant.attempt.id, journal.as_ref());
+}
+
+#[tokio::test]
+async fn running_transition_failure_terminates_provider_and_releases_lease() {
+    let (_temp, ledger, client, grant, config, mut workspace, info, journal) =
+        cloned_attempt("running-transition-failure").await;
+    let adapter = Arc::new(ScriptedSim::new());
+    let failing = Arc::new(FailAdvanceClient {
+        inner: client,
+        releases: AtomicUsize::new(0),
+    });
+
+    let error = run_cloned_attempt(
+        failing.clone(),
+        adapter.clone(),
+        journal.clone(),
+        Arc::new(MonotonicClock::new()),
+        &grant,
+        &config,
+        &mut workspace,
+        &info,
+    )
+    .await
+    .expect_err("advance failure must fail the attempt");
+
+    assert_eq!(error.reason_code(), "LEASE_REFUSED");
+    assert!(adapter.was_terminated());
+    assert_eq!(failing.releases.load(Ordering::SeqCst), 1);
+    assert_failed_and_requeued(&ledger, &grant.attempt.id, journal.as_ref());
+}
+
 fn assert_salvaged_without_apply(fixture: &FrozenFixture) {
     let stages = fixture.journal.stages();
     assert!(stages.contains(&"frozen".to_string()), "{stages:?}");
@@ -215,10 +372,12 @@ fn assert_salvaged_without_apply(fixture: &FrozenFixture) {
         .expect("attempt read")
         .expect("attempt row");
     assert_eq!(attempt.state, AttemptState::Crashed);
-    assert!(ledger
-        .get_lease(&attempt.variant_id)
-        .expect("lease read")
-        .is_none());
+    assert!(
+        ledger
+            .get_lease(&attempt.variant_id)
+            .expect("lease read")
+            .is_none()
+    );
     assert_eq!(ledger.ready_rows().expect("ready rows").len(), 1);
 }
 

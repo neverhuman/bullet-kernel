@@ -159,6 +159,16 @@ fn demo() -> Result<(), String> {
             receipt.fence_first, receipt.fence_second
         ));
     }
+    if receipt.candidate_head != "NOT_PRODUCED"
+        || receipt.evidence_result != "NOT_RUN"
+        || receipt.effect_outcome != "NOT_DISPATCHED"
+        || receipt.effect_unknown_outcome != "NOT_DISPATCHED"
+    {
+        return Err("component demo fabricated a production transaction subject".into());
+    }
+    eprintln!(
+        "bullet: COMPONENT_ONLY: transaction_gate_eligible=false; Candidate, Evidence, and Effect were not produced"
+    );
     Ok(())
 }
 

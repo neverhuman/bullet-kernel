@@ -10,12 +10,12 @@ mod workspace;
 use crate::capsule::Capsule;
 use crate::clock::Clock;
 use crate::error::RunnerError;
-use crate::gate::{run_gate, GateRegistry, GateReport};
+use crate::gate::{GateRegistry, GateReport, run_gate};
 use crate::gitd::{
     CandidateBindings, CandidateReceipt, CheckpointBinding, GitdSession, PrepareCandidateRequest,
     SuccessorResume, WorkspaceInfo,
 };
-use crate::heartbeat::{start_heartbeat, HeartbeatConfig, HeartbeatHandle};
+use crate::heartbeat::{HeartbeatConfig, HeartbeatHandle, start_heartbeat};
 use crate::journal::JournalSink;
 use crate::lease::{AcquireGrant, AcquireRequest, HeartbeatCall, LeaseClient, ReleaseCall};
 use crate::scope;
@@ -155,7 +155,14 @@ pub async fn run_attempt(
     let mut gitd = match GitdSession::spawn(&grant.authority_token).await {
         Ok(gitd) => gitd,
         Err(error) => {
-            cleanup_before_session(client.as_ref(), &grant, journal.as_ref(), &error).await;
+            cleanup_before_session(
+                client.as_ref(),
+                &grant,
+                journal.as_ref(),
+                "workspace_refused",
+                &error,
+            )
+            .await;
             return Err(error);
         }
     };
@@ -170,7 +177,14 @@ pub async fn run_attempt(
     {
         Ok(workspace) => workspace,
         Err(error) => {
-            cleanup_before_session(client.as_ref(), &grant, journal.as_ref(), &error).await;
+            cleanup_before_session(
+                client.as_ref(),
+                &grant,
+                journal.as_ref(),
+                "workspace_refused",
+                &error,
+            )
+            .await;
             return Err(error);
         }
     };
@@ -192,17 +206,73 @@ async fn run_cloned_attempt(
     gitd: &mut dyn WorkspaceSession,
     ws: &WorkspaceInfo,
 ) -> Result<AttemptOutcome, RunnerError> {
-    let heartbeat_call = HeartbeatCall::for_grant(grant)?;
-    let heartbeat = start_heartbeat(
+    let heartbeat_call = match HeartbeatCall::for_grant(grant) {
+        Ok(call) => call,
+        Err(error) => {
+            cleanup_before_session(
+                client.as_ref(),
+                grant,
+                journal.as_ref(),
+                "heartbeat_call_refused",
+                &error,
+            )
+            .await;
+            return Err(error);
+        }
+    };
+    let heartbeat = match start_heartbeat(
         client.clone(),
         heartbeat_call,
         config.heartbeat.clone(),
         clock,
-    )?;
-    let session = adapter.start(start_request(grant, ws, config)).await?;
-    client
+    ) {
+        Ok(handle) => handle,
+        Err(error) => {
+            cleanup_before_session(
+                client.as_ref(),
+                grant,
+                journal.as_ref(),
+                "heartbeat_start_refused",
+                &error,
+            )
+            .await;
+            return Err(error);
+        }
+    };
+    let session = match adapter.start(start_request(grant, ws, config)).await {
+        Ok(session) => session,
+        Err(error) => {
+            heartbeat.abort();
+            let error = RunnerError::from(error);
+            cleanup_before_session(
+                client.as_ref(),
+                grant,
+                journal.as_ref(),
+                "session_start_refused",
+                &error,
+            )
+            .await;
+            return Err(error);
+        }
+    };
+    if let Err(error) = client
         .advance(&grant.attempt.id, AttemptState::Running)
-        .await?;
+        .await
+    {
+        heartbeat.abort();
+        cleanup_failure(
+            client.as_ref(),
+            adapter.as_ref(),
+            gitd,
+            grant,
+            config,
+            journal.as_ref(),
+            &session,
+            &error,
+        )
+        .await;
+        return Err(error);
+    }
     match drive_and_finish(
         client.as_ref(),
         adapter.as_ref(),
@@ -244,9 +314,10 @@ async fn cleanup_before_session(
     client: &dyn LeaseClient,
     grant: &AcquireGrant,
     journal: &dyn JournalSink,
+    stage: &'static str,
     error: &RunnerError,
 ) {
-    journal.record("workspace_refused", error.reason_code());
+    journal.record(stage, error.reason_code());
     let released = client
         .release(&ReleaseCall {
             attempt_id: grant.attempt.id.clone(),

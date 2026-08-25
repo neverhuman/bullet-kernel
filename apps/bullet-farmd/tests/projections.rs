@@ -4,15 +4,15 @@
 //! typed 500 problems rather than shorter lists.
 
 use bullet_adapters::SqliteLedger;
-use bullet_application::{materialize_plan, run_demo, LeaseService, PlanInput};
+use bullet_application::{LeaseService, PlanInput, materialize_plan, run_demo};
 use bullet_domain::{Digest, TaskClass};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 const ROUTES: [&str; 6] = [
     "/api/v1/fleet",
@@ -163,9 +163,11 @@ async fn empty_database_projects_zero_rows_at_watermark_zero_on_every_route() {
     }
     let states = labels(&rail["intent_state_counts"]);
     assert_eq!(states.len(), 13);
-    assert!(states
-        .iter()
-        .any(|(label, count)| label == "OUTCOME_UNKNOWN" && *count == 0));
+    assert!(
+        states
+            .iter()
+            .any(|(label, count)| label == "OUTCOME_UNKNOWN" && *count == 0)
+    );
 
     let (lab, as_of) = snapshot(addr, "/api/v1/quality-lab").await;
     assert_eq!(as_of, 0);
@@ -199,40 +201,26 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
 
     let (rail, _) = snapshot(addr, "/api/v1/merge-rail").await;
     let candidates = rail["candidates"].as_array().expect("candidates");
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0]["head_sha"], receipt["candidate_head"]);
-    assert_eq!(
-        candidates[0]["patch_digest"].as_str().map(str::len),
-        Some(64)
-    );
-    let mut outcomes: Vec<&str> = rail["effects"]
-        .as_array()
-        .expect("effects")
-        .iter()
-        .map(|effect| effect["outcome"].as_str().expect("outcome"))
-        .collect();
-    outcomes.sort_unstable();
-    assert_eq!(outcomes, ["unknown", "verified"]);
+    assert!(candidates.is_empty());
+    assert_eq!(receipt["candidate_head"], "NOT_PRODUCED");
+    assert_eq!(rail["effects"], Value::Array(vec![]));
     assert_eq!(rail["intents"], Value::Array(vec![]));
 
     let (lab, _) = snapshot(addr, "/api/v1/quality-lab").await;
     let evidence = lab["evidence"].as_array().expect("evidence");
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0]["result"], receipt["evidence_result"]);
-    assert_eq!(evidence[0]["outcome"], receipt["evidence_result"]);
-    assert_eq!(
-        evidence[0]["satisfies_requirement"],
-        Value::Bool(receipt["evidence_result"] == "PASS")
-    );
+    assert!(evidence.is_empty());
+    assert_eq!(receipt["evidence_result"], "NOT_RUN");
 
     let (sessions, _) = snapshot(addr, "/api/v1/sessions").await;
     let attempts = sessions["attempts"].as_array().expect("attempts");
     assert!(attempts.len() >= 2);
     assert!(attempts.iter().all(|row| row["lease"] == "none"));
     assert!(attempts.iter().any(|row| row["state"] == "superseded"));
-    assert!(attempts
-        .iter()
-        .all(|row| row["mission_id"] == receipt["mission_id"]));
+    assert!(
+        attempts
+            .iter()
+            .all(|row| row["mission_id"] == receipt["mission_id"])
+    );
     let total: u64 = labels(&sessions["state_counts"])
         .iter()
         .map(|(_, count)| count)
@@ -257,10 +245,22 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
         events.last().map(|e| e["seq"].clone()),
         Some(Value::from(as_of))
     );
-    assert!(events.iter().any(|e| e["kind"] == "candidate_prepared"));
-    assert!(events
-        .iter()
-        .all(|e| e["id"].as_str().is_some_and(|id| id.len() == 64)));
+    assert!(
+        events
+            .iter()
+            .any(|e| e["kind"] == "demo_stale_authority_refused")
+    );
+    assert!(events.iter().all(|e| {
+        !matches!(
+            e["kind"].as_str(),
+            Some("candidate_prepared" | "evidence_attached" | "effect_receipt")
+        )
+    }));
+    assert!(
+        events
+            .iter()
+            .all(|e| e["id"].as_str().is_some_and(|id| id.len() == 64))
+    );
 }
 
 #[tokio::test]

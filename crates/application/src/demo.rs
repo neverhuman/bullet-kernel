@@ -1,24 +1,28 @@
-//! First mandatory demonstration. Simulators only. Every receipt field is
-//! re-derived from ledger rows or live refusals — never fabricated.
+//! Component-only ledger demonstration. It proves replay and fencing without
+//! fabricating a Candidate, Evidence, Effect, or transaction receipt.
 
-use crate::graph_delta::{apply_graph_delta, graph_digest, GraphDelta, GraphOp};
+use crate::graph_delta::{GraphDelta, GraphOp, apply_graph_delta, graph_digest};
 use crate::leases::LeaseService;
-use crate::materializer::{materialize_plan, PlanInput};
+use crate::materializer::{PlanInput, materialize_plan};
 use crate::records::StoredGraph;
-use crate::simulators::{ProviderSimulator, ScmSimulator};
-use crate::store::{Ledger, LedgerError};
+use crate::simulators::ProviderSimulator;
+use crate::store::{Ledger, LedgerError, ProjectionReader};
 use bullet_domain::{
-    Attempt, AttemptId, AttemptState, Candidate, CandidateId, CommandPhase, Digest, DomainError,
-    Effect, EffectId, Evidence, EvidenceId, MissionId, TaskClass, WorkPackageId, WorkPackageState,
+    Attempt, AttemptId, AttemptState, Digest, DomainError, MissionId, TaskClass, WorkPackageId,
+    WorkPackageState,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 const SEED: &str = "demo-mission";
 const STALE_REFUSAL_EVENT: &str = "demo_stale_authority_refused";
+const CANDIDATE_NOT_PRODUCED: &str = "NOT_PRODUCED";
+const EVIDENCE_NOT_RUN: &str = "NOT_RUN";
+const EFFECT_NOT_DISPATCHED: &str = "NOT_DISPATCHED";
 
-/// Operator-visible receipt. Pending and verified are distinct; both fences
-/// prove the epoch was never reused.
+/// Operator-visible component receipt. Its negative subject fields make the
+/// missing production transaction explicit; both fences prove only that the
+/// local epoch was never reused.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DemoReceipt {
     /// Mission id.
@@ -31,17 +35,17 @@ pub struct DemoReceipt {
     pub attempt_id: String,
     /// Fence of the successor incarnation. Must exceed `fence_first`.
     pub fence_second: u64,
-    /// Successor attempt that produced the Candidate.
+    /// Successor attempt that completed the local component sequence.
     pub attempt_second_id: String,
     /// Attempt whose authority was refused after supersession.
     pub stale_attempt_id: String,
-    /// Candidate head SHA from the stored row.
+    /// Always `NOT_PRODUCED`: this simulator never creates a Candidate.
     pub candidate_head: String,
-    /// Evidence result from the stored row.
+    /// Always `NOT_RUN`: no independent verifier participates.
     pub evidence_result: String,
-    /// Stored outcome of the acknowledged effect.
+    /// Always `NOT_DISPATCHED`: no effect adapter participates.
     pub effect_outcome: String,
-    /// Stored outcome of the lost-response effect. Never assumed verified.
+    /// Always `NOT_DISPATCHED`: ambiguity recovery belongs to the transaction demo.
     pub effect_unknown_outcome: String,
     /// Whether replaying materialization returned the same graph.
     pub materialize_idempotent: bool,
@@ -53,21 +57,17 @@ fn now_str() -> String {
     LeaseService::rfc3339(Utc::now())
 }
 
-fn sim_sha(seed: &str) -> String {
-    Digest::of(seed.as_bytes()).to_hex()[..40].to_string()
-}
-
 fn demo_plan() -> PlanInput {
     PlanInput {
-        title: "First verified line to main".into(),
-        objective: "Prove fenced authority, exact Candidates, and honest observations.".into(),
+        title: "Local replay and fence component proof".into(),
+        objective: "Prove idempotent materialization and stale-authority refusal only.".into(),
         packages: vec![
             (
-                "Implement kernel demo path".into(),
+                "Exercise kernel component path".into(),
                 TaskClass::FeatureImplementation,
             ),
             (
-                "Independent review of Candidate".into(),
+                "Record the missing production transaction boundary".into(),
                 TaskClass::CodeReview,
             ),
         ],
@@ -80,7 +80,7 @@ fn demo_plan() -> PlanInput {
 /// # Errors
 ///
 /// Returns a ledger or domain error.
-pub fn run_demo<L: Ledger>(ledger: &mut L) -> Result<DemoReceipt, LedgerError> {
+pub fn run_demo<L: Ledger + ProjectionReader>(ledger: &mut L) -> Result<DemoReceipt, LedgerError> {
     for invocation in ProviderSimulator.planning_council() {
         let kind = if invocation.lane == "fusion" {
             "fusion_plan"
@@ -124,7 +124,7 @@ fn fresh_flow<L: Ledger>(ledger: &mut L, graph: &StoredGraph) -> Result<(), Ledg
     ledger.heartbeat(&LeaseService::heartbeat_of(&grant1))?;
     LeaseService::release(ledger, &grant1, AttemptState::Superseded, true)?;
 
-    // Incarnation two: fence 2, does the real work.
+    // Incarnation two: fence 2, completes only the local component sequence.
     let (a2, _token2, grant2) = LeaseService::acquire(ledger, graph, 0, "attempt-successor", 15)?;
     let heartbeat_refused = match ledger.heartbeat(&LeaseService::heartbeat_of(&grant1)) {
         Err(LedgerError::Domain(DomainError::StaleAuthority(_))) => true,
@@ -144,19 +144,9 @@ fn fresh_flow<L: Ledger>(ledger: &mut L, graph: &StoredGraph) -> Result<(), Ledg
     ledger.append_event(STALE_REFUSAL_EVENT, a1.id.as_str())?;
     let a2_running = transition_attempt(ledger, &a2, AttemptState::Running)?;
     advance_package(ledger, &mission, &wp0, &[WorkPackageState::Executing])?;
-    write_candidate_and_effects(ledger, &a2_running)?;
     transition_attempt(ledger, &a2_running, AttemptState::Preparing)?;
     LeaseService::release(ledger, &grant2, AttemptState::Succeeded, false)?;
-    advance_package(
-        ledger,
-        &mission,
-        &wp0,
-        &[
-            WorkPackageState::Prepared,
-            WorkPackageState::Verifying,
-            WorkPackageState::Verified,
-        ],
-    )?;
+    advance_package(ledger, &mission, &wp0, &[WorkPackageState::Prepared])?;
     Ok(())
 }
 
@@ -203,92 +193,6 @@ fn advance_package<L: Ledger>(
     Ok(())
 }
 
-fn write_candidate_and_effects<L: Ledger>(
-    ledger: &mut L,
-    attempt: &Attempt,
-) -> Result<(), LedgerError> {
-    let candidate = Candidate {
-        id: CandidateId::from_seed("demo-candidate"),
-        attempt_id: attempt.id.clone(),
-        base_sha: sim_sha("demo-base"),
-        head_sha: sim_sha("demo-head"),
-        tree_sha: sim_sha("demo-tree"),
-        patch_digest: Digest::of(b"demo-patch"),
-    };
-    if ledger.put_candidate(&candidate)? {
-        ledger.append_event("candidate_prepared", candidate.id.as_str())?;
-    }
-    let evidence = Evidence {
-        id: EvidenceId::from_seed("demo-evidence"),
-        candidate_id: candidate.id.clone(),
-        tier: "E3".into(),
-        gate: "bullet-farm/proof-complete".into(),
-        result: "PASS".into(),
-    };
-    if ledger.put_evidence(&evidence)? {
-        ledger.append_event("evidence_attached", evidence.id.as_str())?;
-    }
-    let acknowledged = ScmSimulator::default();
-    record_effect(
-        ledger,
-        attempt,
-        "demo-effect",
-        "scm:push:demo-candidate",
-        &acknowledged,
-        "refs/heads/bullet/candidate/demo",
-    )?;
-    let lossy = ScmSimulator {
-        lose_response: true,
-    };
-    record_effect(
-        ledger,
-        attempt,
-        "demo-effect-lost",
-        "scm:push:demo-candidate-lost",
-        &lossy,
-        "refs/heads/bullet/candidate/demo-lost",
-    )?;
-    Ok(())
-}
-
-fn record_effect<L: Ledger>(
-    ledger: &mut L,
-    attempt: &Attempt,
-    id_seed: &str,
-    logical_key: &str,
-    scm: &ScmSimulator,
-    ref_name: &str,
-) -> Result<(), LedgerError> {
-    let observation = scm.push_candidate(ref_name);
-    let outcome = if observation.is_verified() {
-        "verified"
-    } else {
-        "unknown"
-    };
-    let effect = Effect {
-        id: EffectId::from_seed(id_seed),
-        attempt_id: attempt.id.clone(),
-        logical_key: logical_key.into(),
-        desired: "candidate-ref-exists".into(),
-        outcome: outcome.into(),
-    };
-    if ledger.put_effect(&effect)? {
-        let payload = serde_json::to_string(&effect)
-            .map_err(|err| LedgerError::Domain(DomainError::Encoding(err.to_string())))?;
-        let now = now_str();
-        let seq = ledger.outbox_enqueue("effect_receipt", &payload)?;
-        ledger.outbox_mark(seq, CommandPhase::Applied, &now)?;
-        let acked = if observation.is_verified() {
-            CommandPhase::Verified
-        } else {
-            CommandPhase::Unknown
-        };
-        ledger.outbox_mark(seq, acked, &now)?;
-        ledger.append_event("effect_receipt", outcome)?;
-    }
-    Ok(())
-}
-
 /// Re-derive the demo receipt from ledger rows. Returns `None` while the
 /// demo has not completed. This projection is read-only; stale-refusal truth
 /// must already exist as a durable event written by the live demo flow.
@@ -296,7 +200,9 @@ fn record_effect<L: Ledger>(
 /// # Errors
 ///
 /// Returns a ledger or domain error.
-pub fn derive_receipt<L: Ledger>(ledger: &L) -> Result<Option<DemoReceipt>, LedgerError> {
+pub fn derive_receipt<L: Ledger + ProjectionReader>(
+    ledger: &L,
+) -> Result<Option<DemoReceipt>, LedgerError> {
     let mission_id = MissionId::from_seed(SEED);
     let Some(graph) = ledger.get_graph(&mission_id)? else {
         return Ok(None);
@@ -310,24 +216,20 @@ pub fn derive_receipt<L: Ledger>(ledger: &L) -> Result<Option<DemoReceipt>, Ledg
     let Some(a2) = ledger.get_attempt(&AttemptId::from_seed("attempt-successor"))? else {
         return Ok(None);
     };
-    let Some(candidate) = ledger.get_candidate(&CandidateId::from_seed("demo-candidate"))? else {
-        return Ok(None);
-    };
-    let Some(evidence) = ledger.get_evidence(&EvidenceId::from_seed("demo-evidence"))? else {
-        return Ok(None);
-    };
-    let Some(effect) = ledger.get_effect(&EffectId::from_seed("demo-effect"))? else {
-        return Ok(None);
-    };
-    let Some(effect_lost) = ledger.get_effect(&EffectId::from_seed("demo-effect-lost"))? else {
-        return Ok(None);
-    };
+    if !ledger.list_candidates()?.is_empty()
+        || !ledger.list_evidence()?.is_empty()
+        || !ledger.list_effects()?.is_empty()
+    {
+        return Err(LedgerError::Store(
+            "UNSUPPORTED_SCHEMA: legacy simulator authority rows detected; export any needed data, remove the demo data directory, and rerun the component demo".into(),
+        ));
+    }
     let wp0 = WorkPackageId::from_seed(&format!("{SEED}:wp:0"));
-    let verified = graph
+    let prepared = graph
         .packages
         .iter()
-        .any(|package| package.id == wp0 && package.state == WorkPackageState::Verified);
-    if !verified {
+        .any(|package| package.id == wp0 && package.state == WorkPackageState::Prepared);
+    if !prepared {
         return Ok(None);
     }
     let materialize_idempotent =
@@ -347,10 +249,10 @@ pub fn derive_receipt<L: Ledger>(ledger: &L) -> Result<Option<DemoReceipt>, Ledg
         fence_second: a2.fence,
         attempt_second_id: a2.id.to_string(),
         stale_attempt_id: a1.id.to_string(),
-        candidate_head: candidate.head_sha,
-        evidence_result: evidence.result,
-        effect_outcome: effect.outcome,
-        effect_unknown_outcome: effect_lost.outcome,
+        candidate_head: CANDIDATE_NOT_PRODUCED.into(),
+        evidence_result: EVIDENCE_NOT_RUN.into(),
+        effect_outcome: EFFECT_NOT_DISPATCHED.into(),
+        effect_unknown_outcome: EFFECT_NOT_DISPATCHED.into(),
         materialize_idempotent,
         stale_refused,
     }))
@@ -371,9 +273,10 @@ mod tests {
         assert_eq!(receipt.fence_second, 2);
         assert_ne!(receipt.attempt_id, receipt.attempt_second_id);
         assert_eq!(receipt.stale_attempt_id, receipt.attempt_id);
-        assert_eq!(receipt.evidence_result, "PASS");
-        assert_eq!(receipt.effect_outcome, "verified");
-        assert_eq!(receipt.effect_unknown_outcome, "unknown");
+        assert_eq!(receipt.candidate_head, CANDIDATE_NOT_PRODUCED);
+        assert_eq!(receipt.evidence_result, EVIDENCE_NOT_RUN);
+        assert_eq!(receipt.effect_outcome, EFFECT_NOT_DISPATCHED);
+        assert_eq!(receipt.effect_unknown_outcome, EFFECT_NOT_DISPATCHED);
     }
 
     #[test]
@@ -398,5 +301,23 @@ mod tests {
             outbox_after_first,
             ledger.outbox_all().expect("outbox").len()
         );
+    }
+
+    #[test]
+    fn legacy_simulator_authority_rows_fail_closed() {
+        let mut ledger = MemoryLedger::new();
+        run_demo(&mut ledger).expect("component demo");
+        let candidate = bullet_domain::Candidate {
+            id: bullet_domain::CandidateId::from_seed("legacy-demo-candidate"),
+            attempt_id: AttemptId::from_seed("attempt-successor"),
+            base_sha: "a".repeat(40),
+            head_sha: "b".repeat(40),
+            tree_sha: "c".repeat(40),
+            patch_digest: Digest::of(b"legacy-demo-patch"),
+        };
+        ledger.put_candidate(&candidate).expect("legacy row");
+
+        let err = derive_receipt(&ledger).expect_err("legacy rows must refuse");
+        assert!(err.to_string().contains("UNSUPPORTED_SCHEMA"));
     }
 }

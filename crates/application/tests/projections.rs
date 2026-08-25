@@ -3,8 +3,8 @@
 
 use bullet_application::store::ProjectionReader;
 use bullet_application::{
-    materialize_plan, run_demo, EffectIntentRecord, EffectReceiptRecord, EffectState, LeaseService,
-    Ledger, MemoryLedger, PlanInput, ReceiptVerdict, ZERO_OID,
+    EffectIntentRecord, EffectReceiptRecord, EffectState, LeaseService, Ledger, MemoryLedger,
+    PlanInput, ReceiptVerdict, ZERO_OID, materialize_plan, run_demo,
 };
 use bullet_domain::{
     AttemptId, AttemptState, Candidate, CandidateId, Digest, EffectId, EffectReceiptId, TaskClass,
@@ -110,7 +110,7 @@ fn attempts_order_by_variant_then_fence_and_leases_by_variant() {
 }
 
 #[test]
-fn json_rows_order_by_id_and_demo_rows_are_all_visible() {
+fn json_rows_order_by_id_and_component_demo_invents_no_authority_rows() {
     let mut ledger = MemoryLedger::new();
     for seed in ["z-3", "a-1", "m-2"] {
         let candidate = Candidate {
@@ -135,19 +135,13 @@ fn json_rows_order_by_id_and_demo_rows_are_all_visible() {
 
     let mut demo = MemoryLedger::new();
     let receipt = run_demo(&mut demo).expect("demo");
-    let candidates = demo.list_candidates().expect("candidates");
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].head_sha, receipt.candidate_head);
-    let evidence = demo.list_evidence().expect("evidence");
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].result, receipt.evidence_result);
-    let effects = demo.list_effects().expect("effects");
-    let mut outcomes: Vec<&str> = effects
-        .iter()
-        .map(|effect| effect.outcome.as_str())
-        .collect();
-    outcomes.sort_unstable();
-    assert_eq!(outcomes, ["unknown", "verified"]);
+    assert_eq!(receipt.candidate_head, "NOT_PRODUCED");
+    assert_eq!(receipt.evidence_result, "NOT_RUN");
+    assert_eq!(receipt.effect_outcome, "NOT_DISPATCHED");
+    assert_eq!(receipt.effect_unknown_outcome, "NOT_DISPATCHED");
+    assert!(demo.list_candidates().expect("candidates").is_empty());
+    assert!(demo.list_evidence().expect("evidence").is_empty());
+    assert!(demo.list_effects().expect("effects").is_empty());
     assert!(demo.list_all_attempts().expect("attempts").len() >= 2);
 }
 

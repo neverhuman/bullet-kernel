@@ -2,16 +2,16 @@
 
 use bullet_harness_core::{
     Ack, AgentEventKind, AuthChallenge, CompactRequest, ContextTransition, HarnessAdapter,
-    HarnessDescriptor, HarnessEventStream, HarnessResult, ModelSnapshot, PermissionDecision,
-    PlanDecision, ProbeResult, ProfileRef, QuotaObservation, ResumeSession, SessionCheckpoint,
-    SessionHandle, StartSession, SteeringMessage, Turn, TurnHandle,
+    HarnessDescriptor, HarnessError, HarnessEventStream, HarnessResult, ModelSnapshot,
+    PermissionDecision, PlanDecision, ProbeResult, ProfileRef, QuotaObservation, ResumeSession,
+    SessionCheckpoint, SessionHandle, StartSession, SteeringMessage, Turn, TurnHandle,
 };
 use bullet_harness_sim::SimAdapter;
 use futures::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub(super) struct ScriptedSim {
@@ -19,6 +19,7 @@ pub(super) struct ScriptedSim {
     overrides: Mutex<HashMap<usize, Value>>,
     prompts: Mutex<Vec<String>>,
     send_delay: Mutex<Option<Duration>>,
+    start_failure: Mutex<Option<String>>,
     terminated: AtomicBool,
 }
 
@@ -29,6 +30,7 @@ impl ScriptedSim {
             overrides: Mutex::new(HashMap::new()),
             prompts: Mutex::new(Vec::new()),
             send_delay: Mutex::new(None),
+            start_failure: Mutex::new(None),
             terminated: AtomicBool::new(false),
         }
     }
@@ -46,6 +48,10 @@ impl ScriptedSim {
 
     pub(super) fn delay_send(&self, delay: Duration) {
         *self.send_delay.lock().expect("send delay") = Some(delay);
+    }
+
+    pub(super) fn fail_start(&self, reason: &str) {
+        *self.start_failure.lock().expect("start failure") = Some(reason.to_string());
     }
 
     pub(super) fn was_terminated(&self) -> bool {
@@ -76,6 +82,12 @@ impl HarnessAdapter for ScriptedSim {
     }
 
     async fn start(&self, request: StartSession) -> HarnessResult<SessionHandle> {
+        if let Some(reason) = self.start_failure.lock().expect("start failure").clone() {
+            return Err(HarnessError::Protocol {
+                provider: "test-simulator".into(),
+                reason,
+            });
+        }
         self.inner.start(request).await
     }
 

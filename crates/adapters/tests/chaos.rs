@@ -1,7 +1,7 @@
 //! Kill/retry suite against the durable ledger. Replay is the recovery path.
 
 use bullet_adapters::SqliteLedger;
-use bullet_application::{materialize_plan, run_demo, LeaseService, Ledger, PlanInput};
+use bullet_application::{LeaseService, Ledger, PlanInput, materialize_plan, run_demo};
 use bullet_domain::observation::{
     PreservationDecision, PreservationOperation, PreservationOutcome, PreservationRecord,
 };
@@ -47,8 +47,10 @@ fn sqlite_demo_roundtrip_shows_both_fences() {
     assert!(receipt.materialize_idempotent);
     assert_eq!(receipt.fence_first, 1);
     assert_eq!(receipt.fence_second, 2);
-    assert_eq!(receipt.effect_outcome, "verified");
-    assert_eq!(receipt.effect_unknown_outcome, "unknown");
+    assert_eq!(receipt.candidate_head, "NOT_PRODUCED");
+    assert_eq!(receipt.evidence_result, "NOT_RUN");
+    assert_eq!(receipt.effect_outcome, "NOT_DISPATCHED");
+    assert_eq!(receipt.effect_unknown_outcome, "NOT_DISPATCHED");
     drop(ledger);
     let mut again = SqliteLedger::open(&path).expect("reopen");
     let second = run_demo(&mut again).expect("idempotent demo");
@@ -144,11 +146,10 @@ fn exact_preservation_decision_is_consumed_before_cleanup() {
         Digest::of(b"live-preservation-receipt"),
         PreservationOutcome::Preserved,
     );
-    assert!(PreservationDecision::for_workspace_cleanup(
-        &Observation::value(live_record),
-        &running,
-    )
-    .is_err());
+    assert!(
+        PreservationDecision::for_workspace_cleanup(&Observation::value(live_record), &running,)
+            .is_err()
+    );
 
     LeaseService::release(&mut ledger, &grant, AttemptState::Superseded, true)
         .expect("terminalize before cleanup");
@@ -214,8 +215,10 @@ fn corrupt_or_superseded_active_lease_fails_closed() {
             .reason_code(),
         "STORE_FAILURE"
     );
-    assert!(ledger
-        .get_lease(&grant.lease.variant_id)
-        .expect("read lease")
-        .is_some());
+    assert!(
+        ledger
+            .get_lease(&grant.lease.variant_id)
+            .expect("read lease")
+            .is_some()
+    );
 }
