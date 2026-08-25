@@ -9,6 +9,7 @@ pub mod effect_state;
 pub mod effects;
 pub mod graph_delta;
 pub mod launch_grant;
+pub mod lease_transport;
 pub mod leases;
 pub mod live_conformance;
 pub mod materializer;
@@ -29,6 +30,9 @@ pub use launch_grant::{
     LaunchGrantIssueError, LaunchGrantIssuer, LaunchGrantNonceRecord, LaunchGrantNonceStore,
     LaunchGrantRequest, LedgerLaunchGrantIssuer, StoreNonceLedger, StoredLaunchGrantNonce,
 };
+#[cfg(any(test, feature = "test-seams"))]
+pub use lease_transport::{issue_operation_permit, issue_permit};
+pub use lease_transport::{SignedAcquireBody, SignedLeaseError, SignedLeaseService};
 pub use leases::LeaseService;
 pub use live_conformance::{
     run_live_conformance, LiveConformanceError, LiveConformanceOptions, LiveConformanceRun,

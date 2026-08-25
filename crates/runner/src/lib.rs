@@ -15,6 +15,8 @@ pub mod http_lease;
 pub mod journal;
 pub mod lease;
 pub mod scope;
+#[cfg(feature = "test-seams")]
+pub mod signed_lease;
 
 pub use attempt::{run_attempt, AttemptConfig, AttemptOutcome};
 pub use capsule::Capsule;
@@ -30,3 +32,5 @@ pub use lease::{
     AcquireGrant, AcquireRequest, DirectLeaseClient, HeartbeatCall, LeaseClient, ReadyView,
     ReleaseCall,
 };
+#[cfg(feature = "test-seams")]
+pub use signed_lease::SignedLeaseClient;

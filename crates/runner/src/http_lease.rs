@@ -1,5 +1,7 @@
-//! `HttpLeaseClient`: the `LeaseClient` implementation over the minimal
-//! loopback HTTP client, speaking the farmd lease API.
+//! `HttpLeaseClient`: the leftover unsigned client for farmd `/v1/leases/*`.
+//! Those routes are not mounted (farmd returns `NOT_FOUND`). Do not remount
+//! this client as admission. The signed replacement is
+//! `bullet_application::lease_transport::SignedLeaseService`.
 
 use crate::error::RunnerError;
 use crate::http::HttpJson;

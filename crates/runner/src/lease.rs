@@ -1,6 +1,9 @@
-//! `LeaseClient`: how the runner talks to writer-lease authority. Two
-//! implementations: `HttpLeaseClient` against the farmd lease API and
-//! `DirectLeaseClient` over a `Ledger` for tests.
+//! `LeaseClient`: how the runner talks to writer-lease authority. A production
+//! signed transport is not implemented yet. `DirectLeaseClient` is unsigned
+//! and stays test/embedded-only. `HttpLeaseClient` talks to farmd
+//! `/v1/leases/*`, which is not mounted. The feature-gated
+//! `SignedLeaseClient` co-locates permit issuance and verification and is a
+//! simulator only, never an admission path.
 
 use crate::error::RunnerError;
 use async_trait::async_trait;
@@ -134,7 +137,8 @@ fn map_ledger(err: bullet_application::LedgerError) -> RunnerError {
     }
 }
 
-/// In-process client over any `Ledger`. Used by tests and embedded runs.
+/// Unsigned in-process client over any `Ledger`. Tests and the archived
+/// live-demo path use this. It is not admission.
 pub struct DirectLeaseClient<L: Ledger + Send> {
     ledger: Arc<Mutex<L>>,
 }
@@ -154,7 +158,7 @@ impl<L: Ledger + Send> DirectLeaseClient<L> {
     }
 }
 
-fn graph_for_package<L: Ledger>(
+pub(crate) fn graph_for_package<L: Ledger>(
     ledger: &L,
     package: &WorkPackageId,
 ) -> Result<Option<(StoredGraph, VariantId)>, RunnerError> {

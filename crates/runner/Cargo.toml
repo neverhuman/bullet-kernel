@@ -10,6 +10,12 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# Exposes the self-minting in-process lease simulator and propagates the
+# application issuer seam. Never enable in a production Runner build.
+test-seams = ["bullet-application/test-seams"]
+
 [dependencies]
 async-trait.workspace = true
 bullet-application.workspace = true
@@ -27,3 +33,7 @@ tracing.workspace = true
 [dev-dependencies]
 bullet-harness-sim.workspace = true
 tempfile.workspace = true
+
+[[test]]
+name = "signed_lease"
+required-features = ["test-seams"]

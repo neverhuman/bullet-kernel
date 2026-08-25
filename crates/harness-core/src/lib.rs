@@ -12,6 +12,7 @@ pub mod error;
 pub mod event;
 pub mod ids;
 pub mod launch_grant;
+pub mod lease_transport;
 pub mod live;
 pub mod probe;
 pub mod proposal;
@@ -44,6 +45,12 @@ pub use launch_grant::{
     verify_launch_grant, LaunchGrantClaims, LaunchGrantExpectation, LaunchGrantNonceLedger,
     LaunchGrantSigningKey, LaunchGrantVerificationKey, LeaseBinding, MemoryNonceLedger,
     NonceConsumption, PolicyBinding, ProviderBinding, SignedLaunchGrant, VerifiedLaunchGrant,
+};
+pub use lease_transport::{
+    request_digest, verify_lease_permit, LeaseTransportClaims, LeaseTransportError,
+    LeaseTransportExpectation, LeaseTransportOperation, LeaseTransportSigningKey,
+    LeaseTransportVerificationKey, SignedLeasePermit, VerifiedLeasePermit,
+    LEASE_TRANSPORT_AUDIENCE, LEASE_TRANSPORT_SCHEMA_VERSION,
 };
 pub use live::{
     capture_turn, is_pong, run_interactive, scan_events, CommandFactory, EgressBackend,

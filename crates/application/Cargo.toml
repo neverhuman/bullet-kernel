@@ -10,7 +10,8 @@ workspace = true
 
 [features]
 # Enables the documented, test-only live-conformance seams (a live-admission
-# policy constructor and a no-op egress backend). Never enabled in production.
+# policy constructor and a no-op egress backend) plus the in-process lease
+# permit issuer used by transport simulations. Never enabled in production.
 test-seams = []
 
 [dependencies]
@@ -26,3 +27,7 @@ thiserror.workspace = true
 bullet-harness-claude.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
+
+[[test]]
+name = "lease_transport"
+required-features = ["test-seams"]
