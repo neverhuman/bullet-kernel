@@ -511,10 +511,22 @@ components:
       pattern: '^[0-9a-f]{64}$'
     Health:
       type: object
+      additionalProperties: false
       required: [status]
       properties:
-        status:
+        status: { type: string, enum: [ok] }
+        portal:
           type: string
+          pattern: '^blake3:[0-9a-f]{64}$'
+        reap:
+          $ref: "#/components/schemas/HealthReap"
+    HealthReap:
+      type: object
+      additionalProperties: false
+      required: [last_run_at, reclaimed]
+      properties:
+        last_run_at: { type: string, format: date-time }
+        reclaimed: { type: integer, minimum: 0, maximum: 9007199254740991 }
     BootstrapRequest:
       type: object
       additionalProperties: false
@@ -527,8 +539,10 @@ components:
       required: [status, csrf_token, expires_in_seconds]
       properties:
         status: { type: string, enum: [AUTHENTICATED] }
-        csrf_token: { type: string }
-        expires_in_seconds: { type: integer }
+        csrf_token:
+          type: string
+          pattern: '^csrf_[0-9a-f]{64}$'
+        expires_in_seconds: { type: integer, minimum: 1, maximum: 9007199254740991 }
     CommandEnvelope:
       type: object
       additionalProperties: false
@@ -694,18 +708,22 @@ components:
         source: { type: string, enum: [bullet-kernel/sqlite-ledger] }
     OutboxItem:
       type: object
+      additionalProperties: false
       required: [seq, kind, payload, phase, delivered_at, acked_at]
       properties:
-        seq: { type: integer }
-        kind: { type: string }
+        seq: { type: integer, minimum: 1, maximum: 9007199254740991 }
+        kind: { type: string, minLength: 1 }
         payload: { type: string }
-        phase: { type: string }
+        phase: { type: string, enum: [pending, applied, failed, verified, unknown] }
         delivered_at:
           type: [string, "null"]
+          format: date-time
         acked_at:
           type: [string, "null"]
+          format: date-time
     OutboxView:
       type: object
+      additionalProperties: false
       required: [items]
       properties:
         items:
@@ -724,6 +742,7 @@ components:
         source: { type: string, enum: [bullet-kernel/sqlite-ledger] }
     EventEnvelope:
       type: object
+      additionalProperties: false
       required:
         - id
         - seq
@@ -731,13 +750,16 @@ components:
         - kind
         - body
       properties:
-        id: { type: string }
-        seq: { type: integer }
+        id:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        seq: { type: integer, minimum: 1, maximum: 9007199254740991 }
         at: { type: string, format: date-time }
-        kind: { type: string }
+        kind: { type: string, minLength: 1 }
         body: { type: string }
     Problem:
       type: object
+      additionalProperties: false
       required:
         - type
         - title
@@ -750,16 +772,26 @@ components:
         - retryable
         - repair
       properties:
-        type: { type: string }
-        title: { type: string }
-        status: { type: integer }
-        detail: { type: string }
-        instance: { type: string }
-        code: { type: string }
-        request_id: { type: string }
-        correlation_id: { type: string }
+        type:
+          type: string
+          pattern: '^https://bullet\.farm/problems/[a-z0-9-]+$'
+        title: { type: string, minLength: 1 }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        detail: { type: string, minLength: 1 }
+        instance:
+          type: string
+          pattern: '^urn:bullet:request:req_[0-9a-f]{16}$'
+        code:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]*$'
+        request_id:
+          type: string
+          pattern: '^req_[0-9a-f]{16}$'
+        correlation_id:
+          type: string
+          pattern: '^corr_[0-9a-f]{16}$'
         retryable: { type: boolean }
-        repair: { type: string }
+        repair: { type: string, minLength: 1 }
     ReadyView:
       type: object
       additionalProperties: false

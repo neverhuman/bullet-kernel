@@ -22,7 +22,14 @@ export type VariantId = string;
 export type Digest = string;
 
 export type Health = {
-  status: string;
+  status: "ok";
+  portal?: string;
+  reap?: HealthReap;
+};
+
+export type HealthReap = {
+  last_run_at: string;
+  reclaimed: number;
 };
 
 export type BootstrapRequest = {
@@ -121,7 +128,7 @@ export type OutboxItem = {
   seq: number;
   kind: string;
   payload: string;
-  phase: string;
+  phase: "pending" | "applied" | "failed" | "verified" | "unknown";
   delivered_at: string | null;
   acked_at: string | null;
 };
@@ -591,6 +598,32 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       ],
       "type": "object"
     },
+    "BootstrapResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "csrf_token": {
+          "pattern": "^csrf_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "expires_in_seconds": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "AUTHENTICATED"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "csrf_token",
+        "expires_in_seconds"
+      ],
+      "type": "object"
+    },
     "CandidateId": {
       "pattern": "^can_[0-9a-f]{64}$",
       "type": "string"
@@ -933,6 +966,39 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       ],
       "type": "string"
     },
+    "EventEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "kind": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "seq": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "seq",
+        "at",
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
     "EvidenceId": {
       "pattern": "^evd_[0-9a-f]{64}$",
       "type": "string"
@@ -1095,6 +1161,47 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
         "INVALIDATED"
       ],
       "type": "string"
+    },
+    "Health": {
+      "additionalProperties": false,
+      "properties": {
+        "portal": {
+          "pattern": "^blake3:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "reap": {
+          "$ref": "#/$defs/HealthReap"
+        },
+        "status": {
+          "enum": [
+            "ok"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "HealthReap": {
+      "additionalProperties": false,
+      "properties": {
+        "last_run_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "reclaimed": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "last_run_at",
+        "reclaimed"
+      ],
+      "type": "object"
     },
     "JsonValue": {
       "description": "A recursively typed JSON value from durable command truth.",
@@ -1293,9 +1400,132 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       "pattern": "^org_[0-9a-f]{64}$",
       "type": "string"
     },
+    "OutboxItem": {
+      "additionalProperties": false,
+      "properties": {
+        "acked_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delivered_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "payload": {
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "pending",
+            "applied",
+            "failed",
+            "verified",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "seq": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "kind",
+        "payload",
+        "phase",
+        "delivered_at",
+        "acked_at"
+      ],
+      "type": "object"
+    },
+    "OutboxView": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/OutboxItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
     "PlanRevisionId": {
       "pattern": "^pln_[0-9a-f]{64}$",
       "type": "string"
+    },
+    "Problem": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "type": "string"
+        },
+        "correlation_id": {
+          "pattern": "^corr_[0-9a-f]{16}$",
+          "type": "string"
+        },
+        "detail": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "instance": {
+          "pattern": "^urn:bullet:request:req_[0-9a-f]{16}$",
+          "type": "string"
+        },
+        "repair": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^req_[0-9a-f]{16}$",
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "status": {
+          "maximum": 599,
+          "minimum": 400,
+          "type": "integer"
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "pattern": "^https://bullet\\.farm/problems/[a-z0-9-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "status",
+        "detail",
+        "instance",
+        "code",
+        "request_id",
+        "correlation_id",
+        "retryable",
+        "repair"
+      ],
+      "type": "object"
     },
     "QualityLabView": {
       "additionalProperties": false,
@@ -1473,12 +1703,17 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
 
 export const PUBLIC_API_RUNTIME_REFS = {
   AuditView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/AuditView",
+  BootstrapResponse: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/BootstrapResponse",
   CommandStatus: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandStatus",
   ContextLineageView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ContextLineageView",
+  EventEnvelope: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/EventEnvelope",
   FleetView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/FleetView",
+  Health: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/Health",
   MergeRailView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/MergeRailView",
   Mission: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/Mission",
   MissionView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/MissionView",
+  OutboxView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/OutboxView",
+  Problem: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/Problem",
   QualityLabView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/QualityLabView",
   ReadyView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ReadyView",
   SessionSupervisorView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/SessionSupervisorView",
