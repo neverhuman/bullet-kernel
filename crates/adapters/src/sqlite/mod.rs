@@ -89,8 +89,7 @@ impl SqliteLedger {
             .map_err(store)?;
         migrations::enable_foreign_keys(&conn)?;
         migrations::verify_or_initialize(&mut conn)?;
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(store)?;
+        configure_durability(&conn)?;
         Ok(Self {
             conn,
             materialization_fail_after: None,
@@ -149,6 +148,25 @@ impl SqliteLedger {
         transaction.commit()?;
         Ok((data, as_of_sequence))
     }
+}
+
+fn configure_durability(conn: &Connection) -> Result<(), LedgerError> {
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(store)?;
+    conn.pragma_update(None, "synchronous", "FULL")
+        .map_err(store)?;
+    let journal_mode: String = conn
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .map_err(store)?;
+    let synchronous: i64 = conn
+        .pragma_query_value(None, "synchronous", |row| row.get(0))
+        .map_err(store)?;
+    if journal_mode != "wal" || synchronous != 2 {
+        return Err(store(format!(
+            "SQLite refused required durability pragmas: journal_mode={journal_mode}, synchronous={synchronous}"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn store(err: impl ToString) -> LedgerError {

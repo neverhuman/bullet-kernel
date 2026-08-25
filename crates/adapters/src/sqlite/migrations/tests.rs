@@ -39,15 +39,29 @@ fn unsupported(result: Result<SqliteLedger, LedgerError>) -> LedgerError {
     error
 }
 
+fn assert_connection_pragmas(ledger: &SqliteLedger) {
+    let foreign_keys: i64 = ledger
+        .conn
+        .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+        .unwrap();
+    let journal_mode: String = ledger
+        .conn
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .unwrap();
+    let synchronous: i64 = ledger
+        .conn
+        .pragma_query_value(None, "synchronous", |row| row.get(0))
+        .unwrap();
+    assert_eq!(foreign_keys, 1);
+    assert_eq!(journal_mode, "wal");
+    assert_eq!(synchronous, 2);
+}
+
 #[test]
 fn fresh_creation_records_exact_checksums_and_reopens() {
     let (_directory, path) = database();
     let ledger = SqliteLedger::open(&path).unwrap();
-    let enabled: i64 = ledger
-        .conn
-        .pragma_query_value(None, "foreign_keys", |row| row.get(0))
-        .unwrap();
-    assert_eq!(enabled, 1);
+    assert_connection_pragmas(&ledger);
     let rows: Vec<(i64, String, String)> = ledger
         .conn
         .prepare("SELECT version, name, checksum FROM schema_version ORDER BY version")
@@ -65,11 +79,7 @@ fn fresh_creation_records_exact_checksums_and_reopens() {
     drop(ledger);
 
     let reopened = SqliteLedger::open(path).unwrap();
-    let enabled: i64 = reopened
-        .conn
-        .pragma_query_value(None, "foreign_keys", |row| row.get(0))
-        .unwrap();
-    assert_eq!(enabled, 1);
+    assert_connection_pragmas(&reopened);
 }
 
 #[test]
