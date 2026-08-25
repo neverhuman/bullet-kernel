@@ -57,6 +57,11 @@ pub(in crate::sqlite) fn acquire_lease(
 
     let ttl_seconds = req.validated_ttl()?;
     let (now, expires_at) = lease_time::database_window(&tx, ttl_seconds)?;
+    // A runner that died without releasing leaves a holder row behind, and the
+    // checks below refuse every successor while it exists. Reclaim it here, in
+    // this same transaction and against this same database clock, so a crashed
+    // incarnation can never block its Variant forever. A live lease is untouched.
+    super::reclaim_expired_variant(&tx, &req.variant_id, &now)?;
     let stored = graph::get_graph(&tx, &req.mission_id)?
         .ok_or_else(|| LedgerError::Store("graph missing".into()))?;
     let variant_index = stored

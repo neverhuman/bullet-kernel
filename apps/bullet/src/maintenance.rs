@@ -1,11 +1,46 @@
-//! Thin offline CLI boundary for receipt-bound SQLite maintenance.
+//! Thin offline CLI boundary for receipt-bound SQLite maintenance and for
+//! reclaiming the writer leases of runners that died without releasing.
 
-use bullet_adapters::{create_backup, restore_backup, BackupReceipt};
+use bullet_adapters::{create_backup, restore_backup, BackupReceipt, SqliteLedger};
+use bullet_application::{ExpiredLease, LeaseService};
+use serde::Serialize;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 
 const MAX_RECEIPT_BYTES: u64 = 16 * 1024;
+
+/// Stable machine-readable result of one reclamation sweep.
+#[derive(Serialize)]
+struct ReapReport<'a> {
+    schema_version: u32,
+    command: &'a str,
+    database: String,
+    reclaimed: Vec<ExpiredLease>,
+}
+
+/// Reclaim every writer lease whose expiry has already passed, in one ledger
+/// transaction against the database's own clock. Deterministic and idempotent:
+/// a second run over the same database reclaims nothing and reports an empty
+/// set. It grants no authority and never revives a dead Attempt.
+pub(super) fn reap(database: &Path) -> Result<(), String> {
+    if !database.is_file() {
+        return Err(format!("ledger database not found: {}", database.display()));
+    }
+    let mut ledger = SqliteLedger::open(database).map_err(|error| error.to_string())?;
+    let reclaimed = LeaseService::expire_due(&mut ledger).map_err(|error| error.to_string())?;
+    let report = ReapReport {
+        schema_version: 1,
+        command: "farm reap",
+        database: database.display().to_string(),
+        reclaimed,
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
+    );
+    Ok(())
+}
 
 pub(super) fn backup(database: &Path, output: &Path, receipt_path: &Path) -> Result<(), String> {
     let receipt = create_backup(database, output).map_err(|error| error.to_string())?;

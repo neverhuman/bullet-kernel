@@ -3,7 +3,8 @@
 //! followed by separate writes.
 
 use crate::records::{
-    validate_lease_ttl, HeartbeatRequest, LeaseGrant, LeaseRequest, ReleaseRequest, StoredGraph,
+    validate_lease_ttl, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, ReleaseRequest,
+    StoredGraph,
 };
 use crate::store::{Ledger, LedgerError};
 use bullet_domain::{
@@ -69,6 +70,25 @@ impl LeaseService {
         let grant = ledger.acquire_lease(&request)?;
         let token = Self::token_for(graph, &grant.attempt)?;
         Ok((grant.attempt.clone(), token, grant))
+    }
+
+    /// Reclaim every lease whose expiry has already passed, in one ledger
+    /// transaction against the store's own clock.
+    ///
+    /// This is the named production entry point for expiry reclamation: the
+    /// `bullet farm reap` CLI and any daemon maintenance tick call exactly this
+    /// function, and it is deterministic — it reclaims what is due at the
+    /// moment the store commits, and nothing else. Acquisition does not need
+    /// it: [`Self::acquire`] reaches `Ledger::acquire_lease`, which reclaims the
+    /// requested Variant's dead lease inside its own transaction. Running it
+    /// again after it has reclaimed a lease returns an empty set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store failure; a corrupt persisted lease window fails closed
+    /// without reclaiming anything.
+    pub fn expire_due<L: Ledger>(ledger: &mut L) -> Result<Vec<ExpiredLease>, LedgerError> {
+        ledger.expire_leases()
     }
 
     /// Rebuild the token an acquisition minted for `attempt`.

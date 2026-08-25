@@ -69,6 +69,12 @@ enum FarmCommands {
         #[arg(long)]
         receipt: PathBuf,
     },
+    /// Reclaim every writer lease whose expiry has already passed.
+    Reap {
+        /// Existing Kernel ledger database.
+        #[arg(long)]
+        database: PathBuf,
+    },
     /// Restore an exact receipt-bound snapshot into quarantine.
     Restore {
         /// Standalone SQLite snapshot created by `farm backup`.
@@ -114,6 +120,7 @@ fn run(command: Commands) -> Result<(), String> {
                 output,
                 receipt,
             } => maintenance::backup(&database, &output, &receipt),
+            FarmCommands::Reap { database } => maintenance::reap(&database),
             FarmCommands::Restore {
                 backup,
                 receipt,

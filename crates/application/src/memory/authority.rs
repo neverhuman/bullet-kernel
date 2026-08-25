@@ -2,6 +2,8 @@
 //! Semantics mirror the SQLite adapter's transactions: every path validates
 //! and serializes first, then commits all map mutations together.
 
+mod reclaim;
+
 use super::{json, MemoryLedger};
 use crate::authority::{check_active_lease_snapshot, ActiveLeaseSubject};
 use crate::commands::{CommandRecord, CommandRequest};
@@ -131,6 +133,10 @@ impl MemoryLedger {
         self.tick()?;
         let ttl_seconds = req.validated_ttl()?;
         let (now, expires_at) = self.lease_window(ttl_seconds)?;
+        // Mirrors the SQLite adapter: a runner that died without releasing
+        // leaves a holder row that refuses every successor. Reclaim it here,
+        // against the same clock, so a crash cannot block the Variant forever.
+        self.reclaim_expired_variant(&req.variant_id, &now)?;
         let graph = self
             .graphs
             .get(&req.mission_id.to_string())
@@ -298,45 +304,9 @@ impl MemoryLedger {
     pub(super) fn expire_leases_impl(&mut self) -> Result<Vec<ExpiredLease>, LedgerError> {
         self.tick()?;
         let now = self.simulation_time();
-        let expired: Vec<ActiveLease> = self
-            .leases
-            .values()
-            .filter(|lease| lease.expires_at.as_str() <= now.as_str())
-            .cloned()
-            .collect();
         let mut out = Vec::new();
-        for lease in expired {
-            let attempt_key = lease.attempt_id.to_string();
-            let attempt = self
-                .attempts
-                .get(&attempt_key)
-                .cloned()
-                .ok_or_else(|| LedgerError::Store("lease without attempt".into()))?;
-            if !attempt.state.permits_expiry_reclaim() {
-                return Err(LedgerError::Store(format!(
-                    "active lease Attempt {} cannot expire from {:?}",
-                    attempt.id, attempt.state
-                )));
-            }
-            let next_state = attempt.state.transition(AttemptState::Crashed)?;
-            if let Some(stored) = self.attempts.get_mut(&attempt_key) {
-                stored.state = next_state;
-            }
-            self.leases.remove(&lease.variant_id.to_string());
-            self.requeue_package(&attempt.work_package_id, &now)?;
-            self.push_event(
-                "lease_expired",
-                lease.attempt_id.as_str(),
-                Some(lease.variant_id.to_string()),
-                None,
-                None,
-            );
-            out.push(ExpiredLease {
-                variant_id: lease.variant_id.clone(),
-                attempt_id: lease.attempt_id.clone(),
-                work_package_id: attempt.work_package_id.clone(),
-                fence: lease.fence,
-            });
+        for lease in self.due_leases(&now) {
+            out.push(self.reclaim(&lease, &now)?);
         }
         Ok(out)
     }

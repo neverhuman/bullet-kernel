@@ -5,7 +5,7 @@ mod acquire;
 
 pub(super) use acquire::acquire_lease;
 
-use super::{events, graph, lease_time, store};
+use super::{events, graph, json, lease_time, outbox, store};
 use bullet_application::{
     check_active_lease_snapshot, ActiveLease, ActiveLeaseSubject, ExpiredLease, HeartbeatRequest,
     LedgerError, ReadyRow, ReleaseRequest,
@@ -160,63 +160,100 @@ pub(super) fn check_active_lease_in(
     check_active_lease_snapshot(&lease, &attempt, subject, &now)
 }
 
+/// Outbox kind for one lease reclaimed by expiry. It is a durable delivery
+/// record of the reclamation, never a second dispatch: the successor is
+/// dispatched by its own `attempt_leased` acquisition.
+pub(super) const RECLAIM_OUTBOX_KIND: &str = "lease_reclaimed";
+
+/// Every lease whose expiry has already passed, read inside the caller's
+/// transaction against the store's own clock.
+fn due_leases(tx: &Connection, now: &str) -> Result<Vec<ActiveLease>, LedgerError> {
+    let mut stmt = tx
+        .prepare(&format!(
+            "SELECT {LEASE_COLUMNS} FROM active_leases ORDER BY variant_id"
+        ))
+        .map_err(store)?;
+    let rows = stmt.query_map([], read_lease).map_err(store)?;
+    let mut leases = Vec::new();
+    for row in rows {
+        let lease = lease_from(row.map_err(store)?)?;
+        if lease.expires_at.as_str() <= now {
+            leases.push(lease);
+        }
+    }
+    Ok(leases)
+}
+
+/// Reclaim one already-expired lease inside the caller's `BEGIN IMMEDIATE`
+/// transaction: the dead Attempt moves to its typed terminal `Crashed` state,
+/// the lease row is deleted, the work package returns to the ready queue, and
+/// the durable event plus outbox row commit with them. `variant_fence_counters`
+/// is never touched, so the successor is granted fence N+1 and the dead fence
+/// is never reused.
+fn reclaim(tx: &Connection, lease: &ActiveLease, now: &str) -> Result<ExpiredLease, LedgerError> {
+    let attempt = graph::get_attempt(tx, &lease.attempt_id)?
+        .ok_or_else(|| LedgerError::Store("lease without attempt".into()))?;
+    if !attempt.state.permits_expiry_reclaim() {
+        return Err(LedgerError::Store(format!(
+            "active lease Attempt {} cannot expire from {:?}",
+            attempt.id, attempt.state
+        )));
+    }
+    let next_state = attempt.state.transition(AttemptState::Crashed)?;
+    tx.execute(
+        "UPDATE attempts SET state = ?2 WHERE id = ?1",
+        params![attempt.id.to_string(), next_state.as_str()],
+    )
+    .map_err(store)?;
+    tx.execute(
+        "DELETE FROM active_leases WHERE variant_id = ?1",
+        params![lease.variant_id.to_string()],
+    )
+    .map_err(store)?;
+    graph::requeue_package(tx, &attempt.work_package_id, now)?;
+    events::insert_event(
+        tx,
+        "lease_expired",
+        lease.attempt_id.as_str(),
+        Some(&lease.variant_id.to_string()),
+        None,
+        None,
+    )?;
+    let expired = ExpiredLease {
+        variant_id: lease.variant_id.clone(),
+        attempt_id: lease.attempt_id.clone(),
+        work_package_id: attempt.work_package_id.clone(),
+        fence: lease.fence,
+    };
+    outbox::enqueue(tx, None, RECLAIM_OUTBOX_KIND, &json(&expired)?)?;
+    Ok(expired)
+}
+
+/// Reclaim exactly this variant's lease when its expiry has already passed,
+/// inside the caller's acquisition transaction. A lease that is still live is
+/// never reclaimed; a variant with no lease row is not an error.
+pub(in crate::sqlite) fn reclaim_expired_variant(
+    tx: &Connection,
+    variant: &VariantId,
+    now: &str,
+) -> Result<Option<ExpiredLease>, LedgerError> {
+    let Some(lease) = get_lease(tx, variant)? else {
+        return Ok(None);
+    };
+    if now < lease.expires_at.as_str() {
+        return Ok(None);
+    }
+    reclaim(tx, &lease, now).map(Some)
+}
+
 pub(super) fn expire_leases(conn: &mut Connection) -> Result<Vec<ExpiredLease>, LedgerError> {
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store)?;
     let now = lease_time::database_time(&tx)?;
-    let expired = {
-        let mut stmt = tx
-            .prepare(&format!(
-                "SELECT {LEASE_COLUMNS} FROM active_leases ORDER BY variant_id"
-            ))
-            .map_err(store)?;
-        let rows = stmt.query_map([], read_lease).map_err(store)?;
-        let mut leases = Vec::new();
-        for row in rows {
-            let lease = lease_from(row.map_err(store)?)?;
-            if lease.expires_at <= now {
-                leases.push(lease);
-            }
-        }
-        leases
-    };
     let mut out = Vec::new();
-    for lease in expired {
-        let attempt = graph::get_attempt(&tx, &lease.attempt_id)?
-            .ok_or_else(|| LedgerError::Store("lease without attempt".into()))?;
-        if !attempt.state.permits_expiry_reclaim() {
-            return Err(LedgerError::Store(format!(
-                "active lease Attempt {} cannot expire from {:?}",
-                attempt.id, attempt.state
-            )));
-        }
-        let next_state = attempt.state.transition(AttemptState::Crashed)?;
-        tx.execute(
-            "UPDATE attempts SET state = ?2 WHERE id = ?1",
-            params![attempt.id.to_string(), next_state.as_str()],
-        )
-        .map_err(store)?;
-        tx.execute(
-            "DELETE FROM active_leases WHERE variant_id = ?1",
-            params![lease.variant_id.to_string()],
-        )
-        .map_err(store)?;
-        graph::requeue_package(&tx, &attempt.work_package_id, &now)?;
-        events::insert_event(
-            &tx,
-            "lease_expired",
-            lease.attempt_id.as_str(),
-            Some(&lease.variant_id.to_string()),
-            None,
-            None,
-        )?;
-        out.push(ExpiredLease {
-            variant_id: lease.variant_id.clone(),
-            attempt_id: lease.attempt_id.clone(),
-            work_package_id: attempt.work_package_id.clone(),
-            fence: lease.fence,
-        });
+    for lease in due_leases(&tx, &now)? {
+        out.push(reclaim(&tx, &lease, &now)?);
     }
     tx.commit().map_err(store)?;
     Ok(out)
