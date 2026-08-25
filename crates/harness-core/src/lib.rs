@@ -20,6 +20,7 @@ pub mod session;
 pub mod spawnrun;
 pub mod store;
 pub mod strict_json;
+pub mod transaction_proof;
 
 pub use adapter::{
     unsupported, Ack, AuthChallenge, CompactRequest, ContextTransition, HarnessAdapter,
@@ -68,3 +69,8 @@ pub use spawnrun::{
 };
 pub use store::{SessionEntry, SessionStore};
 pub use strict_json::decode_strict_json;
+pub use transaction_proof::{
+    verify_transaction_component, SignedTransactionComponent, TransactionComponentSigningKey,
+    TransactionComponentSubject, TRANSACTION_COMPONENT_CLASS, TRANSACTION_COMPONENT_SCHEMA_VERSION,
+    TRANSACTION_COMPONENT_TRUST,
+};

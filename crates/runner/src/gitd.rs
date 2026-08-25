@@ -16,12 +16,22 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 const FAMILY_BINARY: &str = "../../../bullet-git/target/debug/bullet-gitd";
+const FAMILY_FIXTURE_BINARY: &str = "../../../bullet-git/target/debug/bullet-gitd-fixture";
 
 /// Resolve the daemon binary: `BULLET_GITD_BIN` or the family default path.
 #[must_use]
 pub fn gitd_binary() -> PathBuf {
     std::env::var_os("BULLET_GITD_BIN").map_or_else(
         || Path::new(env!("CARGO_MANIFEST_DIR")).join(FAMILY_BINARY),
+        PathBuf::from,
+    )
+}
+
+/// Resolve the fixture-only daemon: `BULLET_GITD_FIXTURE_BIN` or family default.
+#[must_use]
+pub fn gitd_fixture_binary() -> PathBuf {
+    std::env::var_os("BULLET_GITD_FIXTURE_BIN").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join(FAMILY_FIXTURE_BINARY),
         PathBuf::from,
     )
 }
@@ -115,8 +125,23 @@ impl GitdSession {
     /// Returns `IO_FAILED` when the binary cannot be started (set
     /// `BULLET_GITD_BIN` or build bullet-gitd) or the token fails to encode.
     pub async fn spawn(token: &AuthorityToken) -> Result<Self, RunnerError> {
-        let binary = gitd_binary();
+        let token =
+            serde_json::to_value(token).map_err(|err| io_err("encode authority token", err))?;
+        Self::spawn_with(gitd_binary(), std::iter::empty::<&str>(), token).await
+    }
+
+    /// Spawn a specific binary, including the fixture-only daemon.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IO_FAILED` when the binary cannot be started.
+    pub async fn spawn_with(
+        binary: PathBuf,
+        args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+        token: Value,
+    ) -> Result<Self, RunnerError> {
         let mut child = Command::new(&binary)
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -131,8 +156,6 @@ impl GitdSession {
             .stdout
             .take()
             .ok_or_else(|| io_err("gitd stdout", "pipe missing"))?;
-        let token =
-            serde_json::to_value(token).map_err(|err| io_err("encode authority token", err))?;
         Ok(Self {
             _child: child,
             stdin,
@@ -140,6 +163,42 @@ impl GitdSession {
             next_id: 0,
             token,
         })
+    }
+
+    /// One request/response using the session token.
+    ///
+    /// # Errors
+    ///
+    /// Daemon refusals and IO failures.
+    pub async fn invoke(&mut self, method: &str, params: Value) -> Result<Value, RunnerError> {
+        self.call(method, params).await
+    }
+
+    /// Stop the child and wait so it is not left as a zombie.
+    ///
+    /// # Errors
+    ///
+    /// Wait failure after kill.
+    pub async fn kill(&mut self) -> Result<(), RunnerError> {
+        let _ = self._child.start_kill();
+        self._child
+            .wait()
+            .await
+            .map(|_| ())
+            .map_err(|err| io_err("gitd wait", err))
+    }
+
+    /// Preserve the workspace to a destination that must not already exist.
+    ///
+    /// # Errors
+    ///
+    /// Typed daemon refusal or IO failure.
+    pub async fn preserve(&mut self, destination: &Path) -> Result<Value, RunnerError> {
+        self.call(
+            "preserve",
+            json!({ "destination": destination.display().to_string() }),
+        )
+        .await
     }
 
     /// One request/response round trip with an explicit token. Exposed so
