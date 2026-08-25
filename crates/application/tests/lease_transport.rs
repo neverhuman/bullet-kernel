@@ -2,7 +2,8 @@
 //! stay absent; a valid permit is required before the ledger mutates.
 
 use bullet_application::lease_transport::{
-    issue_operation_permit, issue_permit, SignedAcquireBody, SignedLeaseService,
+    issue_operation_permit, issue_permit, KernelLeaseTransport, SignedAcquireBody,
+    SignedAdvanceBody, SignedHeartbeatBody, SignedLeaseService, SignedReleaseBody,
 };
 use bullet_application::records::{HeartbeatRequest, ReleaseRequest};
 use bullet_application::store::ProjectionReader;
@@ -295,4 +296,93 @@ fn unsigned_envelope_is_refused() {
         .unwrap_err();
     assert_eq!(error.reason_code(), "LEASE_TRANSPORT_INVALID");
     assert!(ledger.list_leases().unwrap().is_empty());
+}
+
+#[test]
+fn kernel_mints_and_readback_survives_service_rebuild() {
+    let (mut ledger, body) = seeded();
+    let transport = KernelLeaseTransport::generate().unwrap();
+    let now = 1_700_000_000_000;
+    let first = transport.acquire(&mut ledger, &body, now).unwrap();
+    let snapshot = ledger.clone();
+    let second = transport.readback(&mut ledger, &body, now + 1).unwrap();
+    assert_eq!(first.attempt.id, second.attempt.id);
+    assert_eq!(first.lease.fence, second.lease.fence);
+    let mut restored = snapshot;
+    let third = transport.readback(&mut restored, &body, now + 2).unwrap();
+    assert_eq!(first.attempt.id, third.attempt.id);
+}
+
+#[test]
+fn kernel_replayed_acquire_does_not_mint_a_sibling() {
+    let (mut ledger, body) = seeded();
+    let transport = KernelLeaseTransport::generate().unwrap();
+    let now = 1_700_000_000_000;
+    let first = transport.acquire(&mut ledger, &body, now).unwrap();
+    let second = transport.acquire(&mut ledger, &body, now + 1).unwrap();
+    assert_eq!(first.attempt.id, second.attempt.id);
+    assert_eq!(first.lease.fence, second.lease.fence);
+    assert_eq!(ledger.list_leases().unwrap().len(), 1);
+}
+
+#[test]
+fn kernel_supports_all_five_operations() {
+    let (mut ledger, body) = seeded();
+    let transport = KernelLeaseTransport::generate().unwrap();
+    let now = 1_700_000_000_000;
+    let grant = transport.acquire(&mut ledger, &body, now).unwrap();
+    transport
+        .heartbeat(
+            &mut ledger,
+            &SignedHeartbeatBody {
+                work_package_id: body.work_package_id.clone(),
+                idempotency_key: body.idempotency_key.clone(),
+                call: HeartbeatRequest {
+                    variant_id: grant.lease.variant_id.clone(),
+                    attempt_id: grant.attempt.id.clone(),
+                    fence: grant.lease.fence,
+                    runner_id: grant.lease.runner_id.clone(),
+                    runner_epoch: grant.lease.runner_epoch,
+                    workspace_nonce: grant.lease.workspace_nonce,
+                    ttl_seconds: grant.lease.ttl_seconds,
+                },
+            },
+            now + 1,
+        )
+        .unwrap();
+    let advanced = transport
+        .advance(
+            &mut ledger,
+            &SignedAdvanceBody {
+                work_package_id: body.work_package_id.clone(),
+                runner_id: body.runner_id.clone(),
+                runner_epoch: body.runner_epoch,
+                idempotency_key: body.idempotency_key.clone(),
+                attempt_id: grant.attempt.id.clone(),
+                state: AttemptState::Running,
+            },
+            now + 2,
+        )
+        .unwrap();
+    assert_eq!(advanced.state, AttemptState::Running);
+    transport
+        .release(
+            &mut ledger,
+            &SignedReleaseBody {
+                work_package_id: body.work_package_id.clone(),
+                runner_id: body.runner_id.clone(),
+                runner_epoch: body.runner_epoch,
+                idempotency_key: body.idempotency_key.clone(),
+                call: ReleaseRequest {
+                    variant_id: grant.lease.variant_id.clone(),
+                    attempt_id: grant.attempt.id.clone(),
+                    final_state: AttemptState::Failed,
+                    requeue: false,
+                },
+            },
+            now + 3,
+        )
+        .unwrap();
+    assert!(ledger.list_leases().unwrap().is_empty());
+    let _ = transport.readback(&mut ledger, &body, now + 4).unwrap();
 }

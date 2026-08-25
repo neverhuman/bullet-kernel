@@ -20,12 +20,13 @@ use crate::records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReadyRow, ReleaseRequest, StoredGraph,
 };
-use crate::store::{Ledger, LedgerError};
+use crate::store::{LeaseTransportTxn, Ledger, LedgerError};
 use crate::ContextCapsule;
 use bullet_domain::{
     Attempt, AttemptId, Candidate, CandidateId, CommandId, CommandPhase, DomainError, Effect,
     EffectId, Evidence, EvidenceId, Mission, MissionId, VariantId, WorkPackageId,
 };
+use bullet_harness_core::launch_grant::NonceConsumption;
 use std::collections::BTreeMap;
 
 /// Memory ledger.
@@ -47,8 +48,17 @@ pub struct MemoryLedger {
     effect_keys: BTreeMap<String, String>,
     effect_receipts: Vec<EffectReceiptRecord>,
     launch_grant_nonces: BTreeMap<String, StoredLaunchGrantNonce>,
+    lease_transport_grants: BTreeMap<String, LeaseGrant>,
+    lease_transport_nonces: BTreeMap<String, MemoryTransportNonce>,
     fail_after_writes: Option<u32>,
     simulation_clock_millis: i64,
+}
+
+#[derive(Clone, Debug)]
+struct MemoryTransportNonce {
+    binding: String,
+    expires_at_unix_ms: u64,
+    consumed: bool,
 }
 
 impl MemoryLedger {
@@ -486,5 +496,109 @@ impl Ledger for MemoryLedger {
 
     fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError> {
         self.unresolved_effects_impl()
+    }
+
+    fn with_lease_transport<T, E, F>(&mut self, f: F) -> Result<T, E>
+    where
+        Self: Sized,
+        F: FnOnce(&mut dyn LeaseTransportTxn) -> Result<T, E>,
+        E: From<LedgerError>,
+    {
+        self.tick().map_err(E::from)?;
+        let mut copy = self.clone();
+        let result = f(&mut copy)?;
+        *self = copy;
+        Ok(result)
+    }
+}
+
+impl LeaseTransportTxn for MemoryLedger {
+    fn reserve_transport_nonce(
+        &mut self,
+        nonce: &str,
+        binding: &str,
+        expires_at_unix_ms: u64,
+    ) -> Result<(), LedgerError> {
+        if self.lease_transport_nonces.contains_key(nonce) {
+            return Err(LedgerError::Store(
+                "lease-transport nonce already reserved".into(),
+            ));
+        }
+        self.lease_transport_nonces.insert(
+            nonce.to_string(),
+            MemoryTransportNonce {
+                binding: binding.to_string(),
+                expires_at_unix_ms,
+                consumed: false,
+            },
+        );
+        Ok(())
+    }
+
+    fn consume_transport_nonce(
+        &mut self,
+        nonce: &str,
+        binding: &str,
+        now_unix_ms: u64,
+    ) -> Result<NonceConsumption, LedgerError> {
+        let Some(record) = self.lease_transport_nonces.get_mut(nonce) else {
+            return Ok(NonceConsumption::Unknown);
+        };
+        if record.binding != binding {
+            return Ok(NonceConsumption::Unknown);
+        }
+        if record.consumed {
+            return Ok(NonceConsumption::Replayed);
+        }
+        if now_unix_ms >= record.expires_at_unix_ms {
+            return Ok(NonceConsumption::Expired);
+        }
+        record.consumed = true;
+        Ok(NonceConsumption::Consumed)
+    }
+
+    fn acquire_lease(&mut self, request: &LeaseRequest) -> Result<LeaseGrant, LedgerError> {
+        self.acquire_lease_impl(request)
+    }
+
+    fn heartbeat(&mut self, request: &HeartbeatRequest) -> Result<(), LedgerError> {
+        self.heartbeat_impl(request)
+    }
+
+    fn release_lease(&mut self, request: &ReleaseRequest) -> Result<(), LedgerError> {
+        self.release_lease_impl(request)
+    }
+
+    fn put_attempt(&mut self, attempt: &Attempt) -> Result<(), LedgerError> {
+        Ledger::put_attempt(self, attempt)
+    }
+
+    fn get_attempt(&self, id: &AttemptId) -> Result<Option<Attempt>, LedgerError> {
+        Ledger::get_attempt(self, id)
+    }
+
+    fn put_transport_grant(
+        &mut self,
+        idempotency_digest: &str,
+        grant: &LeaseGrant,
+    ) -> Result<(), LedgerError> {
+        if let Some(existing) = self.lease_transport_grants.get(idempotency_digest) {
+            if existing == grant {
+                return Ok(());
+            }
+            return Err(LedgerError::Store(
+                "lease-transport grant digest already records a different grant".into(),
+            ));
+        }
+        self.lease_transport_grants
+            .insert(idempotency_digest.to_string(), grant.clone());
+        Ok(())
+    }
+
+    fn get_transport_grant(
+        &self,
+        idempotency_digest: &str,
+    ) -> Result<Option<LeaseGrant>, LedgerError> {
+        Ok(self.lease_transport_grants.get(idempotency_digest).cloned())
     }
 }

@@ -9,6 +9,7 @@ mod events;
 mod graph;
 mod launch_grants;
 mod lease_time;
+mod lease_transport;
 mod leases;
 mod materialization;
 mod migrations;
@@ -18,6 +19,7 @@ mod projections;
 use bullet_application::launch_grant::{
     LaunchGrantNonceRecord, LaunchGrantNonceStore, NonceConsumption, StoredLaunchGrantNonce,
 };
+use bullet_application::store::LeaseTransportTxn;
 use bullet_application::{
     ActiveLease, ActiveLeaseSubject, CommandRecord, CommandRequest, EffectIntentRecord,
     EffectReceiptRecord, EffectState, ExpiredLease, GraphDelta, HeartbeatRequest, LeaseGrant,
@@ -411,6 +413,22 @@ impl Ledger for SqliteLedger {
 
     fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError> {
         effects::unresolved_effects(&self.conn)
+    }
+
+    fn with_lease_transport<T, E, F>(&mut self, f: F) -> Result<T, E>
+    where
+        Self: Sized,
+        F: FnOnce(&mut dyn LeaseTransportTxn) -> Result<T, E>,
+        E: From<LedgerError>,
+    {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|err| E::from(store(err)))?;
+        let mut session = lease_transport::TransportSession { tx };
+        let result = f(&mut session)?;
+        session.tx.commit().map_err(|err| E::from(store(err)))?;
+        Ok(result)
     }
 }
 

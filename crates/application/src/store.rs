@@ -18,6 +18,8 @@ use bullet_domain::{
 };
 use thiserror::Error;
 
+pub use bullet_harness_core::launch_grant::NonceConsumption;
+
 mod projection;
 
 pub use projection::ProjectionReader;
@@ -411,4 +413,90 @@ pub trait Ledger {
     /// # Errors
     /// Store failure.
     fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError>;
+
+    /// Run `f` inside one immediate transaction. Nonce reserve, permit
+    /// consumption, the lease mutation, and grant persistence must commit
+    /// together or not at all.
+    ///
+    /// # Errors
+    /// Store or domain failure. The transaction rolls back when `f` fails.
+    fn with_lease_transport<T, E, F>(&mut self, f: F) -> Result<T, E>
+    where
+        Self: Sized,
+        F: FnOnce(&mut dyn LeaseTransportTxn) -> Result<T, E>,
+        E: From<LedgerError>;
+}
+
+/// Mutations that belong in the signed lease-transport transaction.
+pub trait LeaseTransportTxn {
+    /// Persist one unused permit nonce bound to its operation subject.
+    ///
+    /// # Errors
+    /// Store failure or a duplicate nonce.
+    fn reserve_transport_nonce(
+        &mut self,
+        nonce: &str,
+        binding: &str,
+        expires_at_unix_ms: u64,
+    ) -> Result<(), LedgerError>;
+
+    /// Consume one reserved nonce exactly once.
+    ///
+    /// # Errors
+    /// Store failure.
+    fn consume_transport_nonce(
+        &mut self,
+        nonce: &str,
+        binding: &str,
+        now_unix_ms: u64,
+    ) -> Result<NonceConsumption, LedgerError>;
+
+    /// Acquire or replay one writer lease.
+    ///
+    /// # Errors
+    /// Typed fence/idempotency errors or store failure.
+    fn acquire_lease(&mut self, request: &LeaseRequest) -> Result<LeaseGrant, LedgerError>;
+
+    /// Renew one live lease.
+    ///
+    /// # Errors
+    /// `StaleAuthority` or store failure.
+    fn heartbeat(&mut self, request: &HeartbeatRequest) -> Result<(), LedgerError>;
+
+    /// Close one lease.
+    ///
+    /// # Errors
+    /// `StaleAuthority` or store failure.
+    fn release_lease(&mut self, request: &ReleaseRequest) -> Result<(), LedgerError>;
+
+    /// Apply one legal attempt transition.
+    ///
+    /// # Errors
+    /// Typed transition errors or store failure.
+    fn put_attempt(&mut self, attempt: &Attempt) -> Result<(), LedgerError>;
+
+    /// Load one attempt.
+    ///
+    /// # Errors
+    /// Store failure.
+    fn get_attempt(&self, id: &AttemptId) -> Result<Option<Attempt>, LedgerError>;
+
+    /// Persist the last grant for an acquire idempotency digest.
+    ///
+    /// # Errors
+    /// Store failure or a conflicting grant under the same digest.
+    fn put_transport_grant(
+        &mut self,
+        idempotency_digest: &str,
+        grant: &LeaseGrant,
+    ) -> Result<(), LedgerError>;
+
+    /// Load the last grant for an acquire idempotency digest.
+    ///
+    /// # Errors
+    /// Store failure.
+    fn get_transport_grant(
+        &self,
+        idempotency_digest: &str,
+    ) -> Result<Option<LeaseGrant>, LedgerError>;
 }

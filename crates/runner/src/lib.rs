@@ -17,6 +17,7 @@ pub mod lease;
 pub mod scope;
 #[cfg(feature = "test-seams")]
 pub mod signed_lease;
+pub mod signed_lease_rpc;
 
 pub use attempt::{run_attempt, AttemptConfig, AttemptOutcome};
 pub use capsule::Capsule;
@@ -34,3 +35,4 @@ pub use lease::{
 };
 #[cfg(feature = "test-seams")]
 pub use signed_lease::SignedLeaseClient;
+pub use signed_lease_rpc::SignedLeaseRpcClient;

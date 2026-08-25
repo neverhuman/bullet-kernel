@@ -29,6 +29,9 @@ struct Args {
     /// lease waits at most one tick before it is reclaimed.
     #[arg(long, default_value_t = ReapInterval::policy_default())]
     reap_interval_ms: ReapInterval,
+    /// Optional Unix socket for Kernel-minted lease transport. Not `/v1`.
+    #[arg(long)]
+    lease_transport_socket: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -97,7 +100,25 @@ async fn main() -> ExitCode {
     // Reclaiming an expired writer lease is the running daemon's own job, not
     // an operator's: without this tick a Variant whose runner died is freed
     // only when some successor happens to try to acquire it.
-    let _tick = reaper::spawn(state, args.reap_interval_ms);
+    let _tick = reaper::spawn(state.clone(), args.reap_interval_ms);
+    if let Some(socket) = args.lease_transport_socket {
+        let transport = match bullet_application::lease_transport::KernelLeaseTransport::generate()
+        {
+            Ok(transport) => std::sync::Arc::new(transport),
+            Err(err) => {
+                eprintln!("bullet-farmd: lease-transport: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let rpc_state = state.clone();
+        tokio::spawn(async move {
+            if let Err(err) =
+                bullet_farmd::lease_transport_rpc::serve(socket, rpc_state, transport).await
+            {
+                tracing::error!("lease-transport socket: {err}");
+            }
+        });
+    }
     if let Err(err) = axum::serve(listener, app).await {
         eprintln!("bullet-farmd: serve: {err}");
         return ExitCode::FAILURE;

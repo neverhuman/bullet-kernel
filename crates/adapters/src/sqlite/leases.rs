@@ -3,7 +3,7 @@
 
 mod acquire;
 
-pub(super) use acquire::acquire_lease;
+pub(super) use acquire::{acquire_lease, acquire_on};
 
 use super::{events, graph, json, lease_time, outbox, store};
 use bullet_application::{
@@ -11,17 +11,25 @@ use bullet_application::{
     LedgerError, ReadyRow, ReleaseRequest,
 };
 use bullet_domain::{AttemptId, AttemptState, DomainError, RunnerId, VariantId, WorkPackageId};
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 pub(super) fn heartbeat(conn: &mut Connection, req: &HeartbeatRequest) -> Result<(), LedgerError> {
-    let ttl_seconds = req.validated_ttl()?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store)?;
-    let (now, expires_at) = lease_time::database_window(&tx, ttl_seconds)?;
-    let current = get_lease(&tx, &req.variant_id)?;
+    heartbeat_on(&tx, req)?;
+    tx.commit().map_err(store)
+}
+
+pub(in crate::sqlite) fn heartbeat_on(
+    tx: &Transaction<'_>,
+    req: &HeartbeatRequest,
+) -> Result<(), LedgerError> {
+    let ttl_seconds = req.validated_ttl()?;
+    let (now, expires_at) = lease_time::database_window(tx, ttl_seconds)?;
+    let current = get_lease(tx, &req.variant_id)?;
     let live = if let Some(lease) = current.as_ref() {
-        let attempt = graph::get_attempt(&tx, &lease.attempt_id)?
+        let attempt = graph::get_attempt(tx, &lease.attempt_id)?
             .ok_or_else(|| LedgerError::Store("active lease has no Attempt".into()))?;
         attempt.state.permits_lease_heartbeat()
             && lease.attempt_id == req.attempt_id
@@ -68,7 +76,7 @@ pub(super) fn heartbeat(conn: &mut Connection, req: &HeartbeatRequest) -> Result
         ))
         .into());
     }
-    tx.commit().map_err(store)
+    Ok(())
 }
 
 pub(super) type LeaseRow = (
@@ -263,6 +271,17 @@ pub(super) fn release_lease(
     conn: &mut Connection,
     req: &ReleaseRequest,
 ) -> Result<(), LedgerError> {
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(store)?;
+    release_on(&tx, req)?;
+    tx.commit().map_err(store)
+}
+
+pub(in crate::sqlite) fn release_on(
+    tx: &Transaction<'_>,
+    req: &ReleaseRequest,
+) -> Result<(), LedgerError> {
     if !req.final_state.is_terminal_release_target() {
         return Err(DomainError::InvalidTransition {
             from: "release".into(),
@@ -270,14 +289,11 @@ pub(super) fn release_lease(
         }
         .into());
     }
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(store)?;
-    let now = lease_time::database_time(&tx)?;
-    let holder = get_lease(&tx, &req.variant_id)?;
+    let now = lease_time::database_time(tx)?;
+    let holder = get_lease(tx, &req.variant_id)?;
     match holder {
         Some(lease) if lease.attempt_id == req.attempt_id => {
-            let attempt = graph::get_attempt(&tx, &req.attempt_id)?
+            let attempt = graph::get_attempt(tx, &req.attempt_id)?
                 .ok_or_else(|| LedgerError::Store("lease without attempt".into()))?;
             let next_state = attempt.state.transition(req.final_state)?;
             tx.execute(
@@ -291,24 +307,24 @@ pub(super) fn release_lease(
             )
             .map_err(store)?;
             if req.requeue {
-                graph::requeue_package(&tx, &attempt.work_package_id, &now)?;
+                graph::requeue_package(tx, &attempt.work_package_id, &now)?;
             }
             events::insert_event(
-                &tx,
+                tx,
                 "lease_released",
                 req.attempt_id.as_str(),
                 Some(&req.variant_id.to_string()),
                 None,
                 None,
             )?;
-            tx.commit().map_err(store)
+            Ok(())
         }
         Some(lease) => Err(DomainError::StaleAuthority(format!(
             "lease held by {}, not {}",
             lease.attempt_id, req.attempt_id
         ))
         .into()),
-        None => match graph::get_attempt(&tx, &req.attempt_id)? {
+        None => match graph::get_attempt(tx, &req.attempt_id)? {
             Some(attempt) if attempt.state == req.final_state => Ok(()),
             _ => Err(DomainError::StaleAuthority(format!(
                 "no active lease for {}",

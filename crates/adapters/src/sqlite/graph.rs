@@ -309,7 +309,15 @@ pub(super) fn put_attempt(conn: &mut Connection, attempt: &Attempt) -> Result<()
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store)?;
-    let existing = get_attempt(&tx, &attempt.id)?.ok_or_else(|| {
+    put_attempt_on(&tx, attempt)?;
+    tx.commit().map_err(store)
+}
+
+pub(in crate::sqlite) fn put_attempt_on(
+    tx: &rusqlite::Transaction<'_>,
+    attempt: &Attempt,
+) -> Result<(), LedgerError> {
+    let existing = get_attempt(tx, &attempt.id)?.ok_or_else(|| {
         LedgerError::Domain(DomainError::Conflict(format!(
             "attempt {} does not exist; attempts are created by acquire_lease",
             attempt.id
@@ -343,7 +351,7 @@ pub(super) fn put_attempt(conn: &mut Connection, attempt: &Attempt) -> Result<()
         ],
     )
     .map_err(store)?;
-    tx.commit().map_err(store)
+    Ok(())
 }
 
 pub(super) fn active_attempt(

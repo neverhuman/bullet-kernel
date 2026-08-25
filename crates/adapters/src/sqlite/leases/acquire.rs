@@ -7,7 +7,7 @@ use bullet_application::{
 use bullet_domain::{
     Attempt, AttemptId, AttemptState, CommandPhase, Digest, DomainError, WorkPackageState,
 };
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 fn step(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {
     match fail_after {
@@ -30,24 +30,35 @@ pub(in crate::sqlite) fn acquire_lease(
     fail_after: &mut Option<u8>,
     req: &LeaseRequest,
 ) -> Result<LeaseGrant, LedgerError> {
-    let stable = req.stable_payload()?;
-    let command_request =
-        CommandRequest::from_json(&req.idempotency_key, "acquire_lease", &stable)?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store)?;
+    let grant = acquire_on(&tx, fail_after, req)?;
+    tx.commit().map_err(store)?;
+    step(fail_after)?;
+    Ok(grant)
+}
+
+pub(in crate::sqlite) fn acquire_on(
+    tx: &Transaction<'_>,
+    fail_after: &mut Option<u8>,
+    req: &LeaseRequest,
+) -> Result<LeaseGrant, LedgerError> {
+    let stable = req.stable_payload()?;
+    let command_request =
+        CommandRequest::from_json(&req.idempotency_key, "acquire_lease", &stable)?;
     step(fail_after)?;
 
-    if let Some(existing) = commands::get_command(&tx, &req.idempotency_key)? {
+    if let Some(existing) = commands::get_command(tx, &req.idempotency_key)? {
         command_request.matches(&existing)?;
         let response = existing
             .response
             .ok_or_else(|| LedgerError::Store("lease command has no stored result".into()))?;
         let grant: LeaseGrant = from_json(&response)?;
-        let graph = graph::get_graph(&tx, &req.mission_id)?
+        let graph = graph::get_graph(tx, &req.mission_id)?
             .ok_or_else(|| LedgerError::Store("lease replay graph missing".into()))?;
         context::require_revision(
-            &tx,
+            tx,
             &graph,
             &grant.attempt.work_package_id,
             grant.attempt.context_revision,
@@ -56,13 +67,13 @@ pub(in crate::sqlite) fn acquire_lease(
     }
 
     let ttl_seconds = req.validated_ttl()?;
-    let (now, expires_at) = lease_time::database_window(&tx, ttl_seconds)?;
+    let (now, expires_at) = lease_time::database_window(tx, ttl_seconds)?;
     // A runner that died without releasing leaves a holder row behind, and the
     // checks below refuse every successor while it exists. Reclaim it here, in
     // this same transaction and against this same database clock, so a crashed
     // incarnation can never block its Variant forever. A live lease is untouched.
-    super::reclaim_expired_variant(&tx, &req.variant_id, &now)?;
-    let stored = graph::get_graph(&tx, &req.mission_id)?
+    super::reclaim_expired_variant(tx, &req.variant_id, &now)?;
+    let stored = graph::get_graph(tx, &req.mission_id)?
         .ok_or_else(|| LedgerError::Store("graph missing".into()))?;
     let variant_index = stored
         .variants
@@ -75,7 +86,7 @@ pub(in crate::sqlite) fn acquire_lease(
         .position(|package| package.id == stored.variants[variant_index].work_package_id)
         .ok_or_else(|| LedgerError::Store("package missing".into()))?;
     context::require_revision(
-        &tx,
+        tx,
         &stored,
         &stored.packages[package_index].id,
         req.context_revision,
@@ -144,10 +155,10 @@ pub(in crate::sqlite) fn acquire_lease(
         context_revision: req.context_revision,
         state: AttemptState::Starting,
     };
-    if graph::get_attempt(&tx, &attempt.id)?.is_some() {
+    if graph::get_attempt(tx, &attempt.id)?.is_some() {
         return Err(DomainError::Conflict(format!("attempt {} already exists", attempt.id)).into());
     }
-    graph::insert_attempt(&tx, &attempt)?;
+    graph::insert_attempt(tx, &attempt)?;
     step(fail_after)?;
 
     tx.execute(
@@ -180,7 +191,7 @@ pub(in crate::sqlite) fn acquire_lease(
         .state
         .transition(WorkPackageState::Leased)?;
     next_graph.variants[variant_index].fence_counter = fence;
-    graph::put_graph(&tx, &next_graph)?;
+    graph::put_graph(tx, &next_graph)?;
     step(fail_after)?;
 
     let lease = ActiveLease {
@@ -198,7 +209,7 @@ pub(in crate::sqlite) fn acquire_lease(
     let grant_json = json(&grant)?;
     let token_hash = Digest::of(grant_json.as_bytes()).to_hex();
     events::insert_event(
-        &tx,
+        tx,
         "attempt_leased",
         &grant_json,
         Some(&req.variant_id.to_string()),
@@ -216,11 +227,9 @@ pub(in crate::sqlite) fn acquire_lease(
         phase: CommandPhase::Applied,
         response: Some(grant_json.clone()),
     };
-    commands::insert_command(&tx, &command)?;
+    commands::insert_command(tx, &command)?;
     step(fail_after)?;
-    outbox::enqueue(&tx, Some(&command.id), "dispatch_attempt", &grant_json)?;
-    step(fail_after)?;
-    tx.commit().map_err(store)?;
+    outbox::enqueue(tx, Some(&command.id), "dispatch_attempt", &grant_json)?;
     step(fail_after)?;
     Ok(grant)
 }

@@ -181,7 +181,7 @@ fn future_schema_and_future_receipt_are_rejected() {
     let receipt = create_backup(&source, &backup).unwrap();
     let conn = Connection::open(&backup).unwrap();
     conn.execute(
-        "INSERT INTO schema_version VALUES (12, 'future.sql', '00', 'future')",
+        "INSERT INTO schema_version VALUES (13, 'future.sql', '00', 'future')",
         [],
     )
     .unwrap();
