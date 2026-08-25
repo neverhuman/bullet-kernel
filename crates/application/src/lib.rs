@@ -15,6 +15,8 @@ pub mod leases;
 pub mod live_conformance;
 pub mod materializer;
 pub mod memory;
+pub mod mutation_reservation;
+pub mod nonce_ledger;
 pub mod policy_snapshot;
 pub mod queue;
 pub mod records;
@@ -44,6 +46,10 @@ pub use live_conformance::{
 };
 pub use materializer::{materialize_plan, PlanInput};
 pub use memory::MemoryLedger;
+pub use mutation_reservation::{
+    LeaseGate, MutationReservationStore, MutationReserveRequest, OneUsePermit, ReservationError,
+};
+pub use nonce_ledger::{IssuedNonce, MemoryNonceLedger, NonceError, NonceLedger};
 pub use policy_snapshot::{load_policy, load_policy_from_environment, LoadedPolicy};
 pub use queue::{claim_ready, ready_queue, ReadyItem};
 pub use records::{
