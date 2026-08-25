@@ -8,9 +8,10 @@ use crate::admission::CanarySecrets;
 use crate::argv::PreparedInvocation;
 use crate::error::HarnessError;
 use crate::event::AgentEvent;
-use crate::spawnrun::kill_process_group;
-use std::io::{BufRead, BufReader, Read, Write};
+use crate::spawnrun::{kill_process_group, kill_process_group_members};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,9 @@ pub struct InteractiveReaction {
 pub type LineHandler<'a> = dyn FnMut(&str) -> Result<InteractiveReaction, HarnessError> + 'a;
 
 const MAX_INTERACTIVE_LINES: usize = 1024;
+const MAX_INTERACTIVE_FRAME_BYTES: usize = 1024 * 1024;
+const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_STDERR_BYTES: usize = 1024 * 1024;
 
 /// Factory that turns a program, argv, and environment into a ready command.
 /// The egress sandbox's `PreparedSandbox::command` matches this shape; a plain
@@ -117,11 +121,13 @@ pub fn capture_turn(
     })?;
     let pid = child.id();
     let Some(stdout) = child.stdout.take() else {
-        let _ = child.kill();
+        kill_process_group(pid);
+        let _ = child.wait();
         return Err(pipe_missing("child stdout"));
     };
     let Some(stderr) = child.stderr.take() else {
-        let _ = child.kill();
+        kill_process_group(pid);
+        let _ = child.wait();
         return Err(pipe_missing("child stderr"));
     };
     let out_handle = thread::spawn(move || read_lines(stdout));
@@ -130,7 +136,10 @@ pub fn capture_turn(
     let mut timed_out = false;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(_)) => {
+                kill_process_group_members(pid);
+                break;
+            }
             Ok(None) => {}
             Err(error) => {
                 kill_process_group(pid);
@@ -152,8 +161,8 @@ pub fn capture_turn(
         .ok()
         .flatten()
         .and_then(|status| status.code());
-    let stdout_lines = out_handle.join().unwrap_or_default();
-    let stderr = err_handle.join().unwrap_or_default();
+    let stdout_lines = join_reader(out_handle, "captured stdout")?;
+    let stderr = join_reader(err_handle, "captured stderr")?;
 
     for line in &stdout_lines {
         canaries.inspect("stdout", line.as_bytes())?;
@@ -211,48 +220,88 @@ pub fn run_interactive(
         return Err(pipe_missing("child stdio"));
     };
     let err_handle = thread::spawn(move || read_all(stderr));
-
-    let write_frames = |stdin: &mut std::process::ChildStdin, frames: &[String]| {
-        for frame in frames {
-            let _ = stdin.write_all(frame.as_bytes());
-            let _ = stdin.write_all(b"\n");
+    let (line_tx, line_rx) = mpsc::sync_channel(1);
+    let out_handle = thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let next =
+                read_bounded_line(&mut reader).map_err(|error| io("interactive stdout", &error));
+            let terminal = matches!(&next, Ok(None) | Err(_));
+            if line_tx.send(next).is_err() || terminal {
+                break;
+            }
         }
-        let _ = stdin.flush();
-    };
-    write_frames(&mut stdin, &initial);
+    });
 
-    let mut reader = BufReader::new(stdout);
     let mut stdout_lines = Vec::new();
     let mut timed_out = false;
-    let mut line = String::new();
-    loop {
-        if started.elapsed() >= invocation.timeout {
+    let mut interaction_error = write_frames(&mut stdin, &initial).err();
+    while interaction_error.is_none() {
+        let remaining = invocation.timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
             timed_out = true;
-            kill_process_group(pid);
             break;
         }
         if stdout_lines.len() >= MAX_INTERACTIVE_LINES {
-            kill_process_group(pid);
+            interaction_error = Some(HarnessError::Protocol {
+                provider: "interactive".to_string(),
+                reason: "interactive line limit exceeded".to_string(),
+            });
             break;
         }
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
-        canaries.inspect("stdout", trimmed.as_bytes())?;
-        stdout_lines.push(trimmed.clone());
-        let reaction = on_line(&trimmed)?;
-        write_frames(&mut stdin, &reaction.send);
-        if reaction.done {
-            break;
+        match line_rx.recv_timeout(remaining) {
+            Ok(Ok(Some(line))) => {
+                if let Err(error) = canaries.inspect("stdout", line.as_bytes()) {
+                    interaction_error = Some(error);
+                    break;
+                }
+                stdout_lines.push(line.clone());
+                match on_line(&line) {
+                    Ok(reaction) => {
+                        if let Err(error) = write_frames(&mut stdin, &reaction.send) {
+                            interaction_error = Some(error);
+                            break;
+                        }
+                        if reaction.done {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        interaction_error = Some(error);
+                        break;
+                    }
+                }
+            }
+            Ok(Ok(None)) => break,
+            Ok(Err(error)) => {
+                interaction_error = Some(error);
+                break;
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                timed_out = true;
+                break;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                interaction_error = Some(HarnessError::Io {
+                    context: "interactive stdout".to_string(),
+                    reason: "reader terminated without an EOF frame".to_string(),
+                });
+                break;
+            }
         }
     }
     drop(stdin);
+    drop(line_rx);
+    if timed_out || interaction_error.is_some() {
+        kill_process_group(pid);
+    }
     let exit_code = wait_bounded(&mut child, pid, started, invocation.timeout, &mut timed_out);
-    let stderr = err_handle.join().unwrap_or_default();
+    let _ = out_handle.join();
+    let stderr = join_reader(err_handle, "interactive stderr")?;
     canaries.inspect("stderr", stderr.as_bytes())?;
+    if let Some(error) = interaction_error {
+        return Err(error);
+    }
     let wall_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     Ok(RawCapture {
@@ -273,9 +322,16 @@ fn wait_bounded(
 ) -> Option<i32> {
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return status.code(),
+            Ok(Some(status)) => {
+                kill_process_group_members(pid);
+                return status.code();
+            }
             Ok(None) => {}
-            Err(_) => return None,
+            Err(_) => {
+                kill_process_group(pid);
+                let _ = child.wait();
+                return None;
+            }
         }
         if started.elapsed() >= timeout {
             *timed_out = true;
@@ -315,24 +371,115 @@ pub fn scan_events(
     Ok(artifact_digest(b"events", &bytes))
 }
 
-fn read_lines<R: Read>(reader: R) -> Vec<String> {
+fn read_lines<R: Read>(reader: R) -> io::Result<Vec<String>> {
     let mut lines = Vec::new();
     let mut buffered = BufReader::new(reader);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match buffered.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => lines.push(line.trim_end_matches(['\n', '\r']).to_string()),
+    let mut total_bytes = 0usize;
+    while let Some(line) = read_bounded_line(&mut buffered)? {
+        total_bytes = total_bytes.saturating_add(line.len());
+        if lines.len() >= MAX_INTERACTIVE_LINES || total_bytes > MAX_CAPTURE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "captured stdout exceeds aggregate limit",
+            ));
         }
+        lines.push(line);
     }
-    lines
+    Ok(lines)
 }
 
-fn read_all<R: Read>(mut reader: R) -> String {
-    let mut text = String::new();
-    let _ = reader.read_to_string(&mut text);
-    text
+fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
+    let mut bytes = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if bytes.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        if let Some(newline) = available.iter().position(|byte| *byte == b'\n') {
+            if bytes.len().saturating_add(newline) > MAX_INTERACTIVE_FRAME_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "interactive frame exceeds byte limit",
+                ));
+            }
+            bytes.extend_from_slice(&available[..newline]);
+            reader.consume(newline + 1);
+            break;
+        }
+        if bytes.len().saturating_add(available.len()) > MAX_INTERACTIVE_FRAME_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "interactive frame exceeds byte limit",
+            ));
+        }
+        let consumed = available.len();
+        bytes.extend_from_slice(available);
+        reader.consume(consumed);
+    }
+    if bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    String::from_utf8(bytes).map(Some).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "interactive frame is not valid UTF-8",
+        )
+    })
+}
+
+fn write_frames(
+    stdin: &mut std::process::ChildStdin,
+    frames: &[String],
+) -> Result<(), HarnessError> {
+    for frame in frames {
+        if frame.len() > MAX_INTERACTIVE_FRAME_BYTES {
+            return Err(HarnessError::Io {
+                context: "interactive stdin".to_string(),
+                reason: "interactive frame exceeds byte limit".to_string(),
+            });
+        }
+        stdin
+            .write_all(frame.as_bytes())
+            .and_then(|()| stdin.write_all(b"\n"))
+            .map_err(|error| io("interactive stdin", &error))?;
+    }
+    stdin
+        .flush()
+        .map_err(|error| io("interactive stdin", &error))
+}
+
+fn read_all<R: Read>(reader: R) -> io::Result<String> {
+    let limit = u64::try_from(MAX_STDERR_BYTES + 1).expect("stderr limit fits u64");
+    let mut bytes = Vec::with_capacity(MAX_STDERR_BYTES.min(8 * 1024));
+    reader.take(limit).read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_STDERR_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "captured stderr exceeds byte limit",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "captured stderr is not valid UTF-8",
+        )
+    })
+}
+
+fn join_reader<T>(
+    handle: thread::JoinHandle<io::Result<T>>,
+    context: &str,
+) -> Result<T, HarnessError> {
+    handle
+        .join()
+        .map_err(|_| HarnessError::Io {
+            context: context.to_string(),
+            reason: "reader thread panicked".to_string(),
+        })?
+        .map_err(|error| io(context, &error))
 }
 
 fn pipe_missing(context: &str) -> HarnessError {

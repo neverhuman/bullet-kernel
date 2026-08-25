@@ -221,6 +221,24 @@ where
         }
         Err(error) => return Err(StepFailure::harness(LiveStep::Dispatch, &error)),
     };
+    if turn.timed_out {
+        return Err(StepFailure::harness(
+            LiveStep::Dispatch,
+            &HarnessError::Timeout {
+                seconds: options.wall_timeout.as_secs(),
+            },
+        ));
+    }
+    if turn.exit_code != Some(0) {
+        return Err(StepFailure::harness(
+            LiveStep::Dispatch,
+            &HarnessError::ProviderFailure {
+                provider: options.provider.clone(),
+                exit: turn.exit_code,
+                reason: "provider process did not exit successfully".to_string(),
+            },
+        ));
+    }
     log.pass(LiveStep::Dispatch);
     log.pass(LiveStep::CanaryScan);
 

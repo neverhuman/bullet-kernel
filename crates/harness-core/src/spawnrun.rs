@@ -92,13 +92,20 @@ impl SupervisionSignal {
 
 /// SIGKILL the process group led by `pid`, then the pid itself as fallback.
 pub fn kill_process_group(pid: u32) {
+    kill_process_group_members(pid);
     let _ = std::process::Command::new("/bin/kill")
-        .args(["-KILL", "--", &format!("-{pid}")])
+        .args(["-KILL", &pid.to_string()])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
+}
+
+/// SIGKILL any descendants that still occupy the child's process group after
+/// the group leader has already been reaped. This deliberately omits the
+/// direct-pid fallback because that pid is no longer an owned live child.
+pub(crate) fn kill_process_group_members(pid: u32) {
     let _ = std::process::Command::new("/bin/kill")
-        .args(["-KILL", &pid.to_string()])
+        .args(["-KILL", "--", &format!("-{pid}")])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -306,6 +313,54 @@ mod tests {
         assert_eq!(outcome.stdout_lines, ["early"]);
         assert_eq!(outcome.exit_code, None);
         assert_descendant_dead(&pid_file).await;
+
+        // The bidirectional JSONL transport must enforce the same deadline
+        // while a provider holds stdout open without ever completing a frame.
+        let interactive = ArgvBuilder::new("sh", "/tmp")
+            .args(["-c", "printf unterminated; sleep 30"])
+            .timeout(Duration::from_millis(300))
+            .build()
+            .unwrap();
+        let factory = |program: &str, args: &[&str], env: &[(&str, &str)]| {
+            use std::os::unix::process::CommandExt;
+            let mut command = std::process::Command::new(program);
+            command.args(args).env_clear().process_group(0);
+            for (key, value) in env {
+                command.env(key, value);
+            }
+            command
+        };
+        let canaries =
+            crate::admission::CanarySecrets::new(vec!["interactive-deadline-canary".to_string()])
+                .unwrap();
+        let mut handler = |_line: &str| {
+            Ok(crate::live::InteractiveReaction {
+                send: Vec::new(),
+                done: false,
+            })
+        };
+        let started = Instant::now();
+        let capture = crate::live::run_interactive(
+            &factory,
+            &interactive,
+            &canaries,
+            Vec::new(),
+            &mut handler,
+        )
+        .unwrap();
+        assert!(capture.timed_out);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "bounded JSONL read"
+        );
+
+        let oversized = ArgvBuilder::new("sh", "/tmp")
+            .args(["-c", "head -c 1048577 /dev/zero | tr '\\0' x"])
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let error = crate::live::capture_turn(&factory, &oversized, &canaries).unwrap_err();
+        assert_eq!(error.reason_code(), "IO_FAILED");
     }
 
     #[tokio::test]

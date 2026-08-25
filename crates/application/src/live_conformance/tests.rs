@@ -32,9 +32,12 @@ const INIT_SUFFIX: &str = r#"","tools":["Read","Glob","Grep"],"mcp_servers":[],"
 const ASSISTANT: &str = r#"{"type":"assistant","uuid":"00000000-0000-4000-8000-000000000003","session_id":"00000000-0000-4000-8000-000000000001","parent_tool_use_id":null,"message":{"id":"msg-000000000003","type":"message","role":"assistant","model":"claude-offline-model","content":[{"type":"text","text":"PONG"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":5}}}"#;
 const RESULT: &str = r#"{"type":"result","subtype":"success","uuid":"00000000-0000-4000-8000-000000000004","session_id":"00000000-0000-4000-8000-000000000001","duration_ms":20,"duration_api_ms":10,"is_error":false,"num_turns":1,"result":"PONG","stop_reason":"end_turn","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5},"modelUsage":{"claude-offline-model":{"inputTokens":10,"outputTokens":5}},"permission_denials":[],"structured_output":{"schema_version":1,"proposal_id":"cnt_1111111111111111111111111111111111111111111111111111111111111111","producing_attempt_id":"atm_2222222222222222222222222222222222222222222222222222222222222222","base_checkpoint_id":"ckp_3333333333333333333333333333333333333333333333333333333333333333","base_checkpoint_digest":"4444444444444444444444444444444444444444444444444444444444444444","operations":[{"path":"PONG.txt","preimage":{"kind":"absent"},"mutation":{"kind":"write","content_utf8":"PONG\n"}}],"gate_ids":["gat_9999999999999999999999999999999999999999999999999999999999999999"],"intent_summary":"pong","claims":[],"uncertainties":[],"done":true},"terminal_reason":"completed"}"#;
 
+#[derive(Clone, Copy)]
 pub(super) enum FakeMode {
     Pong,
     Canary,
+    NonzeroAfterPong,
+    TimeoutAfterPong,
 }
 
 pub(super) struct Harness {
@@ -77,7 +80,7 @@ fn write_fake(path: &Path, marker: &Path, mode: FakeMode) {
     script.push_str(&marker.display().to_string());
     script.push_str("'\n");
     match mode {
-        FakeMode::Pong => {
+        FakeMode::Pong | FakeMode::NonzeroAfterPong | FakeMode::TimeoutAfterPong => {
             script.push_str("printf '%s%s%s\\n' '");
             script.push_str(INIT_PREFIX);
             script.push_str("' \"$PWD\" '");
@@ -89,6 +92,11 @@ fn write_fake(path: &Path, marker: &Path, mode: FakeMode) {
             script.push_str("printf '%s\\n' '");
             script.push_str(RESULT);
             script.push_str("'\n");
+            match mode {
+                FakeMode::NonzeroAfterPong => script.push_str("exit 7\n"),
+                FakeMode::TimeoutAfterPong => script.push_str("sleep 30\n"),
+                FakeMode::Pong | FakeMode::Canary => {}
+            }
         }
         FakeMode::Canary => {
             script.push_str("printf '%s\\n' '");
@@ -200,6 +208,33 @@ fn v1alpha2_test_policy_dispatches_pong_and_consumes_the_nonce() {
     )
     .unwrap_err();
     assert_eq!(replay.reason_code(), "LAUNCH_GRANT_REPLAYED");
+
+    for (mode, reason_code) in [
+        (FakeMode::NonzeroAfterPong, "PROVIDER_FAILURE"),
+        (FakeMode::TimeoutAfterPong, "WALL_CLOCK_TIMEOUT"),
+    ] {
+        let hostile = Harness::new(mode);
+        let key = operator_key(&hostile.data_dir);
+        let policy = live_admission_policy(&key, 8).unwrap();
+        let mut ledger = MemoryLedger::new();
+        let mut hostile_options = options(&hostile, HAPPY_CANARY);
+        hostile_options.wall_timeout = std::time::Duration::from_secs(1);
+        let error = run_live_conformance(
+            &hostile.data_dir,
+            &mut ledger,
+            &policy,
+            &ClaudeAdapter::new(),
+            &NoopEgressBackend::new(),
+            &hostile_options,
+            now(),
+        )
+        .expect_err("a terminal PONG cannot override process failure");
+        assert_eq!(error.reason_code(), reason_code);
+        assert_eq!(error.step, LiveStep::Dispatch);
+        assert_eq!(error.receipt.outcome, LiveOutcome::Failed);
+        assert!(!error.receipt.pong_match);
+        error.receipt.verify().unwrap();
+    }
 }
 
 #[test]
