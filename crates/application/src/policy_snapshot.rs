@@ -5,8 +5,10 @@
 //! set (`UNSAFE_POLICY`): lease TTL above 15 s, headroom-from-unknown-quota,
 //! arbitrary shell gates, author evidence as independent, unknown satisfying a
 //! gate, no sealed product holdout, a non-`T0` incumbent, or evolutionary
-//! authority. `v1alpha1` additionally refuses live admission as
-//! `UNSAFE_POLICY`; `v1alpha2` admits it only at generation
+//! authority, and the A7 STONITH inequality (a zero maximum lease TTL leaves
+//! no self-kill grace strictly inside the TTL). `v1alpha1` additionally
+//! refuses live admission as `UNSAFE_POLICY`; `v1alpha2` admits it only at
+//! generation
 //! [`LIVE_ADMISSION_MIN_GENERATION`] or later with a qualifying
 //! `provider-runner` authority key (`live`). Every refusal is `POLICY_INVALID`
 //! whose reason starts with the bullet-wire code; the Kernel cannot import
@@ -216,6 +218,9 @@ pub fn validate_policy(policy: &PolicySnapshotV1) -> Result<PolicySchemaVersion,
     {
         return Err(unsafe_policy(schema));
     }
+    if !self_kill_grace_precedes_expiry(policy.budget_policy.maximum_lease_ttl_seconds) {
+        return Err(invalid("UNSAFE_POLICY", STONITH_REASON));
+    }
     if !policy.sandbox_policy.live_admission_enabled {
         return Ok(schema);
     }
@@ -223,6 +228,24 @@ pub fn validate_policy(policy: &PolicySnapshotV1) -> Result<PolicySchemaVersion,
         PolicySchemaVersion::V1Alpha1 => Err(unsafe_policy(schema)),
         PolicySchemaVersion::V1Alpha2 => live::validate_live_admission(policy).map(|()| schema),
     }
+}
+
+/// `UNSAFE_POLICY` reason for the A7 STONITH inequality; byte-identical to
+/// the bullet-wire rule.
+pub const STONITH_REASON: &str = "self-kill grace must be strictly less than lease TTL";
+
+/// The A7 STONITH inequality at policy level. The runner's self-kill budget
+/// is 4/5 of the admitted TTL (`SelfKillDeadline`), so both that budget and
+/// the remaining grace must fall strictly inside the TTL for the local
+/// monotonic deadline to fire strictly before the server expiry. At
+/// millisecond granularity only a zero maximum violates it, and a zero
+/// maximum would otherwise validate.
+#[must_use]
+pub fn self_kill_grace_precedes_expiry(maximum_lease_ttl_seconds: u64) -> bool {
+    let ttl_ms = maximum_lease_ttl_seconds.saturating_mul(1_000);
+    let budget_ms = ttl_ms / 5 * 4;
+    let grace_ms = ttl_ms - budget_ms;
+    budget_ms < ttl_ms && grace_ms < ttl_ms
 }
 
 fn unsafe_policy(schema: PolicySchemaVersion) -> HarnessError {
