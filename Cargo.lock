@@ -328,6 +328,7 @@ name = "bullet-farmd"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "blake3",
  "bullet-adapters",
  "bullet-application",
  "bullet-domain",

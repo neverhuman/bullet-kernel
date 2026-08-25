@@ -1,6 +1,9 @@
 //! HTTP + SSE API. Generated TypeScript clients consume this contract.
 
-use crate::errors::ApiError;
+pub(crate) mod meta;
+pub(crate) mod portal;
+use crate::commands::{self, reconcile};
+use crate::{errors::ApiError, projections};
 use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::sse::{Event as SseFrame, KeepAlive, Sse};
@@ -20,7 +23,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-const OPENAPI: &str = include_str!("../../../contracts/openapi.yaml");
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const REPLAY_BATCH_SIZE: usize = 64;
 const MAX_REPLAY_EVENTS: u64 = 1_024;
@@ -89,53 +91,32 @@ fn build_router(db: &FsPath, auth: crate::auth::AuthState) -> Result<Router, Led
         auth: Mutex::new(auth),
     });
     Ok(Router::new()
-        .route("/health", get(health))
-        .route("/openapi.yaml", get(openapi))
+        .route("/health", get(meta::health))
+        .route("/openapi.yaml", get(meta::openapi))
         .route("/v1/missions", get(list_missions))
         .route("/v1/missions/{id}", get(get_mission))
         .route("/v1/demo", get(get_demo))
         .route("/v1/demo/run", post(removed_demo_mutation))
         .route("/v1/auth/bootstrap", post(crate::auth::bootstrap))
-        .route("/v1/commands", post(crate::commands::submit))
-        .route("/v1/commands/{id}", get(crate::commands::get))
-        .route(
-            "/internal/v1/commands/{id}/reconcile",
-            post(crate::commands::reconcile),
-        )
+        .route("/v1/commands", post(commands::submit))
+        .route("/v1/commands/{id}", get(commands::get))
+        .route("/internal/v1/commands/{id}/reconcile", post(reconcile))
         .route("/v1/outbox", get(outbox))
         .route("/v1/events", get(events))
         .route("/v1/ready", get(crate::leases::next_ready))
-        .route("/v1/fleet", get(crate::projections::fleet))
-        .route("/v1/sessions", get(crate::projections::sessions))
-        .route(
-            "/v1/context-lineage",
-            get(crate::projections::context_lineage),
-        )
-        .route("/v1/merge-rail", get(crate::projections::merge_rail))
-        .route("/v1/quality-lab", get(crate::projections::quality_lab))
-        .route("/v1/audit", get(crate::projections::audit))
+        .route("/v1/fleet", get(projections::fleet))
+        .route("/v1/sessions", get(projections::sessions))
+        .route("/v1/context-lineage", get(projections::context_lineage))
+        .route("/v1/merge-rail", get(projections::merge_rail))
+        .route("/v1/quality-lab", get(projections::quality_lab))
+        .route("/v1/audit", get(projections::audit))
+        .merge(portal::router())
         .fallback(api_not_found)
         .with_state(state))
 }
 
 async fn api_not_found() -> ApiError {
     ApiError::NotFound("API route".into())
-}
-
-#[derive(Serialize)]
-struct Health {
-    status: &'static str,
-}
-
-async fn health() -> Json<Health> {
-    Json(Health { status: "ok" })
-}
-
-async fn openapi() -> impl IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/yaml")],
-        OPENAPI,
-    )
 }
 
 async fn list_missions(State(state): State<SharedState>) -> Result<Response, ApiError> {

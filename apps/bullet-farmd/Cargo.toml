@@ -8,6 +8,14 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+# Off by default: the daemon then compiles no static assets, mounts no static
+# route, and needs no Node toolchain. On, `build.rs` requires
+# BULLET_PORTAL_DIST to name an absolute, already-built bullet-portal dist/
+# and embeds it only after verifying every byte against that dist's own
+# .bullet-portal-bundle-v1.json manifest.
+[features]
+embedded-portal = []
+
 [dependencies]
 axum.workspace = true
 bullet-adapters.workspace = true
@@ -25,7 +33,13 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[build-dependencies]
+blake3.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+
 [dev-dependencies]
+blake3.workspace = true
 bullet-runner-core.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true

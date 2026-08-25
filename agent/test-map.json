@@ -17,6 +17,18 @@
       "command": "cargo test --workspace",
       "purpose": "prove daemon and CLI surfaces"
     },
+    "apps/bullet-farmd/build.rs": {
+      "command": "cargo test -p bullet-farmd --test portal_bundle",
+      "purpose": "prove the optional Portal embedding verifies a pre-built bundle before staging; the packaged browser lane is bullet-portal ops/ci/packaged-farmd.sh"
+    },
+    "apps/bullet-farmd/build/": {
+      "command": "cargo test -p bullet-farmd --test portal_bundle",
+      "purpose": "prove the bundle manifest verifier reproduces the bullet-portal generator and refuses drift, extra entries, and symlinks"
+    },
+    "apps/bullet-farmd/src/api/portal.rs": {
+      "command": "BULLET_PORTAL_DIST=<absolute built bullet-portal dist> cargo test -p bullet-farmd --features embedded-portal --test portal_routes",
+      "purpose": "prove same-origin static serving, cache headers, and that bootstrap/session/CSRF/origin rules are unchanged"
+    },
     "contracts/": {
       "command": "cargo run -q -p bullet -- contracts check",
       "purpose": "prove generated client matches OpenAPI"
