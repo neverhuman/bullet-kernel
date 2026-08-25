@@ -69,7 +69,8 @@ enum FarmCommands {
         #[arg(long)]
         receipt: PathBuf,
     },
-    /// Reclaim every writer lease whose expiry has already passed.
+    /// Reclaim every writer lease whose expiry has already passed. A running
+    /// bullet-farmd already reaps on its own tick; this is for a stopped one.
     Reap {
         /// Existing Kernel ledger database.
         #[arg(long)]

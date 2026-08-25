@@ -6,3 +6,4 @@ mod commands;
 pub mod errors;
 pub mod leases;
 mod projections;
+pub mod reaper;

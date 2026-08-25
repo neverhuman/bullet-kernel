@@ -1,6 +1,7 @@
 //! Control-plane daemon. The portal is a projection of this API.
 
 use bullet_farmd::api;
+use bullet_farmd::reaper::{self, ReapInterval};
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -22,6 +23,12 @@ struct Args {
     /// internal command reconciler. Without it, the internal route is inert.
     #[arg(long)]
     worker_token_file: Option<PathBuf>,
+    /// Writer-lease maintenance interval in milliseconds, 1..=500. The daemon
+    /// always reaps; this argument may only make it reap more often. The
+    /// default is half the shortest lease the ledger admits, so an expired
+    /// lease waits at most one tick before it is reclaimed.
+    #[arg(long, default_value_t = ReapInterval::policy_default())]
+    reap_interval_ms: ReapInterval,
 }
 
 #[tokio::main]
@@ -69,12 +76,13 @@ async fn main() -> ExitCode {
         None => None,
     };
     let db = args.data_dir.join("ledger.sqlite");
-    let app = match worker_token.as_deref() {
-        Some(token) => api::router_with_authorities(&db, &bootstrap, origin.clone(), token),
-        None => api::router_with_bootstrap(&db, &bootstrap, origin.clone()),
-    };
-    let app = match app {
-        Ok(app) => app,
+    let (app, state) = match api::daemon(
+        &db,
+        Some(&bootstrap),
+        origin.clone(),
+        worker_token.as_deref(),
+    ) {
+        Ok(parts) => parts,
         Err(err) => {
             eprintln!("bullet-farmd: initialize local API: {err}");
             return ExitCode::FAILURE;
@@ -86,6 +94,10 @@ async fn main() -> ExitCode {
         tracing::info!("authenticated internal command reconciler enabled");
     }
     tracing::info!("bullet-farmd listening on {bound}");
+    // Reclaiming an expired writer lease is the running daemon's own job, not
+    // an operator's: without this tick a Variant whose runner died is freed
+    // only when some successor happens to try to acquire it.
+    let _tick = reaper::spawn(state, args.reap_interval_ms);
     if let Err(err) = axum::serve(listener, app).await {
         eprintln!("bullet-farmd: serve: {err}");
         return ExitCode::FAILURE;

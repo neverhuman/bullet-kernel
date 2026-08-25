@@ -36,9 +36,11 @@ pub(crate) const BROWSER_SESSION_SECONDS: u64 = 8 * 60 * 60;
 pub struct AppState {
     pub(crate) ledger: Mutex<SqliteLedger>,
     pub(crate) auth: Mutex<crate::auth::AuthState>,
+    /// What farmd's writer-lease maintenance tick has reclaimed so far.
+    pub(crate) reaper: crate::reaper::ReapObservation,
 }
 
-pub(crate) type SharedState = Arc<AppState>;
+pub type SharedState = Arc<AppState>;
 
 /// Build the router against a SQLite file.
 ///
@@ -46,10 +48,7 @@ pub(crate) type SharedState = Arc<AppState>;
 ///
 /// Returns a ledger error when the database cannot be opened or migrated.
 pub fn router(db: &FsPath) -> Result<Router, LedgerError> {
-    build_router(
-        db,
-        crate::auth::AuthState::disabled(DEFAULT_ORIGIN.to_string()),
-    )
+    daemon(db, None, DEFAULT_ORIGIN.to_string(), None).map(|(router, _)| router)
 }
 
 /// Build the local browser router with one short-lived bootstrap token.
@@ -62,9 +61,7 @@ pub fn router_with_bootstrap(
     bootstrap_token: &str,
     portal_origin: String,
 ) -> Result<Router, LedgerError> {
-    let auth =
-        crate::auth::AuthState::new(bootstrap_token, portal_origin).map_err(LedgerError::Store)?;
-    build_router(db, auth)
+    daemon(db, Some(bootstrap_token), portal_origin, None).map(|(router, _)| router)
 }
 
 /// Build the local browser router with independent internal worker authority.
@@ -78,19 +75,38 @@ pub fn router_with_authorities(
     portal_origin: String,
     worker_token: &str,
 ) -> Result<Router, LedgerError> {
-    let auth = crate::auth::AuthState::new(bootstrap_token, portal_origin)
-        .and_then(|auth| auth.with_worker_token(worker_token))
-        .map_err(LedgerError::Store)?;
-    build_router(db, auth)
+    daemon(db, Some(bootstrap_token), portal_origin, Some(worker_token)).map(|(router, _)| router)
 }
 
-fn build_router(db: &FsPath, auth: crate::auth::AuthState) -> Result<Router, LedgerError> {
+/// Build the router together with the state it serves, so the daemon can run
+/// its writer-lease maintenance tick against exactly the ledger this API
+/// answers from. `bootstrap_token` is `None` for the unauthenticated local
+/// router; `worker_token` mounts the reconciler's independent authority.
+///
+/// # Errors
+///
+/// Returns a ledger error or an invalid bootstrap/origin/worker token error.
+pub fn daemon(
+    db: &FsPath,
+    bootstrap_token: Option<&str>,
+    portal_origin: String,
+    worker_token: Option<&str>,
+) -> Result<(Router, SharedState), LedgerError> {
+    let auth = match bootstrap_token {
+        Some(token) => crate::auth::AuthState::new(token, portal_origin),
+        None => Ok(crate::auth::AuthState::disabled(portal_origin)),
+    };
+    let auth = match worker_token {
+        Some(token) => auth.and_then(|auth| auth.with_worker_token(token)),
+        None => auth,
+    };
     let ledger = SqliteLedger::open(db)?;
     let state: SharedState = Arc::new(AppState {
         ledger: Mutex::new(ledger),
-        auth: Mutex::new(auth),
+        auth: Mutex::new(auth.map_err(LedgerError::Store)?),
+        reaper: crate::reaper::ReapObservation::default(),
     });
-    Ok(Router::new()
+    let router = Router::new()
         .route("/health", get(meta::health))
         .route("/openapi.yaml", get(meta::openapi))
         .route("/v1/missions", get(list_missions))
@@ -112,7 +128,8 @@ fn build_router(db: &FsPath, auth: crate::auth::AuthState) -> Result<Router, Led
         .route("/v1/audit", get(projections::audit))
         .merge(portal::router())
         .fallback(api_not_found)
-        .with_state(state))
+        .with_state(Arc::clone(&state));
+    Ok((router, state))
 }
 
 async fn api_not_found() -> ApiError {

@@ -23,6 +23,14 @@ struct ReapReport<'a> {
 /// transaction against the database's own clock. Deterministic and idempotent:
 /// a second run over the same database reclaims nothing and reports an empty
 /// set. It grants no authority and never revives a dead Attempt.
+///
+/// This is the *offline* entry point. A running `bullet-farmd` reaps on its own
+/// maintenance tick and needs no operator, so reach for this command when the
+/// daemon is stopped — a database being inspected, restored, or migrated with
+/// nothing serving it. Both callers reach the same
+/// [`LeaseService::expire_due`] sweep, so running this against a live daemon is
+/// safe but redundant: whichever transaction commits first reclaims the lease
+/// and the other finds nothing due.
 pub(super) fn reap(database: &Path) -> Result<(), String> {
     if !database.is_file() {
         return Err(format!("ledger database not found: {}", database.display()));

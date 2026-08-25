@@ -1,6 +1,14 @@
 //! Spec section 25.5 Fleet: every active lease row with its liveness judged
 //! against the store's own clock, joined to its attempt and mission, plus the
 //! push-maintained ready queue. One atomic read; nothing is inferred.
+//!
+//! Reclamation is visible here without this projection knowing about it. A dead
+//! lease shows as `expired` with its Attempt's live state for at most one
+//! maintenance tick (`crate::reaper`); the reclaiming transaction then deletes
+//! the `active_leases` row, moves the Attempt to its terminal `Crashed` state
+//! and pushes the freed package back onto `ready_queue`, so the next snapshot
+//! drops the lease and shows the work as ready. `expired` is therefore a
+//! transient the operator may observe, never a resting state.
 
 use super::package_missions;
 use crate::api::{snapshot_response, SharedState};
