@@ -7,8 +7,6 @@ use bullet_runner_core::REPOSITORY_GATE_ID;
 
 /// The demonstration objective (spec s33.13 first mandatory scenario).
 pub const OBJECTIVE: &str = "Create PONG.txt containing exactly PONG";
-/// Verifier-controlled command matching the writer registry's repository gate.
-pub const VERIFIER_GATE_COMMAND: &str = "/usr/bin/grep -qx PONG PONG.txt";
 
 const README: &str =
     "# synthetic integration fixture\n\nObjective: Create PONG.txt containing exactly \
@@ -23,8 +21,6 @@ pub struct Fixture {
     pub base_sha: String,
     /// Writer gates admitted before provider dispatch.
     pub writer_gate_ids: Vec<String>,
-    /// Independent verifier command; never sourced from a proposal.
-    pub verifier_gate_command: String,
 }
 
 fn git(repo: &Path, home: &Path, args: &[&str]) -> Result<String, String> {
@@ -73,7 +69,6 @@ pub fn prepare(data_dir: &Path, target: Option<PathBuf>) -> Result<Fixture, Stri
             origin: target,
             base_sha: sha,
             writer_gate_ids: vec![REPOSITORY_GATE_ID.into()],
-            verifier_gate_command: VERIFIER_GATE_COMMAND.into(),
         });
     }
     let root = data_dir.join("fixture");
@@ -83,7 +78,6 @@ pub fn prepare(data_dir: &Path, target: Option<PathBuf>) -> Result<Fixture, Stri
         origin,
         base_sha,
         writer_gate_ids: vec![REPOSITORY_GATE_ID.into()],
-        verifier_gate_command: VERIFIER_GATE_COMMAND.into(),
     })
 }
 

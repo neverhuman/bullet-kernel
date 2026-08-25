@@ -7,7 +7,7 @@ use crate::evidence::{CandidateSubject, VerifierEvidence};
 use crate::gate::{run_gate, GateRun};
 use crate::request::VerifierRequest;
 use crate::safe_git::HostileGit;
-use bullet_domain::{EvidenceTier, GateOutcome};
+use bullet_domain::{gate_definition, EvidenceTier, GateDefinition, GateOutcome};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -22,9 +22,6 @@ pub const REASON_TREE_MISMATCH: &str = "TREE_MISMATCH";
 pub const REASON_BASE_NOT_ANCESTOR: &str = "BASE_NOT_ANCESTOR";
 /// Reason code when a required git read failed after the clone.
 pub const REASON_GIT_READ_FAILED: &str = "GIT_READ_FAILED";
-
-/// Gate label stamped on every record this pipeline produces.
-pub const GATE_LABEL: &str = "bullet-verifier/clean-room";
 
 enum Reconstruction {
     Ready(PathBuf),
@@ -127,17 +124,19 @@ fn reconstruct(
 
 fn record(
     request: &VerifierRequest,
+    definition: GateDefinition,
     gate: GateRun,
     duration_ms: u64,
     environment: BTreeMap<String, String>,
 ) -> VerifierEvidence {
     VerifierEvidence {
         tier: EvidenceTier::E2,
-        gate: GATE_LABEL.into(),
+        gate_id: request.gate_id.clone(),
         outcome: gate.outcome,
         reason: gate.reason,
         detail: gate.detail,
-        command: request.gate_command.clone(),
+        argv: definition.argv(),
+        timeout_secs: definition.timeout_secs(),
         exit_code: gate.exit_code,
         duration_ms,
         subject: CandidateSubject {
@@ -172,14 +171,15 @@ pub async fn execute(
         )));
     }
     request.validate()?;
+    let definition = gate_definition(&request.gate_id).ok_or_else(|| {
+        VerifierError::BadInput(format!("unknown gate_id {:?}", request.gate_id.as_str()))
+    })?;
     let started = Instant::now();
     let scratch = tempfile::tempdir().map_err(|err| io_err("create scratch dir", &err))?;
     let git = HostileGit::new(&scratch.path().join("runtime"))?;
     let environment = capture_environment(&git);
     let gate = match reconstruct(&git, scratch.path(), request)? {
-        Reconstruction::Ready(clone_dir) => {
-            run_gate(&clone_dir, &request.gate_command, request.timeout_secs).await
-        }
+        Reconstruction::Ready(clone_dir) => run_gate(&clone_dir, definition).await,
         Reconstruction::Verdict {
             outcome,
             reason,
@@ -192,5 +192,5 @@ pub async fn execute(
         },
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    Ok(record(request, gate, duration_ms, environment))
+    Ok(record(request, definition, gate, duration_ms, environment))
 }

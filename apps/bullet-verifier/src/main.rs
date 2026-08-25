@@ -2,7 +2,7 @@
 //! stdin; output is one typed evidence record on stdout. The process
 //! refuses to run under the writer identity.
 
-use bullet_verifier_core::{execute, VerifierError, VerifierRequest};
+use bullet_verifier_core::{execute, GateId, VerifierError, VerifierRequest};
 use clap::Parser;
 use std::io::Read;
 
@@ -27,12 +27,9 @@ struct Args {
     /// Candidate tree SHA.
     #[arg(long)]
     tree_sha: Option<String>,
-    /// Gate command executed inside the clean clone.
+    /// Kernel-catalog gate selected by policy.
     #[arg(long)]
-    gate_command: Option<String>,
-    /// Gate budget in seconds.
-    #[arg(long, default_value_t = 600)]
-    timeout_secs: u64,
+    gate_id: Option<GateId>,
     /// Attempt that authored the Candidate.
     #[arg(long)]
     author_attempt_id: Option<String>,
@@ -55,8 +52,7 @@ fn request_from(args: Args) -> Result<VerifierRequest, VerifierError> {
         base_sha: args.base_sha.ok_or_else(|| missing("base-sha"))?,
         head_sha: args.head_sha.ok_or_else(|| missing("head-sha"))?,
         tree_sha: args.tree_sha.ok_or_else(|| missing("tree-sha"))?,
-        gate_command: args.gate_command.ok_or_else(|| missing("gate-command"))?,
-        timeout_secs: args.timeout_secs,
+        gate_id: args.gate_id.ok_or_else(|| missing("gate-id"))?,
         author_attempt_id: args
             .author_attempt_id
             .ok_or_else(|| missing("author-attempt-id"))?,

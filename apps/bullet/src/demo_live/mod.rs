@@ -18,9 +18,10 @@ use bullet_application::{
     materialize_plan, HeartbeatRequest, LeaseService, Ledger, PlanInput, StoredGraph,
 };
 use bullet_domain::{
-    Attempt, AttemptId, AttemptState, Candidate, CandidateId, Digest, Evidence, EvidenceId,
+    Attempt, AttemptId, AttemptState, Candidate, CandidateId, Digest, Evidence, EvidenceId, GateId,
     TaskClass,
 };
+use bullet_runner_core::REPOSITORY_GATE_ID;
 use bullet_verifier_core::VerifierRequest;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -77,7 +78,7 @@ async fn drive(
         &first.attempt,
         &phase.outcome.attempt_id,
     )?;
-    assembly.evidence = Some(verify_candidate(ledger, fixture, &phase).await?);
+    assembly.evidence = Some(verify_candidate(ledger, &phase).await?);
     assembly.local_effect = Some(effect::deliver_local(
         ledger,
         &materialized.graph,
@@ -253,7 +254,6 @@ fn stale_refused(
 
 async fn verify_candidate(
     ledger: &SharedLedger,
-    fixture: &fixture::Fixture,
     phase: &runner::RunnerPhase,
 ) -> Result<receipt::EvidenceOut, String> {
     let candidate = &phase.outcome.candidate;
@@ -262,15 +262,15 @@ async fn verify_candidate(
         base_sha: candidate.base_commit.clone(),
         head_sha: candidate.head_commit.clone(),
         tree_sha: candidate.tree_hash.clone(),
-        gate_command: fixture.verifier_gate_command.clone(),
-        timeout_secs: 120,
+        gate_id: GateId::parse(REPOSITORY_GATE_ID)
+            .map_err(|err| format!("VERIFIER_GATE_ID: {err}"))?,
         author_attempt_id: phase.outcome.attempt_id.to_string(),
     };
     let record = verify::run_verifier(&request).await?;
     let out = receipt::EvidenceOut {
         verifier_outcome: record.outcome.as_str().to_string(),
         tier: record.tier.as_str().to_string(),
-        gate: record.gate.clone(),
+        gate: record.gate_id.to_string(),
         produced_by: record.produced_by.clone(),
     };
     let mut guard = lock(ledger)?;

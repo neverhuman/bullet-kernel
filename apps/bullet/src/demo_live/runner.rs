@@ -69,7 +69,6 @@ pub async fn run_phase(
         fixture.writer_gate_ids.clone(),
     );
     config.turn_timeout = Duration::from_secs(240);
-    config.gate_timeout = Duration::from_secs(60);
     let started = Instant::now();
     let outcome = run_attempt(
         client,

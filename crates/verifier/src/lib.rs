@@ -11,13 +11,13 @@ pub mod run;
 pub mod safe_git;
 pub mod workspace;
 
-pub use bullet_domain::{EvidenceTier, GateOutcome, REASON_ZERO_TESTS};
+pub use bullet_domain::{EvidenceTier, GateId, GateOutcome, REASON_ZERO_TESTS};
 pub use error::VerifierError;
 pub use evidence::{
     independent_requirement_satisfied, invalidate_on_subject_change, CandidateSubject,
     CustodyRecord, EvidenceCustody, VerifierEvidence,
 };
-pub use gate::{cargo_test_shaped, executed_test_count, GateRun};
+pub use gate::GateRun;
 pub use request::VerifierRequest;
 pub use run::execute;
 pub use safe_git::HostileGit;

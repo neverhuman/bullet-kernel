@@ -34,7 +34,7 @@ fn fixture(dir: &Path) -> serde_json::Value {
         dir,
         "git init -q -b main . && \
          git config user.name bullet && git config user.email bullet@test && \
-         echo base > f && git add . && git commit -qm base && \
+         echo PONG > PONG.txt && echo base > f && git add . && git commit -qm base && \
          echo head > f && git add . && git commit -qm head",
     );
     serde_json::json!({
@@ -42,8 +42,7 @@ fn fixture(dir: &Path) -> serde_json::Value {
         "base_sha": git_out(dir, &["rev-parse", "HEAD~1"]),
         "head_sha": git_out(dir, &["rev-parse", "HEAD"]),
         "tree_sha": git_out(dir, &["rev-parse", "HEAD^{tree}"]),
-        "gate_command": "test -f f",
-        "timeout_secs": 20,
+        "gate_id": "repo.gate.v1",
         "author_attempt_id": concat!(
             "atm_",
             "0000000000000000000000000000000000000000000000000000000000000000"
@@ -87,6 +86,12 @@ fn stdin_round_trip_emits_typed_e2_record() {
     assert_eq!(record["produced_by"], "bullet-verifier");
     assert_eq!(record["subject"]["head_sha"], request["head_sha"]);
     assert_eq!(record["author_attempt_id"], request["author_attempt_id"]);
+    assert_eq!(record["gate_id"], "repo.gate.v1");
+    assert_eq!(
+        record["argv"],
+        serde_json::json!(["/usr/bin/grep", "-qx", "PONG", "PONG.txt"])
+    );
+    assert_eq!(record["timeout_secs"], 2);
 }
 
 #[test]
@@ -106,4 +111,28 @@ fn malformed_stdin_is_bad_input() {
     assert_eq!(out.status.code(), Some(2));
     let err: serde_json::Value = serde_json::from_slice(&out.stderr).expect("stderr json");
     assert_eq!(err["reason_code"], "BAD_INPUT");
+}
+
+#[test]
+fn legacy_shell_timeout_and_unknown_ids_fail_without_artifacts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("PWNED");
+    let request = fixture(dir.path());
+
+    let mut legacy = request.clone();
+    legacy["gate_command"] = serde_json::json!(format!("touch {}", marker.display()));
+    legacy["timeout_secs"] = serde_json::json!(1);
+    let out = run_binary(&legacy, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    assert!(!marker.exists());
+
+    for gate_id in ["unknown.gate.v1", "repo.gate.v1;touch-PWNED"] {
+        let mut hostile = request.clone();
+        hostile["gate_id"] = serde_json::json!(gate_id);
+        let out = run_binary(&hostile, &[]);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(out.stdout.is_empty());
+        assert!(!marker.exists());
+    }
 }

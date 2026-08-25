@@ -21,7 +21,10 @@ pub use entities::{
     WorkPackage,
 };
 pub use error::DomainError;
-pub use gates::{EvidenceTier, GateOutcome, REASON_ZERO_TESTS};
+pub use gates::{
+    gate_definition, parse_gate_ids, EvidenceTier, GateDefinition, GateId, GateOutcome,
+    MAX_GATE_IDS, MAX_GATE_ID_BYTES, REASON_ZERO_TESTS, REPOSITORY_GATE_ID,
+};
 pub use ids::*;
 pub use mutation_guard::{MutationContext, MutationGuard, MutationRefusal};
 pub use observation::Observation;

@@ -11,7 +11,6 @@ use bullet_runner_core::{
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
-use std::time::Duration;
 
 fn proposal(gate_ids: Value) -> Value {
     json!({
@@ -117,7 +116,7 @@ async fn provider_text_and_repository_script_cannot_supply_argv() {
     )
     .unwrap();
 
-    let report = run_gate(directory.path(), REPOSITORY_GATE_ID, Duration::from_secs(2))
+    let report = run_gate(directory.path(), REPOSITORY_GATE_ID)
         .await
         .unwrap();
     assert_eq!(report.argv, ["/usr/bin/grep", "-qx", "PONG", "PONG.txt"]);
@@ -125,10 +124,6 @@ async fn provider_text_and_repository_script_cannot_supply_argv() {
     assert!(!marker.exists());
 
     let command_text = format!("repo.gate.v1;/usr/bin/touch{}", marker.display());
-    assert!(
-        run_gate(directory.path(), &command_text, Duration::from_secs(2))
-            .await
-            .is_err()
-    );
+    assert!(run_gate(directory.path(), &command_text).await.is_err());
     assert!(!marker.exists());
 }

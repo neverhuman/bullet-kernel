@@ -2,7 +2,7 @@
 //! writer evidence can never satisfy an independent requirement, and
 //! evidence whose subject changed is invalidated.
 
-use bullet_domain::{EvidenceTier, GateOutcome};
+use bullet_domain::{EvidenceTier, GateId, GateOutcome};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -32,16 +32,18 @@ pub enum EvidenceCustody {
 pub struct VerifierEvidence {
     /// Trust tier. The clean-room verifier produces `E2`.
     pub tier: EvidenceTier,
-    /// Gate label.
-    pub gate: String,
+    /// Exact Kernel-catalog gate.
+    pub gate_id: GateId,
     /// Typed outcome. Only `PASS` satisfies a requirement.
     pub outcome: GateOutcome,
     /// Stable reason code refining the outcome, e.g. `ZERO_TESTS`.
     pub reason: Option<String>,
     /// Human-oriented detail for operators; never parsed by machines.
     pub detail: Option<String>,
-    /// Exact command that ran.
-    pub command: String,
+    /// Exact catalog-owned executable and arguments.
+    pub argv: Vec<String>,
+    /// Catalog-owned wall-clock timeout.
+    pub timeout_secs: u64,
     /// Gate exit code, when the gate produced one.
     pub exit_code: Option<i32>,
     /// Wall time of the whole reconstruction and gate run.

@@ -5,7 +5,173 @@
 use crate::entities::Evidence;
 use crate::error::DomainError;
 use crate::ids::{CandidateId, EvidenceId};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeSet;
+use std::fmt;
+use std::str::FromStr;
+
+/// Maximum gates in one policy selection.
+pub const MAX_GATE_IDS: usize = 16;
+/// Maximum UTF-8 bytes in one gate identifier.
+pub const MAX_GATE_ID_BYTES: usize = 64;
+/// Fixed gate used by the credential-free repository fixture.
+pub const REPOSITORY_GATE_ID: &str = "repo.gate.v1";
+
+/// A lexically valid gate identifier. This type is not authority by itself;
+/// [`gate_definition`] performs sealed-catalog admission.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GateId(String);
+
+impl GateId {
+    /// Parse the bounded, command-inert identifier shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns `INVALID_ID` for empty, oversized, or command-shaped values.
+    pub fn parse(value: &str) -> Result<Self, DomainError> {
+        let admitted_shape = !value.is_empty()
+            && value.len() <= MAX_GATE_ID_BYTES
+            && value.as_bytes()[0].is_ascii_lowercase()
+            && value.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b'-')
+            });
+        if !admitted_shape {
+            return Err(DomainError::InvalidId(format!(
+                "gate_id must match [a-z][a-z0-9._-]{{0,{}}}: {value:?}",
+                MAX_GATE_ID_BYTES - 1
+            )));
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    /// Stable wire value.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for GateId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for GateId {
+    type Err = DomainError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+impl Serialize for GateId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for GateId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// One immutable Kernel-owned execution policy. Repository and model data
+/// can select its ID but cannot alter its program, argv, or timeout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GateDefinition {
+    id: &'static str,
+    program: &'static str,
+    args: &'static [&'static str],
+    timeout_secs: u64,
+}
+
+impl GateDefinition {
+    /// Catalog ID.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        self.id
+    }
+
+    /// Absolute executable path.
+    #[must_use]
+    pub const fn program(self) -> &'static str {
+        self.program
+    }
+
+    /// Immutable argument vector excluding the executable.
+    #[must_use]
+    pub const fn args(self) -> &'static [&'static str] {
+        self.args
+    }
+
+    /// Kernel policy timeout.
+    #[must_use]
+    pub const fn timeout_secs(self) -> u64 {
+        self.timeout_secs
+    }
+
+    /// Exact executable and arguments admitted for evidence/audit display.
+    #[must_use]
+    pub fn argv(self) -> Vec<String> {
+        std::iter::once(self.program)
+            .chain(self.args.iter().copied())
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+const GATES: &[GateDefinition] = &[GateDefinition {
+    id: REPOSITORY_GATE_ID,
+    program: "/usr/bin/grep",
+    args: &["-qx", "PONG", "PONG.txt"],
+    timeout_secs: 2,
+}];
+
+/// Look up an identifier in the sealed V1 catalog.
+#[must_use]
+pub fn gate_definition(gate_id: &GateId) -> Option<GateDefinition> {
+    GATES
+        .iter()
+        .find(|gate| gate.id == gate_id.as_str())
+        .copied()
+}
+
+/// Parse a complete ordered selection, rejecting empty, oversized, and
+/// duplicate sets. Catalog admission remains a separate explicit step.
+///
+/// # Errors
+///
+/// Returns `INVALID_ID` for any malformed selection.
+pub fn parse_gate_ids(gate_ids: &[String]) -> Result<Vec<GateId>, DomainError> {
+    if gate_ids.is_empty() || gate_ids.len() > MAX_GATE_IDS {
+        return Err(DomainError::InvalidId(format!(
+            "gate_ids must contain 1..={MAX_GATE_IDS} entries"
+        )));
+    }
+    let mut parsed = Vec::with_capacity(gate_ids.len());
+    let mut seen = BTreeSet::new();
+    for value in gate_ids {
+        let gate_id = GateId::parse(value)?;
+        if !seen.insert(gate_id.clone()) {
+            return Err(DomainError::InvalidId(format!(
+                "duplicate gate_id: {gate_id}"
+            )));
+        }
+        parsed.push(gate_id);
+    }
+    Ok(parsed)
+}
 
 /// Stable reason code attached to a `NOT_RUN` outcome whose gate executed
 /// zero tests. Distinct from an ordinary never-started `NOT_RUN`.
@@ -252,5 +418,45 @@ mod tests {
         );
         assert_eq!(zero.outcome(), GateOutcome::NotRun);
         assert!(!zero.satisfies_requirement());
+    }
+
+    #[test]
+    fn gate_ids_are_strict_serde_values_not_commands() {
+        let gate_id = GateId::parse(REPOSITORY_GATE_ID).expect("gate id");
+        assert_eq!(serde_json::to_string(&gate_id).unwrap(), "\"repo.gate.v1\"");
+        assert_eq!(
+            serde_json::from_str::<GateId>("\"repo.gate.v1\"").unwrap(),
+            gate_id
+        );
+        for invalid in [
+            "",
+            "Repo.gate.v1",
+            "repo.gate.v1;touch-PWNED",
+            "repo/gate/v1",
+            "repo gate v1",
+        ] {
+            assert!(GateId::parse(invalid).is_err(), "accepted {invalid:?}");
+        }
+        assert!(GateId::parse(&"a".repeat(MAX_GATE_ID_BYTES + 1)).is_err());
+        assert!(serde_json::from_str::<GateId>("42").is_err());
+    }
+
+    #[test]
+    fn catalog_and_selection_are_exact_and_policy_owned() {
+        let gate_id = GateId::parse(REPOSITORY_GATE_ID).unwrap();
+        let definition = gate_definition(&gate_id).expect("admitted gate");
+        assert_eq!(definition.id(), REPOSITORY_GATE_ID);
+        assert_eq!(definition.program(), "/usr/bin/grep");
+        assert_eq!(definition.args(), ["-qx", "PONG", "PONG.txt"]);
+        assert_eq!(definition.timeout_secs(), 2);
+        assert_eq!(
+            definition.argv(),
+            ["/usr/bin/grep", "-qx", "PONG", "PONG.txt"]
+        );
+
+        assert!(parse_gate_ids(&[]).is_err());
+        assert!(parse_gate_ids(&[REPOSITORY_GATE_ID.into(), REPOSITORY_GATE_ID.into()]).is_err());
+        let unknown = GateId::parse("unknown.gate.v1").unwrap();
+        assert!(gate_definition(&unknown).is_none());
     }
 }

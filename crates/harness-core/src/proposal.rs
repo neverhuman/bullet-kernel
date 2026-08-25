@@ -3,14 +3,10 @@
 //! application is deterministic and order-independent.
 
 use crate::error::HarnessError;
+use bullet_domain::parse_gate_ids;
+pub use bullet_domain::{MAX_GATE_IDS, MAX_GATE_ID_BYTES};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
-
-/// Maximum gates one proposal may name.
-pub const MAX_GATE_IDS: usize = 16;
-/// Maximum UTF-8 bytes in one gate identifier.
-pub const MAX_GATE_ID_BYTES: usize = 64;
 
 /// Whole-file change operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,36 +166,11 @@ impl PatchProposal {
 /// `PROPOSAL_PARSE_FAILED` for empty, oversized, duplicate, or command-shaped
 /// identifiers.
 pub fn validate_gate_ids(gate_ids: &[String]) -> Result<(), HarnessError> {
-    if gate_ids.is_empty() || gate_ids.len() > MAX_GATE_IDS {
-        return Err(HarnessError::ProposalParse {
-            reason: format!("gate_ids must contain 1..={MAX_GATE_IDS} entries"),
-        });
-    }
-    let mut seen = BTreeSet::new();
-    for gate_id in gate_ids {
-        let admitted_shape = !gate_id.is_empty()
-            && gate_id.len() <= MAX_GATE_ID_BYTES
-            && gate_id.as_bytes()[0].is_ascii_lowercase()
-            && gate_id.bytes().all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || matches!(byte, b'.' | b'_' | b'-')
-            });
-        if !admitted_shape {
-            return Err(HarnessError::ProposalParse {
-                reason: format!(
-                    "gate_id must match [a-z][a-z0-9._-]{{0,{}}}: {gate_id:?}",
-                    MAX_GATE_ID_BYTES - 1
-                ),
-            });
-        }
-        if !seen.insert(gate_id.as_str()) {
-            return Err(HarnessError::ProposalParse {
-                reason: format!("duplicate gate_id: {gate_id}"),
-            });
-        }
-    }
-    Ok(())
+    parse_gate_ids(gate_ids)
+        .map(|_| ())
+        .map_err(|error| HarnessError::ProposalParse {
+            reason: error.to_string(),
+        })
 }
 
 /// The hand-written JSON Schema this struct must agree with.
@@ -221,6 +192,7 @@ fn fenced_block<'a>(text: &'a str, fence: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     fn sample() -> PatchProposal {
         PatchProposal {

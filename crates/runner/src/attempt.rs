@@ -45,8 +45,6 @@ pub struct AttemptConfig {
     pub admitted_gate_ids: Vec<String>,
     /// Bounded repair rounds after the initial turn (ADR 0001: 2).
     pub max_repair_rounds: u32,
-    /// Wall-clock bound for one gate run.
-    pub gate_timeout: Duration,
     /// Wall-clock bound for one provider invocation.
     pub turn_timeout: Duration,
     /// Heartbeat cadence and lease TTL.
@@ -72,7 +70,6 @@ impl AttemptConfig {
             scope_prefixes,
             admitted_gate_ids,
             max_repair_rounds: 2,
-            gate_timeout: Duration::from_secs(120),
             turn_timeout: Duration::from_secs(600),
             heartbeat: HeartbeatConfig::default(),
         }
@@ -348,7 +345,7 @@ async fn session_loop(
         journal.record("patch_applied", &format!("{applied} paths"));
         let mut gates = Vec::with_capacity(config.admitted_gate_ids.len());
         for gate_id in &config.admitted_gate_ids {
-            let report = run_gate(&ws.repo_dir, gate_id, config.gate_timeout).await?;
+            let report = run_gate(&ws.repo_dir, gate_id).await?;
             journal.record(
                 "gate_result",
                 &format!(

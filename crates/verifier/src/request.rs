@@ -1,10 +1,12 @@
 //! Verifier input. Every field is validated before any process spawns.
 
 use crate::error::VerifierError;
+use bullet_domain::{gate_definition, GateId};
 use serde::{Deserialize, Serialize};
 
 /// One clean-room verification request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerifierRequest {
     /// Path of the workspace repository to reconstruct from.
     pub workspace_repo_path: String,
@@ -14,10 +16,8 @@ pub struct VerifierRequest {
     pub head_sha: String,
     /// Candidate tree SHA (40 lowercase hex).
     pub tree_sha: String,
-    /// Gate command executed inside the clean clone via `sh -c`.
-    pub gate_command: String,
-    /// Gate budget in seconds.
-    pub timeout_secs: u64,
+    /// Kernel-catalog gate selected by policy.
+    pub gate_id: GateId,
     /// Attempt that authored the Candidate; recorded for independence
     /// checks, never granted authority.
     pub author_attempt_id: String,
@@ -53,13 +53,11 @@ impl VerifierRequest {
                 )));
             }
         }
-        if self.gate_command.trim().is_empty() {
-            return Err(VerifierError::BadInput("gate_command is empty".into()));
-        }
-        if self.timeout_secs == 0 {
-            return Err(VerifierError::BadInput(
-                "timeout_secs must be positive".into(),
-            ));
+        if gate_definition(&self.gate_id).is_none() {
+            return Err(VerifierError::BadInput(format!(
+                "unknown gate_id {:?}",
+                self.gate_id.as_str()
+            )));
         }
         if self.author_attempt_id.is_empty() {
             return Err(VerifierError::BadInput("author_attempt_id is empty".into()));
@@ -78,8 +76,7 @@ mod tests {
             base_sha: "a".repeat(40),
             head_sha: "b".repeat(40),
             tree_sha: "c".repeat(40),
-            gate_command: "true".into(),
-            timeout_secs: 5,
+            gate_id: GateId::parse(bullet_domain::REPOSITORY_GATE_ID).unwrap(),
             author_attempt_id: "atm_x".into(),
         }
     }
@@ -105,12 +102,25 @@ mod tests {
     }
 
     #[test]
-    fn zero_timeout_and_empty_fields_are_refused() {
+    fn unknown_gate_and_empty_fields_are_refused() {
         let mut bad = request();
-        bad.timeout_secs = 0;
+        bad.gate_id = GateId::parse("unknown.gate.v1").unwrap();
         assert!(bad.validate().is_err());
         let mut empty = request();
-        empty.gate_command = "  ".into();
+        empty.author_attempt_id.clear();
         assert!(empty.validate().is_err());
+    }
+
+    #[test]
+    fn serde_rejects_legacy_authority_and_command_shaped_gate_ids() {
+        let value = serde_json::to_value(request()).unwrap();
+        let mut legacy = value.clone();
+        legacy["gate_command"] = serde_json::json!("touch PWNED");
+        legacy["timeout_secs"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<VerifierRequest>(legacy).is_err());
+
+        let mut malicious = value;
+        malicious["gate_id"] = serde_json::json!("repo.gate.v1;touch-PWNED");
+        assert!(serde_json::from_value::<VerifierRequest>(malicious).is_err());
     }
 }

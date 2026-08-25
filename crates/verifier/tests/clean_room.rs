@@ -1,7 +1,7 @@
 //! Clean-room pipeline against real git repositories: every typed outcome,
 //! the exact-subject invalidations, and the author-overlap refusal.
 
-use bullet_verifier_core::{execute, EvidenceTier, GateOutcome, VerifierRequest};
+use bullet_verifier_core::{execute, EvidenceTier, GateId, GateOutcome, VerifierRequest};
 use std::path::Path;
 use std::process::Command;
 
@@ -50,7 +50,7 @@ fn source_repo(dir: &Path) -> (String, String, String) {
         dir,
         "git init -q -b main . && \
          git config user.name bullet && git config user.email bullet@test && \
-         echo base > file.txt && git add . && git commit -qm base && \
+         echo PONG > PONG.txt && echo base > file.txt && git add . && git commit -qm base && \
          echo head > file.txt && git add . && git commit -qm head",
     );
     let base = git_out(dir, &["rev-parse", "HEAD~1"]);
@@ -59,14 +59,13 @@ fn source_repo(dir: &Path) -> (String, String, String) {
     (base, head, tree)
 }
 
-fn request(dir: &Path, base: &str, head: &str, tree: &str, gate: &str) -> VerifierRequest {
+fn request(dir: &Path, base: &str, head: &str, tree: &str) -> VerifierRequest {
     VerifierRequest {
         workspace_repo_path: dir.display().to_string(),
         base_sha: base.into(),
         head_sha: head.into(),
         tree_sha: tree.into(),
-        gate_command: gate.into(),
-        timeout_secs: 20,
+        gate_id: GateId::parse(bullet_domain::REPOSITORY_GATE_ID).unwrap(),
         author_attempt_id: concat!(
             "atm_",
             "0000000000000000000000000000000000000000000000000000000000000000"
@@ -79,18 +78,18 @@ fn request(dir: &Path, base: &str, head: &str, tree: &str, gate: &str) -> Verifi
 async fn pass_produces_e2_evidence_with_exact_subject() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (base, head, tree) = source_repo(dir.path());
-    let record = execute(
-        &request(dir.path(), &base, &head, &tree, "test -f file.txt"),
-        false,
-    )
-    .await
-    .expect("record");
+    let record = execute(&request(dir.path(), &base, &head, &tree), false)
+        .await
+        .expect("record");
     assert_eq!(record.outcome, GateOutcome::Pass);
     assert_eq!(record.tier, EvidenceTier::E2);
     assert_eq!(record.exit_code, Some(0));
     assert_eq!(record.subject.base_sha, base);
     assert_eq!(record.subject.head_sha, head);
     assert_eq!(record.subject.tree_sha, tree);
+    assert_eq!(record.gate_id.as_str(), bullet_domain::REPOSITORY_GATE_ID);
+    assert_eq!(record.argv, ["/usr/bin/grep", "-qx", "PONG", "PONG.txt"]);
+    assert_eq!(record.timeout_secs, 2);
     assert_eq!(record.produced_by, "bullet-verifier");
     assert!(record.environment.contains_key("git"));
     assert!(record.outcome.satisfies_requirement());
@@ -102,7 +101,7 @@ async fn hostile_inherited_git_dir_does_not_leak_into_clone() {
     let (base, head, tree) = source_repo(dir.path());
     // The clean clone must ignore a hostile inherited GIT_DIR entirely.
     std::env::set_var("GIT_DIR", "/nonexistent-bullet-hostile");
-    let record = execute(&request(dir.path(), &base, &head, &tree, "true"), false)
+    let record = execute(&request(dir.path(), &base, &head, &tree), false)
         .await
         .expect("record");
     std::env::remove_var("GIT_DIR");
@@ -112,67 +111,19 @@ async fn hostile_inherited_git_dir_does_not_leak_into_clone() {
 #[tokio::test]
 async fn failing_gate_is_fail_with_exit_code() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (base, head, tree) = source_repo(dir.path());
-    let record = execute(&request(dir.path(), &base, &head, &tree, "exit 3"), false)
+    let (_base, prior, _tree) = source_repo(dir.path());
+    sh(
+        dir.path(),
+        "echo 'NOT PONG' > PONG.txt && git add PONG.txt && git commit -qm fail-gate",
+    );
+    let head = git_out(dir.path(), &["rev-parse", "HEAD"]);
+    let tree = git_out(dir.path(), &["rev-parse", "HEAD^{tree}"]);
+    let record = execute(&request(dir.path(), &prior, &head, &tree), false)
         .await
         .expect("record");
     assert_eq!(record.outcome, GateOutcome::Fail);
-    assert_eq!(record.exit_code, Some(3));
+    assert_eq!(record.exit_code, Some(1));
     assert_eq!(record.reason.as_deref(), Some("GATE_NONZERO_EXIT"));
-    assert!(!record.outcome.satisfies_requirement());
-}
-
-#[tokio::test]
-async fn overrunning_gate_is_timed_out() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let (base, head, tree) = source_repo(dir.path());
-    let mut req = request(dir.path(), &base, &head, &tree, "sleep 5");
-    req.timeout_secs = 1;
-    let record = execute(&req, false).await.expect("record");
-    assert_eq!(record.outcome, GateOutcome::TimedOut);
-    assert_eq!(record.reason.as_deref(), Some("GATE_TIMEOUT"));
-    assert_eq!(record.exit_code, None);
-}
-
-#[tokio::test]
-async fn missing_command_is_infra_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let (base, head, tree) = source_repo(dir.path());
-    let record = execute(
-        &request(dir.path(), &base, &head, &tree, "bullet-no-such-gate-cmd"),
-        false,
-    )
-    .await
-    .expect("record");
-    assert_eq!(record.outcome, GateOutcome::InfraError);
-    assert_eq!(record.reason.as_deref(), Some("GATE_COMMAND_NOT_FOUND"));
-}
-
-#[tokio::test]
-async fn cargo_gate_with_zero_tests_is_not_run() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    sh(
-        dir.path(),
-        "git init -q -b main . && \
-         git config user.name bullet && git config user.email bullet@test && \
-         mkdir src && printf '' > src/lib.rs && \
-         printf '[package]\nname = \"probe\"\nversion = \"0.0.1\"\nedition = \"2021\"\n\n[lib]\ndoctest = false\n' > Cargo.toml && \
-         git add . && git commit -qm base && \
-         echo note > README.md && git add . && git commit -qm head",
-    );
-    let base = git_out(dir.path(), &["rev-parse", "HEAD~1"]);
-    let head = git_out(dir.path(), &["rev-parse", "HEAD"]);
-    let tree = git_out(dir.path(), &["rev-parse", "HEAD^{tree}"]);
-    let mut req = request(dir.path(), &base, &head, &tree, "cargo test --offline");
-    req.timeout_secs = 120;
-    let record = execute(&req, false).await.expect("record");
-    assert_eq!(
-        record.outcome,
-        GateOutcome::NotRun,
-        "detail={:?}",
-        record.detail
-    );
-    assert_eq!(record.reason.as_deref(), Some("ZERO_TESTS"));
     assert!(!record.outcome.satisfies_requirement());
 }
 
@@ -181,12 +132,9 @@ async fn tree_mismatch_is_invalidated() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (base, head, _tree) = source_repo(dir.path());
     let wrong_tree = "d".repeat(40);
-    let record = execute(
-        &request(dir.path(), &base, &head, &wrong_tree, "true"),
-        false,
-    )
-    .await
-    .expect("record");
+    let record = execute(&request(dir.path(), &base, &head, &wrong_tree), false)
+        .await
+        .expect("record");
     assert_eq!(record.outcome, GateOutcome::Invalidated);
     assert_eq!(record.reason.as_deref(), Some("TREE_MISMATCH"));
 }
@@ -196,7 +144,7 @@ async fn base_outside_ancestry_is_invalidated() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_base, head, tree) = source_repo(dir.path());
     let foreign = "e".repeat(40);
-    let record = execute(&request(dir.path(), &foreign, &head, &tree, "true"), false)
+    let record = execute(&request(dir.path(), &foreign, &head, &tree), false)
         .await
         .expect("record");
     assert_eq!(record.outcome, GateOutcome::Invalidated);
@@ -208,7 +156,7 @@ async fn unreachable_head_is_invalidated() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (base, _head, tree) = source_repo(dir.path());
     let ghost = "f".repeat(40);
-    let record = execute(&request(dir.path(), &base, &ghost, &tree, "true"), false)
+    let record = execute(&request(dir.path(), &base, &ghost, &tree), false)
         .await
         .expect("record");
     assert_eq!(record.outcome, GateOutcome::Invalidated);
@@ -219,7 +167,7 @@ async fn unreachable_head_is_invalidated() {
 async fn author_overlap_is_refused_before_any_work() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (base, head, tree) = source_repo(dir.path());
-    let err = execute(&request(dir.path(), &base, &head, &tree, "true"), true)
+    let err = execute(&request(dir.path(), &base, &head, &tree), true)
         .await
         .expect_err("refused");
     assert_eq!(err.reason_code(), "VERIFIER_IS_AUTHOR");
@@ -230,13 +178,7 @@ async fn unclonable_source_is_infra_error_evidence() {
     let dir = tempfile::tempdir().expect("tempdir");
     let missing = dir.path().join("nope");
     let record = execute(
-        &request(
-            &missing,
-            &"a".repeat(40),
-            &"b".repeat(40),
-            &"c".repeat(40),
-            "true",
-        ),
+        &request(&missing, &"a".repeat(40), &"b".repeat(40), &"c".repeat(40)),
         false,
     )
     .await
