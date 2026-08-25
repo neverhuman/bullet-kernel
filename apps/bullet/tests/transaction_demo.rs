@@ -75,9 +75,11 @@ fn zero_tests_never_satisfy_a_blocking_gate() {
 #[test]
 fn production_gitd_constructor_child_still_refuses_clone() {
     let binary = gitd_binary();
-    if !binary.is_file() {
-        return;
-    }
+    assert!(
+        binary.is_file(),
+        "family proof requires BULLET_GITD_BIN to resolve an existing daemon: {}",
+        binary.display()
+    );
     let temp = tempfile::tempdir().expect("tempdir");
     let mut child = Command::new(&binary)
         .stdin(Stdio::piped())

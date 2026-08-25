@@ -226,6 +226,30 @@ fn io_err(context: &str, reason: impl std::fmt::Display) -> RunnerError {
     }
 }
 
+fn next_request_id(current: u64) -> Result<u64, RunnerError> {
+    current
+        .checked_add(1)
+        .ok_or_else(|| RunnerError::Protocol("gitd request id exhausted".into()))
+}
+
+fn validate_response_envelope(
+    value: &Value,
+    expected_id: u64,
+    method: &str,
+) -> Result<(), RunnerError> {
+    if value.get("id").and_then(Value::as_u64) != Some(expected_id) {
+        return Err(RunnerError::Protocol(format!(
+            "gitd {method}: response id does not match request {expected_id}"
+        )));
+    }
+    if value.get("ok").is_some() == value.get("err").is_some() {
+        return Err(RunnerError::Protocol(format!(
+            "gitd {method}: response must contain exactly one of ok or err"
+        )));
+    }
+    Ok(())
+}
+
 impl GitdSession {
     /// Spawn the daemon with the incarnation's authority token.
     ///
@@ -329,10 +353,10 @@ impl GitdSession {
         method: &str,
         params: Value,
     ) -> Result<Value, RunnerError> {
-        self.next_id += 1;
-        let line =
-            json!({ "id": self.next_id, "method": method, "token": token, "params": params })
-                .to_string();
+        let request_id = next_request_id(self.next_id)?;
+        self.next_id = request_id;
+        let line = json!({ "id": request_id, "method": method, "token": token, "params": params })
+            .to_string();
         self.stdin
             .write_all(format!("{line}\n").as_bytes())
             .await
@@ -354,6 +378,7 @@ impl GitdSession {
         }
         let value: Value = serde_json::from_str(response.trim())
             .map_err(|err| RunnerError::Protocol(format!("gitd {method} response: {err}")))?;
+        validate_response_envelope(&value, request_id, method)?;
         if let Some(err) = value.get("err") {
             let code = err
                 .get("code")
@@ -831,6 +856,19 @@ mod protocol_tests {
         ] {
             assert!(validate_checkpoint_binding(&id, &digest).is_err());
         }
+
+        assert!(validate_response_envelope(&json!({"id": 1, "ok": {}}), 1, "clone").is_ok());
+        for malformed in [
+            json!({"ok": {}}),
+            json!({"id": 2, "ok": {}}),
+            json!({"id": "1", "ok": {}}),
+            json!({"id": 1}),
+            json!({"id": 1, "ok": {}, "err": {"code": "X"}}),
+        ] {
+            assert!(validate_response_envelope(&malformed, 1, "clone").is_err());
+        }
+        assert_eq!(next_request_id(0).unwrap(), 1);
+        assert!(next_request_id(u64::MAX).is_err());
     }
 
     #[test]
