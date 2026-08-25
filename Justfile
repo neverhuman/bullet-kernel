@@ -2,8 +2,8 @@ default:
     @just --list
 
 setup: preflight
-    rustup component add rustfmt clippy
-    cargo fetch --locked
+    umask 077 && rustup component add rustfmt clippy
+    umask 077 && cargo fetch --locked
 
 fast:
     bash scripts/ci-local.sh fast

@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
+# Expected workflow blocks intentionally preserve shell and GitHub expressions literally.
+# shellcheck disable=SC2016
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
 
-workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
-existing_workflows=()
-for workflow in "${workflow_files[@]}"; do
-  [[ -f "$workflow" ]] && existing_workflows+=("$workflow")
-done
-[[ "${#existing_workflows[@]}" -gt 0 ]] \
-  || { refuse WORKFLOW_INVENTORY_EMPTY "no workflow files found"; exit 1; }
+validate_workflow_inventory() {
+  local workflow_root="$1" required index
+  local actual=() expected=("$workflow_root/ci.yml" "$workflow_root/scheduled.yml")
+  [[ -d "$workflow_root" && ! -L "$workflow_root" ]] \
+    || { refuse WORKFLOW_DIRECTORY_INVALID "$workflow_root"; return 1; }
+  while IFS= read -r -d '' required; do
+    actual+=("$required")
+  done < <(find "$workflow_root" -mindepth 1 -maxdepth 1 -print0 | LC_ALL=C sort -z)
+  [[ "${#actual[@]}" -eq "${#expected[@]}" ]] \
+    || { refuse WORKFLOW_INVENTORY_DRIFT "${actual[*]}"; return 1; }
+  for index in "${!expected[@]}"; do
+    [[ "${actual[$index]}" == "${expected[$index]}" ]] \
+      || { refuse WORKFLOW_INVENTORY_DRIFT "${actual[*]}"; return 1; }
+  done
+  for required in "${expected[@]}"; do
+    [[ -f "$required" && ! -L "$required" ]] \
+      || { refuse WORKFLOW_ENTRY_INVALID "$required"; return 1; }
+  done
+}
+
+validate_workflow_inventory .github/workflows || exit 1
+existing_workflows=(.github/workflows/ci.yml .github/workflows/scheduled.yml)
 
 if rg -n 'pull_request_target|paths-ignore:|^[[:space:]]+paths:|ubuntu-latest|persist-credentials:[[:space:]]*true|Swatinem/rust-cache|actions/cache|continue-on-error:[[:space:]]*true|write-all|^[[:space:]]+[a-z-]+:[[:space:]]*write' \
   "${existing_workflows[@]}"; then
   refuse WORKFLOW_POLICY_VIOLATION "forbidden trigger, path filter, runner alias, credentials, or cache"
   exit 1
 fi
-
 while IFS= read -r use_line; do
   use_ref="${use_line#*uses: }"
   use_ref="${use_ref%% *}"
@@ -39,7 +55,6 @@ required_patterns=(
   '^    if:.*always\(\)'
   'needs: \[preflight, fast, lint, contract, security, docs\]'
   'uses: actions/download-artifact@[0-9a-f]{40}'
-  'pattern: kernel-\*-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}'
   'bash ops/ci/aggregate\.sh'
   "\"\\${literal_dollar}EXPECTED_COMMIT\""
   "\"\\${literal_dollar}PREFLIGHT_RESULT\""
@@ -58,6 +73,14 @@ done
 [[ "$(rg -c 'name: Write unsigned diagnostic observation' .github/workflows/ci.yml)" -eq 6 &&
    "$(rg -c 'name: Upload sanitized diagnostics' .github/workflows/ci.yml)" -eq 6 ]] \
   || { refuse ATOMIC_OBSERVATION_INVENTORY_DRIFT "six lanes must write and upload observations"; exit 1; }
+
+# shellcheck source=ops/ci/workflow-contract.sh
+source "$(dirname "${BASH_SOURCE[0]}")/workflow-contract.sh"
+validate_required_ci .github/workflows/ci.yml || exit 1
+validate_scheduled_uploads .github/workflows/scheduled.yml || exit 1
+
+# shellcheck source=ops/ci/workflow-policy-test.sh
+source "$(dirname "${BASH_SOURCE[0]}")/workflow-policy-test.sh"
 
 checkout_count="$(rg -c 'uses: actions/checkout@' "${existing_workflows[@]}" | awk -F: '{ total += $NF } END { print total + 0 }')"
 credential_count="$(rg -c 'persist-credentials: false' "${existing_workflows[@]}" | awk -F: '{ total += $NF } END { print total + 0 }')"

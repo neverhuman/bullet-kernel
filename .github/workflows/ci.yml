@@ -64,7 +64,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-preflight-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: .ci-artifacts/observations/preflight.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -108,7 +108,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-fast-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: |
+            .ci-artifacts/observations/fast.json
+            .ci-artifacts/junit/fast.xml
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -154,7 +156,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-lint-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: .ci-artifacts/observations/lint.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -198,7 +200,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-contract-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: |
+            .ci-artifacts/observations/contract.json
+            .ci-artifacts/junit/contract.xml
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -253,7 +257,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-security-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: .ci-artifacts/observations/security.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -290,7 +294,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-docs-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: .ci-artifacts/observations/docs.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -313,12 +317,36 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Download atomic observations
+      - name: Download preflight observation
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: kernel-*-${{ github.run_id }}-${{ github.run_attempt }}
+          name: kernel-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-artifacts/atomic/observations
+      - name: Download fast observation and JUnit
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: kernel-fast-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-artifacts/atomic
-          merge-multiple: true
+      - name: Download lint observation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: kernel-lint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-artifacts/atomic/observations
+      - name: Download contract observation and JUnit
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: kernel-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-artifacts/atomic
+      - name: Download security observation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: kernel-security-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-artifacts/atomic/observations
+      - name: Download docs observation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: kernel-docs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-artifacts/atomic/observations
       - name: Reject failed, skipped, cancelled, missing, or malformed predecessors
         run: >-
           bash ops/ci/aggregate.sh .ci-artifacts/atomic "$EXPECTED_COMMIT"

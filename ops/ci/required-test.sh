@@ -45,9 +45,40 @@ chmod +x "$test_root/bin/bash"
 
 [[ "$(rg -c '^setup: preflight$' Justfile)" -eq 1 ]] \
   || { refuse SETUP_PREFLIGHT_MISSING "Justfile setup must depend on preflight exactly once"; exit 1; }
-rg -Fxq '    cargo fetch --locked' Justfile \
-  || { refuse SETUP_FETCH_MISSING "Justfile setup must retain locked dependency fetch"; exit 1; }
+rg -Fxq '    umask 077 && rustup component add rustfmt clippy' Justfile \
+  || { refuse SETUP_UMASK_MISSING "Rustup setup must establish umask 077"; exit 1; }
+rg -Fxq '    umask 077 && cargo fetch --locked' Justfile \
+  || { refuse SETUP_FETCH_MISSING "locked dependency fetch must establish umask 077"; exit 1; }
 rg -Fxq '    bash scripts/ci-local.sh preflight' Justfile \
   || { refuse PREFLIGHT_RECIPE_MISSING "Justfile preflight must delegate to the local preflight lane"; exit 1; }
+
+printf '%s\n' '#!/bin/sh' 'exit 0' >"$test_root/bin/bash"
+# The generated stub must expand these expressions when it runs, not here.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/bin/sh' \
+  'printf "%s\t%s\n" "${0##*/}" "$(umask)" >>"$CI_SETUP_CALLS"' \
+  >"$test_root/bin/rustup"
+cp "$test_root/bin/rustup" "$test_root/bin/cargo"
+chmod +x "$test_root/bin/bash" "$test_root/bin/rustup" "$test_root/bin/cargo"
+mapfile -t setup_commands < <(awk '
+  /^setup: preflight$/ { setup=1; next }
+  setup && /^[^[:space:]].*:$/ { exit }
+  setup && /^    / { sub(/^    /, ""); print }
+' Justfile)
+[[ "${#setup_commands[@]}" -eq 2 ]] \
+  || { refuse SETUP_COMMAND_INVENTORY_INVALID "expected exactly Rustup and Cargo"; exit 1; }
+(
+  umask 0002
+  export CI_SETUP_CALLS="$test_root/setup-calls" PATH="$test_root/bin:$PATH"
+  /bin/sh -c "${setup_commands[0]}" >/dev/null
+  /bin/sh -c "${setup_commands[1]}" >/dev/null
+)
+printf '%s\n' $'rustup\t0077' $'cargo\t0077' >"$test_root/setup-expected"
+if ! cmp -s "$test_root/setup-expected" "$test_root/setup-calls"; then
+  diff -u "$test_root/setup-expected" "$test_root/setup-calls" >&2 || true
+  refuse SETUP_UMASK_INVALID "Rustup and Cargo must both execute under umask 077"
+  exit 1
+fi
 
 log "required and setup source-admission ordering passed"

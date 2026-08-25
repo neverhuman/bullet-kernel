@@ -38,13 +38,14 @@ for lane in "${lanes[@]}"; do
     status=1
     continue
   fi
-  if ! jq -e --arg lane "$lane" --arg commit "$EXPECTED_COMMIT" --arg tree "$EXPECTED_TREE" '
+  if ! jq -e --arg lane "$lane" --arg command "bash scripts/ci-local.sh $lane" \
+    --arg commit "$EXPECTED_COMMIT" --arg tree "$EXPECTED_TREE" '
     .schema_version == "bullet.ci-observation.v1" and
     .repository == "bullet-kernel" and
     .commit_oid == $commit and
     .tree_oid == $tree and
     .clean == true and
-    (.commands | type == "array" and length == 1 and all(.[]; type == "string" and length > 0)) and
+    .commands == [$command] and
     (.tool_versions | type == "object") and
     .outcomes == [{"lane": $lane, "status": "PASS", "exit_code": 0}] and
     (.artifact_hashes | type == "array") and

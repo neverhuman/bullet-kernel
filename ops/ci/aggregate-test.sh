@@ -76,6 +76,12 @@ mv "$test_root/x" "$test_root/observations/security.json"
 expect_failure CI_OBSERVATION_INVALID "${args[@]}" "${green[@]}"
 
 make_fixtures
+jq '.commands=["true"]' \
+  "$test_root/observations/security.json" >"$test_root/x"
+mv "$test_root/x" "$test_root/observations/security.json"
+expect_failure CI_OBSERVATION_INVALID "${args[@]}" "${green[@]}"
+
+make_fixtures
 rm "$test_root/observations/lint.json"
 expect_failure CI_OBSERVATION_MISSING "${args[@]}" "${green[@]}"
 

@@ -56,7 +56,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-scheduled-preflight-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: .ci-artifacts/observations/scheduled-preflight.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -91,7 +91,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-links-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: .ci-artifacts/observations/links.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -143,7 +143,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-advisories-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: .ci-artifacts/observations/scheduled-security.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -185,7 +185,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-coverage-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: |
+            .ci-artifacts/observations/coverage.json
+            .ci-artifacts/coverage/summary.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -231,7 +233,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-history-secrets-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: .ci-artifacts/observations/history-secrets.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -271,7 +273,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kernel-portable-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/
+          path: .ci-artifacts/observations/portable-${{ matrix.os }}.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
