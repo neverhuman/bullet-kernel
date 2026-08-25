@@ -7,6 +7,7 @@ mod commands;
 mod effects;
 mod launch_grant;
 mod materialization;
+mod projections;
 
 use crate::authority::ActiveLeaseSubject;
 use crate::commands::{CommandRecord, CommandRequest};

@@ -71,7 +71,7 @@ pub(super) fn heartbeat(conn: &mut Connection, req: &HeartbeatRequest) -> Result
     tx.commit().map_err(store)
 }
 
-type LeaseRow = (
+pub(super) type LeaseRow = (
     String,
     String,
     i64,
@@ -83,7 +83,7 @@ type LeaseRow = (
     i64,
 );
 
-fn read_lease(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
+pub(super) fn read_lease(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -97,7 +97,7 @@ fn read_lease(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
     ))
 }
 
-fn lease_from(row: LeaseRow) -> Result<ActiveLease, LedgerError> {
+pub(super) fn lease_from(row: LeaseRow) -> Result<ActiveLease, LedgerError> {
     let (variant, attempt, fence, runner, epoch, nonce, heartbeat_at, expires_at, ttl_seconds) =
         row;
     if !(1..=bullet_application::records::MAX_LEASE_TTL_SECONDS).contains(&ttl_seconds) {
@@ -117,7 +117,7 @@ fn lease_from(row: LeaseRow) -> Result<ActiveLease, LedgerError> {
     })
 }
 
-const LEASE_COLUMNS: &str = "variant_id, attempt_id, fence, runner_id, runner_epoch, \
+pub(super) const LEASE_COLUMNS: &str = "variant_id, attempt_id, fence, runner_id, runner_epoch, \
                              workspace_nonce, heartbeat_at, expires_at, ttl_seconds";
 
 pub(super) fn get_lease(

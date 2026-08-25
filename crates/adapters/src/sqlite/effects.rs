@@ -9,13 +9,13 @@ use bullet_application::{
 use bullet_domain::{AttemptId, DomainError, EffectId, EffectReceiptId};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
-const INTENT_COLUMNS: &str = "id, logical_effect_key, provider, target_identity, \
+pub(super) const INTENT_COLUMNS: &str = "id, logical_effect_key, provider, target_identity, \
                               desired_state_hash, expected_old_oid, attempt_id, fence, \
                               policy_version, payload_hash, provider_idempotency_key, state, \
                               unknown_retries, created_at";
 
 #[allow(clippy::type_complexity)]
-fn intent_row(
+pub(super) fn intent_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<(
     String,
@@ -52,7 +52,7 @@ fn intent_row(
 }
 
 #[allow(clippy::type_complexity)]
-fn read_intent(
+pub(super) fn read_intent(
     row: (
         String,
         String,
@@ -260,7 +260,7 @@ pub(super) fn transition_effect(
     Ok(updated)
 }
 
-type ReceiptRow = (
+pub(super) type ReceiptRow = (
     String,
     String,
     String,
@@ -271,7 +271,7 @@ type ReceiptRow = (
     String,
 );
 
-fn receipt_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiptRow> {
+pub(super) fn receipt_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiptRow> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -284,7 +284,7 @@ fn receipt_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiptRow> {
     ))
 }
 
-fn read_receipt(row: ReceiptRow) -> Result<EffectReceiptRecord, LedgerError> {
+pub(super) fn read_receipt(row: ReceiptRow) -> Result<EffectReceiptRecord, LedgerError> {
     let (id, intent, identity, observed, method, verdict, adopted, recorded) = row;
     Ok(EffectReceiptRecord {
         id: EffectReceiptId::parse(&id)?,
@@ -298,7 +298,7 @@ fn read_receipt(row: ReceiptRow) -> Result<EffectReceiptRecord, LedgerError> {
     })
 }
 
-const RECEIPT_COLUMNS: &str = "id, effect_intent_id, observed_remote_identity, \
+pub(super) const RECEIPT_COLUMNS: &str = "id, effect_intent_id, observed_remote_identity, \
                                observed_state_hash, verification_method, verification_result, \
                                adopted_after_unknown, recorded_at";
 

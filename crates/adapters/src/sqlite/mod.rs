@@ -12,6 +12,7 @@ mod leases;
 mod materialization;
 mod migrations;
 mod outbox;
+mod projections;
 
 use bullet_application::launch_grant::{
     LaunchGrantNonceRecord, LaunchGrantNonceStore, NonceConsumption, StoredLaunchGrantNonce,

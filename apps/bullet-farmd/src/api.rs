@@ -105,6 +105,11 @@ fn build_router(db: &FsPath, auth: crate::auth::AuthState) -> Result<Router, Led
         .route("/v1/outbox", get(outbox))
         .route("/v1/events", get(events))
         .route("/v1/ready", get(crate::leases::next_ready))
+        .route("/v1/fleet", get(crate::projections::fleet))
+        .route("/v1/sessions", get(crate::projections::sessions))
+        .route("/v1/merge-rail", get(crate::projections::merge_rail))
+        .route("/v1/quality-lab", get(crate::projections::quality_lab))
+        .route("/v1/audit", get(crate::projections::audit))
         .fallback(api_not_found)
         .with_state(state))
 }
@@ -359,7 +364,7 @@ fn validate_batch(after: u64, events: &[LedgerEvent]) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn validate_event(event: &LedgerEvent) -> Result<(), ApiError> {
+pub(crate) fn validate_event(event: &LedgerEvent) -> Result<(), ApiError> {
     let id = event
         .event_id
         .as_deref()

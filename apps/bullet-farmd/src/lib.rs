@@ -5,3 +5,4 @@ pub mod auth;
 mod commands;
 pub mod errors;
 pub mod leases;
+mod projections;

@@ -213,7 +213,7 @@ pub(super) fn list_missions(conn: &Connection) -> Result<Vec<Mission>, LedgerErr
     Ok(out)
 }
 
-type AttemptRow = (
+pub(super) type AttemptRow = (
     String,
     String,
     String,
@@ -227,11 +227,12 @@ type AttemptRow = (
     String,
 );
 
-const ATTEMPT_COLUMNS: &str = "id, variant_id, work_package_id, fence, runner_id, runner_epoch, \
+pub(super) const ATTEMPT_COLUMNS: &str =
+    "id, variant_id, work_package_id, fence, runner_id, runner_epoch, \
                                workspace_id, workspace_nonce, scope_revision, context_revision, \
                                state";
 
-fn read_attempt(row: AttemptRow) -> Result<Attempt, LedgerError> {
+pub(super) fn read_attempt(row: AttemptRow) -> Result<Attempt, LedgerError> {
     let (id, variant, package, fence, runner, epoch, workspace, nonce, scope, context, state) = row;
     Ok(Attempt {
         id: AttemptId::parse(&id)?,
@@ -248,7 +249,7 @@ fn read_attempt(row: AttemptRow) -> Result<Attempt, LedgerError> {
     })
 }
 
-fn attempt_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptRow> {
+pub(super) fn attempt_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptRow> {
     Ok((
         row.get(0)?,
         row.get(1)?,

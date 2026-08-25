@@ -18,6 +18,10 @@ use bullet_domain::{
 };
 use thiserror::Error;
 
+mod projection;
+
+pub use projection::ProjectionReader;
+
 /// Ledger failure.
 #[derive(Debug, Error)]
 pub enum LedgerError {

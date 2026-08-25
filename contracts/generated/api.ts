@@ -173,11 +173,427 @@ export type ReadySnapshot = {
   source: "bullet-kernel/sqlite-ledger";
 };
 
+export type AttemptId = string;
+
+export type RunnerId = string;
+
+export type WorkspaceId = string;
+
+export type CandidateId = string;
+
+export type EvidenceId = string;
+
+export type EffectId = string;
+
+export type EffectReceiptId = string;
+
+export type LabelCount = {
+  label: string;
+  count: number;
+};
+
+export type ReadyRow = {
+  work_package_id: WorkPackageId;
+  enqueued_at: string;
+};
+
+export type LeaseLiveness = "live" | "expired" | "unknown";
+
+export type FleetLease = {
+  variant_id: VariantId;
+  attempt_id: AttemptId;
+  fence: number;
+  runner_id: RunnerId;
+  runner_epoch: number;
+  heartbeat_at: string;
+  expires_at: string;
+  ttl_seconds: number;
+  liveness: LeaseLiveness;
+  attempt_state: string | null;
+  work_package_id: WorkPackageId | null;
+  mission_id: MissionId | null;
+};
+
+export type FleetView = {
+  authority_time: string;
+  leases: FleetLease[];
+  ready_queue: ReadyRow[];
+};
+
+export type FleetSnapshot = {
+  data: FleetView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
+};
+
+export type AttemptState = "created" | "starting" | "running" | "paused" | "checkpointing" | "preparing" | "succeeded" | "superseded" | "failed" | "crashed" | "cancelled" | "quarantined";
+
+export type LeaseEventRef = {
+  seq: number;
+  at: string;
+  kind: "attempt_leased" | "lease_expired" | "lease_released";
+};
+
+export type AttemptRow = {
+  id: AttemptId;
+  variant_id: VariantId;
+  work_package_id: WorkPackageId;
+  mission_id: MissionId | null;
+  fence: number;
+  runner_id: RunnerId;
+  runner_epoch: number;
+  workspace_id: WorkspaceId;
+  scope_revision: number;
+  context_revision: number;
+  state: AttemptState;
+  lease: "held" | "none";
+  leased_at: string | null;
+  last_lease_event: LeaseEventRef | null;
+};
+
+export type SessionSupervisorView = {
+  attempts: AttemptRow[];
+  state_counts: LabelCount[];
+};
+
+export type SessionSupervisorSnapshot = {
+  data: SessionSupervisorView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
+};
+
+export type CandidateRow = {
+  id: CandidateId;
+  attempt_id: AttemptId;
+  base_sha: string;
+  head_sha: string;
+  tree_sha: string;
+  patch_digest: Digest;
+};
+
+export type EffectRow = {
+  id: EffectId;
+  attempt_id: AttemptId;
+  logical_key: string;
+  desired: string;
+  outcome: string;
+};
+
+export type EffectState = "PROPOSED" | "AUTHORIZED" | "DISPATCHING" | "RECEIPT_PENDING" | "VERIFIED" | "COMMITTED" | "OUTCOME_UNKNOWN" | "QUARANTINED" | "FAILED" | "COMPENSATION_PENDING" | "COMPENSATING" | "COMPENSATED" | "ORPHANED_REMOTE";
+
+export type EffectIntentRow = {
+  id: EffectId;
+  logical_effect_key: string;
+  provider: string;
+  target_identity: string;
+  desired_state_hash: string;
+  expected_old_oid: string;
+  attempt_id: AttemptId;
+  fence: number;
+  policy_version: string;
+  payload_hash: string;
+  provider_idempotency_key: string | null;
+  state: EffectState;
+  unknown_retries: number;
+  created_at: string;
+};
+
+export type ReceiptVerdict = "MATCH" | "MISMATCH" | "ABSENT";
+
+export type EffectReceiptRow = {
+  id: EffectReceiptId;
+  effect_intent_id: EffectId;
+  observed_remote_identity: string;
+  observed_state_hash: string | null;
+  verification_method: string;
+  verification_result: ReceiptVerdict;
+  adopted_after_unknown: boolean;
+  recorded_at: string;
+};
+
+export type MergeRailView = {
+  candidates: CandidateRow[];
+  effects: EffectRow[];
+  intents: EffectIntentRow[];
+  receipts: EffectReceiptRow[];
+  intent_state_counts: LabelCount[];
+};
+
+export type MergeRailSnapshot = {
+  data: MergeRailView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
+};
+
+export type GateOutcome = "PASS" | "FAIL" | "FLAKY" | "INFRA_ERROR" | "CANCELLED" | "TIMED_OUT" | "NOT_RUN" | "UNSUPPORTED" | "UNKNOWN" | "SUPERSEDED" | "INVALIDATED";
+
+export type EvidenceRow = {
+  id: EvidenceId;
+  candidate_id: CandidateId;
+  tier: string;
+  gate: string;
+  result: string;
+  outcome: GateOutcome;
+  satisfies_requirement: boolean;
+};
+
+export type QualityLabView = {
+  evidence: EvidenceRow[];
+  outcome_counts: LabelCount[];
+};
+
+export type QualityLabSnapshot = {
+  data: QualityLabView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
+};
+
+export type AuditEvent = {
+  id: Digest;
+  seq: number;
+  at: string;
+  kind: string;
+  body: string;
+  stream_id: string | null;
+  correlation_id: string | null;
+};
+
+export type AuditView = {
+  latest_sequence: number;
+  tail_window: number;
+  events: AuditEvent[];
+};
+
+export type AuditSnapshot = {
+  data: AuditView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
+};
+
 export const PUBLIC_API_RUNTIME_SCHEMA = {
   "$defs": {
     "AcceptanceContractId": {
       "pattern": "^acc_[0-9a-f]{64}$",
       "type": "string"
+    },
+    "AttemptId": {
+      "pattern": "^atm_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "AttemptRow": {
+      "additionalProperties": false,
+      "properties": {
+        "context_revision": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fence": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "last_lease_event": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/LeaseEventRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lease": {
+          "enum": [
+            "held",
+            "none"
+          ],
+          "type": "string"
+        },
+        "leased_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mission_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/MissionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runner_epoch": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runner_id": {
+          "$ref": "#/$defs/RunnerId"
+        },
+        "scope_revision": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/AttemptState"
+        },
+        "variant_id": {
+          "$ref": "#/$defs/VariantId"
+        },
+        "work_package_id": {
+          "$ref": "#/$defs/WorkPackageId"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/WorkspaceId"
+        }
+      },
+      "required": [
+        "id",
+        "variant_id",
+        "work_package_id",
+        "mission_id",
+        "fence",
+        "runner_id",
+        "runner_epoch",
+        "workspace_id",
+        "scope_revision",
+        "context_revision",
+        "state",
+        "lease",
+        "leased_at",
+        "last_lease_event"
+      ],
+      "type": "object"
+    },
+    "AttemptState": {
+      "enum": [
+        "created",
+        "starting",
+        "running",
+        "paused",
+        "checkpointing",
+        "preparing",
+        "succeeded",
+        "superseded",
+        "failed",
+        "crashed",
+        "cancelled",
+        "quarantined"
+      ],
+      "type": "string"
+    },
+    "AuditEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "correlation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/Digest"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "stream_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "seq",
+        "at",
+        "kind",
+        "body",
+        "stream_id",
+        "correlation_id"
+      ],
+      "type": "object"
+    },
+    "AuditView": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "items": {
+            "$ref": "#/$defs/AuditEvent"
+          },
+          "type": "array"
+        },
+        "latest_sequence": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tail_window": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "latest_sequence",
+        "tail_window",
+        "events"
+      ],
+      "type": "object"
+    },
+    "CandidateId": {
+      "pattern": "^can_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "CandidateRow": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "base_sha": {
+          "type": "string"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/CandidateId"
+        },
+        "patch_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "tree_sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "attempt_id",
+        "base_sha",
+        "head_sha",
+        "tree_sha",
+        "patch_digest"
+      ],
+      "type": "object"
     },
     "CommandId": {
       "pattern": "^cmd_[0-9a-f]{64}$",
@@ -222,6 +638,336 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       "pattern": "^[0-9a-f]{64}$",
       "type": "string"
     },
+    "EffectId": {
+      "pattern": "^efi_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EffectIntentRow": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "desired_state_hash": {
+          "type": "string"
+        },
+        "expected_old_oid": {
+          "type": "string"
+        },
+        "fence": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/EffectId"
+        },
+        "logical_effect_key": {
+          "type": "string"
+        },
+        "payload_hash": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "provider_idempotency_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/EffectState"
+        },
+        "target_identity": {
+          "type": "string"
+        },
+        "unknown_retries": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "logical_effect_key",
+        "provider",
+        "target_identity",
+        "desired_state_hash",
+        "expected_old_oid",
+        "attempt_id",
+        "fence",
+        "policy_version",
+        "payload_hash",
+        "provider_idempotency_key",
+        "state",
+        "unknown_retries",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "EffectReceiptId": {
+      "pattern": "^efr_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EffectReceiptRow": {
+      "additionalProperties": false,
+      "properties": {
+        "adopted_after_unknown": {
+          "type": "boolean"
+        },
+        "effect_intent_id": {
+          "$ref": "#/$defs/EffectId"
+        },
+        "id": {
+          "$ref": "#/$defs/EffectReceiptId"
+        },
+        "observed_remote_identity": {
+          "type": "string"
+        },
+        "observed_state_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recorded_at": {
+          "type": "string"
+        },
+        "verification_method": {
+          "type": "string"
+        },
+        "verification_result": {
+          "$ref": "#/$defs/ReceiptVerdict"
+        }
+      },
+      "required": [
+        "id",
+        "effect_intent_id",
+        "observed_remote_identity",
+        "observed_state_hash",
+        "verification_method",
+        "verification_result",
+        "adopted_after_unknown",
+        "recorded_at"
+      ],
+      "type": "object"
+    },
+    "EffectRow": {
+      "additionalProperties": false,
+      "description": "First-slice effect row with its stored receipt kind.",
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "desired": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/EffectId"
+        },
+        "logical_key": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "attempt_id",
+        "logical_key",
+        "desired",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "EffectState": {
+      "enum": [
+        "PROPOSED",
+        "AUTHORIZED",
+        "DISPATCHING",
+        "RECEIPT_PENDING",
+        "VERIFIED",
+        "COMMITTED",
+        "OUTCOME_UNKNOWN",
+        "QUARANTINED",
+        "FAILED",
+        "COMPENSATION_PENDING",
+        "COMPENSATING",
+        "COMPENSATED",
+        "ORPHANED_REMOTE"
+      ],
+      "type": "string"
+    },
+    "EvidenceId": {
+      "pattern": "^evd_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EvidenceRow": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/CandidateId"
+        },
+        "gate": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/EvidenceId"
+        },
+        "outcome": {
+          "$ref": "#/$defs/GateOutcome"
+        },
+        "result": {
+          "description": "Stored result label, verbatim.",
+          "type": "string"
+        },
+        "satisfies_requirement": {
+          "type": "boolean"
+        },
+        "tier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "candidate_id",
+        "tier",
+        "gate",
+        "result",
+        "outcome",
+        "satisfies_requirement"
+      ],
+      "type": "object"
+    },
+    "FleetLease": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "attempt_state": {
+          "description": "Linked attempt state; null is a linkage contradiction.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "fence": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "heartbeat_at": {
+          "type": "string"
+        },
+        "liveness": {
+          "$ref": "#/$defs/LeaseLiveness"
+        },
+        "mission_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/MissionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runner_epoch": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runner_id": {
+          "$ref": "#/$defs/RunnerId"
+        },
+        "ttl_seconds": {
+          "maximum": 15,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "variant_id": {
+          "$ref": "#/$defs/VariantId"
+        },
+        "work_package_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/WorkPackageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "variant_id",
+        "attempt_id",
+        "fence",
+        "runner_id",
+        "runner_epoch",
+        "heartbeat_at",
+        "expires_at",
+        "ttl_seconds",
+        "liveness",
+        "attempt_state",
+        "work_package_id",
+        "mission_id"
+      ],
+      "type": "object"
+    },
+    "FleetView": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_time": {
+          "description": "Store clock read inside the snapshot.",
+          "type": "string"
+        },
+        "leases": {
+          "items": {
+            "$ref": "#/$defs/FleetLease"
+          },
+          "type": "array"
+        },
+        "ready_queue": {
+          "items": {
+            "$ref": "#/$defs/ReadyRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "authority_time",
+        "leases",
+        "ready_queue"
+      ],
+      "type": "object"
+    },
+    "GateOutcome": {
+      "description": "Spec 22.3 outcome catalog. Only PASS satisfies a requirement.",
+      "enum": [
+        "PASS",
+        "FAIL",
+        "FLAKY",
+        "INFRA_ERROR",
+        "CANCELLED",
+        "TIMED_OUT",
+        "NOT_RUN",
+        "UNSUPPORTED",
+        "UNKNOWN",
+        "SUPERSEDED",
+        "INVALIDATED"
+      ],
+      "type": "string"
+    },
     "JsonValue": {
       "description": "A recursively typed JSON value from durable command truth.",
       "oneOf": [
@@ -251,6 +997,102 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
           "type": "object"
         }
       ]
+    },
+    "LabelCount": {
+      "additionalProperties": false,
+      "description": "One catalog label with its row count; zero is explicit, never absent.",
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "count"
+      ],
+      "type": "object"
+    },
+    "LeaseEventRef": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "attempt_leased",
+            "lease_expired",
+            "lease_released"
+          ],
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "LeaseLiveness": {
+      "description": "Judged against the store clock inside the same snapshot.",
+      "enum": [
+        "live",
+        "expired",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "MergeRailView": {
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/CandidateRow"
+          },
+          "type": "array"
+        },
+        "effects": {
+          "items": {
+            "$ref": "#/$defs/EffectRow"
+          },
+          "type": "array"
+        },
+        "intent_state_counts": {
+          "items": {
+            "$ref": "#/$defs/LabelCount"
+          },
+          "type": "array"
+        },
+        "intents": {
+          "items": {
+            "$ref": "#/$defs/EffectIntentRow"
+          },
+          "type": "array"
+        },
+        "receipts": {
+          "items": {
+            "$ref": "#/$defs/EffectReceiptRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "candidates",
+        "effects",
+        "intents",
+        "receipts",
+        "intent_state_counts"
+      ],
+      "type": "object"
     },
     "Mission": {
       "additionalProperties": false,
@@ -327,6 +1169,44 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       "pattern": "^pln_[0-9a-f]{64}$",
       "type": "string"
     },
+    "QualityLabView": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceRow"
+          },
+          "type": "array"
+        },
+        "outcome_counts": {
+          "items": {
+            "$ref": "#/$defs/LabelCount"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "evidence",
+        "outcome_counts"
+      ],
+      "type": "object"
+    },
+    "ReadyRow": {
+      "additionalProperties": false,
+      "properties": {
+        "enqueued_at": {
+          "type": "string"
+        },
+        "work_package_id": {
+          "$ref": "#/$defs/WorkPackageId"
+        }
+      },
+      "required": [
+        "work_package_id",
+        "enqueued_at"
+      ],
+      "type": "object"
+    },
     "ReadyView": {
       "additionalProperties": false,
       "properties": {
@@ -355,9 +1235,43 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       ],
       "type": "object"
     },
+    "ReceiptVerdict": {
+      "enum": [
+        "MATCH",
+        "MISMATCH",
+        "ABSENT"
+      ],
+      "type": "string"
+    },
     "RepositoryId": {
       "pattern": "^rep_[0-9a-f]{64}$",
       "type": "string"
+    },
+    "RunnerId": {
+      "pattern": "^run_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "SessionSupervisorView": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/AttemptRow"
+          },
+          "type": "array"
+        },
+        "state_counts": {
+          "items": {
+            "$ref": "#/$defs/LabelCount"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "attempts",
+        "state_counts"
+      ],
+      "type": "object"
     },
     "VariantId": {
       "pattern": "^var_[0-9a-f]{64}$",
@@ -398,6 +1312,10 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
     "WorkPackageId": {
       "pattern": "^wpk_[0-9a-f]{64}$",
       "type": "string"
+    },
+    "WorkspaceId": {
+      "pattern": "^wsp_[0-9a-f]{64}$",
+      "type": "string"
     }
   },
   "$id": "https://bullet.farm/schemas/public-api-runtime-v1",
@@ -405,10 +1323,15 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
 } as const;
 
 export const PUBLIC_API_RUNTIME_REFS = {
+  AuditView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/AuditView",
   CommandStatus: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandStatus",
+  FleetView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/FleetView",
+  MergeRailView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/MergeRailView",
   Mission: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/Mission",
   MissionView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/MissionView",
+  QualityLabView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/QualityLabView",
   ReadyView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ReadyView",
+  SessionSupervisorView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/SessionSupervisorView",
 } as const;
 
 export const API_PREFIX = "/v1";
