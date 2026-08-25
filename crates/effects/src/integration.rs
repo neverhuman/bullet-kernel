@@ -175,22 +175,20 @@ pub trait ForgeIntegration: ForgeEffects {
     fn read_target(&self, target: &str) -> Result<Option<String>, EffectsError>;
 }
 
-/// Refuse when a capability is unprobed.
+/// Refuse when a capability is unprobed or unsupported.
 ///
 /// # Errors
 ///
-/// Always `CAPABILITY_UNPROBED` unless `capability.authorizes()`.
+/// Returns `CAPABILITY_UNPROBED` when no probe ran and
+/// `UNSUPPORTED_BY_ADAPTER` when the adapter structurally lacks the operation.
 pub fn require_probed(capability: Capability, operation: &str) -> Result<(), EffectsError> {
-    if capability.authorizes() {
-        Ok(())
-    } else {
-        Err(EffectsError::CapabilityUnprobed(format!(
-            "{operation} is {}",
-            match capability {
-                Capability::Unprobed => "unprobed",
-                Capability::Unsupported => "unsupported",
-                Capability::Supported | Capability::SupportedWithLimitations(_) => "authorized",
-            }
-        )))
+    match capability {
+        Capability::Supported | Capability::SupportedWithLimitations(_) => Ok(()),
+        Capability::Unprobed => Err(EffectsError::CapabilityUnprobed(format!(
+            "{operation} is unprobed"
+        ))),
+        Capability::Unsupported => Err(EffectsError::UnsupportedByAdapter(format!(
+            "{operation} is unsupported"
+        ))),
     }
 }

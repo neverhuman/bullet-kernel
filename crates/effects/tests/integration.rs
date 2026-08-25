@@ -18,6 +18,12 @@ fn unprobed_never_authorizes() {
             .reason_code(),
         "CAPABILITY_UNPROBED"
     );
+    assert_eq!(
+        require_probed(Capability::Unsupported, "push")
+            .expect_err("unsupported")
+            .reason_code(),
+        "UNSUPPORTED_BY_ADAPTER"
+    );
 }
 
 #[test]
@@ -37,6 +43,10 @@ fn gitlab_refuses_every_integration_operation() {
 #[test]
 fn jeryu_names_merge_queue_unsupported_and_stays_quarantined() {
     let mut forge = JeryuForge::quarantined(JERYU_BASE_URL);
+    assert_eq!(
+        forge.integration_descriptor().exact_oid_cas,
+        Capability::Unprobed
+    );
     assert_eq!(
         forge.integration_descriptor().merge_group,
         Capability::Unsupported
@@ -67,12 +77,12 @@ fn jeryu_names_merge_queue_unsupported_and_stays_quarantined() {
 }
 
 #[test]
-fn github_merge_group_is_opaque_until_live_admission() {
+fn github_capabilities_are_unprobed_and_merge_group_is_opaque() {
     let forge = GitHubForge::quarantined();
-    assert!(matches!(
-        forge.integration_descriptor().exact_oid_cas,
-        Capability::SupportedWithLimitations(_)
-    ));
+    assert_eq!(
+        forge.integration_descriptor(),
+        bullet_effects_core::IntegrationDescriptor::unprobed()
+    );
     assert_eq!(
         forge
             .merge_group_subject(&bullet_effects_core::IntegrationSubject {

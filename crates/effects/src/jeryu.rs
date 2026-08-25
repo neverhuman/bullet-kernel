@@ -59,16 +59,10 @@ impl ForgeEffects for JeryuForge {
 
 impl ForgeIntegration for JeryuForge {
     fn integration_descriptor(&self) -> IntegrationDescriptor {
-        IntegrationDescriptor {
-            exact_oid_cas: Capability::Supported,
-            protected_refs: Capability::Supported,
-            check_runs: Capability::SupportedWithLimitations(
-                "PATCH check-runs and proof_root are Jeryu-family work",
-            ),
-            merge_group: Capability::Unsupported,
-            exact_oid_readback: Capability::Supported,
-            third_party_credential: Capability::Unsupported,
-        }
+        let mut descriptor = IntegrationDescriptor::unprobed();
+        descriptor.merge_group = Capability::Unsupported;
+        descriptor.third_party_credential = Capability::Unsupported;
+        descriptor
     }
 
     fn read_protection(&self, _target: &str) -> Result<ProtectionState, EffectsError> {

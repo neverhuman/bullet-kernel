@@ -3,8 +3,8 @@
 use crate::error::EffectsError;
 use crate::forge::{require_candidate_ref, ForgeDescriptor, ForgeEffects, PushRequest};
 use crate::integration::{
-    Capability, CheckPublication, CheckReceipt, ForgeIntegration, IntegrationDescriptor,
-    IntegrationSubject, IntegrationSubjectRequest, MergeGroupSubject, ProtectionState,
+    CheckPublication, CheckReceipt, ForgeIntegration, IntegrationDescriptor, IntegrationSubject,
+    IntegrationSubjectRequest, MergeGroupSubject, ProtectionState,
 };
 
 /// Provider label.
@@ -51,18 +51,7 @@ impl ForgeEffects for GitHubForge {
 
 impl ForgeIntegration for GitHubForge {
     fn integration_descriptor(&self) -> IntegrationDescriptor {
-        IntegrationDescriptor {
-            exact_oid_cas: Capability::SupportedWithLimitations("client-side --force-with-lease"),
-            protected_refs: Capability::SupportedWithLimitations(
-                "rulesets cannot bind a proof root",
-            ),
-            check_runs: Capability::SupportedWithLimitations(
-                "proof root is transported in check output only",
-            ),
-            merge_group: Capability::SupportedWithLimitations("composed SHA is opaque"),
-            exact_oid_readback: Capability::Supported,
-            third_party_credential: Capability::Supported,
-        }
+        IntegrationDescriptor::unprobed()
     }
 
     fn read_protection(&self, _target: &str) -> Result<ProtectionState, EffectsError> {
