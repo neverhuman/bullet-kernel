@@ -35,13 +35,20 @@ printf '%s\n' \
   "printf '%s\\n' \"\$(umask)\" >\"\$CI_OBSERVED_UMASK\"" \
   >"$test_root/bin/bash"
 chmod +x "$test_root/bin/bash"
+umask_fixture="$test_root/umask-fixture"
+mkdir -p "$umask_fixture/scripts" "$umask_fixture/.git"
+cp -- scripts/ci-local.sh "$umask_fixture/scripts/ci-local.sh"
+printf '%s\n' 'ref: refs/heads/fixture' >"$umask_fixture/.git/HEAD"
 (
+  cd "$umask_fixture"
   umask 0002
   CI_OBSERVED_UMASK="$test_root/umask" PATH="$test_root/bin:$PATH" \
     /usr/bin/bash scripts/ci-local.sh fast >/dev/null
 )
 [[ "$(<"$test_root/umask")" == "0077" ]] \
   || { refuse SECURE_UMASK_INVALID "lane inherited $(<"$test_root/umask")"; exit 1; }
+[[ ! -e "$umask_fixture/.git/bullet-ci.lock.d" ]] \
+  || { refuse PROOF_CUSTODY_NOT_RELEASED "isolated umask fixture retained its proof lock"; exit 1; }
 
 [[ "$(rg -c '^setup: preflight$' Justfile)" -eq 1 ]] \
   || { refuse SETUP_PREFLIGHT_MISSING "Justfile setup must depend on preflight exactly once"; exit 1; }
