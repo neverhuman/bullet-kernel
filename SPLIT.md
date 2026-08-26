@@ -8,8 +8,8 @@ Applies to: bullet-kernel
 ## Role
 
 Domain types, ledger, plan materializer, leases and fences, HTTP API daemon
-with five read-only projections, CLI, provider harness and evidence-cleared
-admission, PASETO v4.public launch-grant authority (operator keygen, offline
+with six read-only operational projections including Context Lineage, CLI,
+provider harness and evidence-cleared admission, PASETO v4.public launch-grant authority (operator keygen, offline
 mint, fail-closed verifier), Linux egress isolation, policy-gated
 live-conformance path, and trust-boundary process bins.
 
