@@ -50,7 +50,7 @@ its restore epoch.
 
 `apps/bullet-farmd` is the loopback-only HTTP + SSE edge (`--bind` refuses a
 non-loopback address). Errors are typed problem details with stable reason
-codes; `/api/v1/missions/{id}`, `/api/v1/ready`, and the five projections carry an
+codes; `/api/v1/missions/{id}`, `/api/v1/ready`, and the six projections carry an
 `X-Bullet-As-Of-Sequence` watermark. The exact mounted route set is the table
 in [`README.md`](../README.md#farmd-routes); the router fallback answers
 `NOT_FOUND`. `contracts/openapi.yaml` is the contract source of truth for every
@@ -68,10 +68,10 @@ corruption failures remain retryable `500 STORE_FAILURE`.
 
 ## Projections
 
-Source: `apps/bullet-farmd/src/projections/{mod,fleet,sessions,merge_rail,quality_lab,audit}.rs`.
+Source: `apps/bullet-farmd/src/projections/{mod,fleet,sessions,context_lineage,merge_rail,quality_lab,audit}.rs`.
 
-`/api/v1/fleet`, `/api/v1/sessions`, `/api/v1/merge-rail`, `/api/v1/quality-lab`, and
-`/api/v1/audit` are read-only spec §25 surfaces. Each route performs exactly one
+`/api/v1/fleet`, `/api/v1/sessions`, `/api/v1/context-lineage`, `/api/v1/merge-rail`,
+`/api/v1/quality-lab`, and `/api/v1/audit` are read-only spec §25 surfaces. Each route performs exactly one
 atomic ledger snapshot (`read_snapshot`) and returns the standard envelope with
 its `as_of_sequence`, so a response never mixes two ledger states. Label
 tallies are `LabelCount` rows built by `count_labels` against a complete
