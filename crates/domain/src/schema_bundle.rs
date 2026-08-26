@@ -6,9 +6,9 @@ pub const SCHEMA_VERSION: &str = "v1alpha1";
 pub const SCHEMA_BUNDLE_HASH: &str =
     "0942b0662628b82bc882bc02935db276adf01772ee27f9b257b0e5e9c6a32ce0";
 pub const INVARIANT_REGISTRY_HASH: &str =
-    "978a8b4ebb14ff0c978afb431c154647adef2f9839de322356a765c59a0c3858";
+    "fd849db391c75398fd82f0f26da18a284ab1a5e5d1c6ff36c01f5015973a053f";
 pub const POLICY_SNAPSHOT_HASH: &str =
-    "6a1611c849f121d95b23488b090703dda000a67f27c1502c85000597f925b1a2";
+    "827f880ef4a0d14cc56512adcfecd5ae5b141d2b9ef3886f390ce1f31cd30bf6";
 pub const CANONICAL_GOLDEN_JSON: &str = r##"{"a":"é","array":[true,null,17],"z":"last"}"##;
 pub const CANONICAL_GOLDEN_HASH: &str =
     "1d800cb94962906f78d42cb8cc84c2c078311a50e35ca515240b800abc3d2263";
