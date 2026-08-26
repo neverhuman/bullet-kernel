@@ -1,9 +1,9 @@
 # bullet-kernel
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
-Product-surface claims were last reviewed 2026-08-25 against `c797d51`; the CI
-lane and test-inventory section was reviewed against product subject `107c5cd`.
-<!-- bullet-doc-review:v1 subject=c797d51d75f80eb167f6ac5eb094755aca577688 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,crates/runner/src/lib.rs,crates/verifier/src/lib.rs -->
+Product-surface claims and the CI inventory were last reviewed 2026-08-26
+against product subject `3fb9d8e`.
+<!-- bullet-doc-review:v1 subject=3fb9d8e450f59bf3e35531320381050357116cf2 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs -->
 Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.
@@ -21,15 +21,15 @@ Evidence classes follow
 | `crates/harness-{claude,codex,cursor,antigravity}` | fail-closed provider contract crates with bounded offline transcript/result subsets and one `LiveDispatcher` each |
 | `crates/runner` | component-testable attempt loop; the product CLI refuses before dispatch because no workload lease transport is admitted (see [`docs/architecture.md`](docs/architecture.md#runner--farmd-lease-admission-refusal)) |
 | `crates/verifier` | clean-room reconstruction and typed gate outcomes |
-| `crates/effects` | effect broker and state machine over `LocalBareForge`; the Jeryu adapter is a typed quarantine |
+| `crates/effects` | effect broker and state machine over `LocalBareForge`, plus a bounded durable `PENDING` → `OUTCOME_UNKNOWN` → `QUARANTINED` queue; the Jeryu adapter is a typed quarantine |
 | `crates/router`, `fusion`, `behavior`, `projections` | non-authoritative scaffolds: routing fallback, fusion, behaviour catalog, spec §25 `View`/`Surface` types; the served §25 projections live in `apps/bullet-farmd/src/projections/` |
 | `crates/mcp-mock`, `crates/test-simulation` | in-process mocks and harness tapes for the contract lane |
 | `apps/bullet-farmd` | loopback-only HTTP + SSE daemon; routes in the table below |
 | `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
-| `apps/bullet` | CLI: `farm init\|backup\|restore`, `demo`, `demo-synthetic`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`; every flag is in [`docs/cli.md`](docs/cli.md) |
+| `apps/bullet` | CLI: `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`; every flag is in [`docs/cli.md`](docs/cli.md) |
 | `apps/bullet-runner` | fail-closed attempt runner; returns `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, filesystem, provider, or gitd activity |
 | `apps/bullet-verifier` | verifier process boundary; refuses the writer identity, reads its job as `--stdin` JSON |
-| `apps/bullet-effects` | effect broker process boundary; drives `LocalBareForge` through loss and reconciliation |
+| `apps/bullet-effects` | no-argument component demo over `LocalBareForge`; `serve <durable-queue-dir>` processes one UNKNOWN job only to `QUARANTINED`, never fabricated forge success |
 
 ## farmd routes
 
@@ -122,12 +122,12 @@ or an authority recovery procedure.
 Every lane is one script under `ops/ci/`, reachable as `just <lane>` or
 `bash scripts/ci-local.sh <lane>`.
 
-The exact 578-test inventory is disjoint: 532 standalone, three host-dependent
+The exact 583-test inventory is disjoint: 537 standalone, three host-dependent
 egress, 34 contract, and nine family identities.
 
 | Lane | Command | Contents | Evidence class |
 | --- | --- | --- | --- |
-| fast | `just fast` | digest-bound 532-test standalone partition with all 532 executed and zero skipped; both Gitd binary variables are unset so product resolution fails closed | `COMPONENT_PROOF` |
+| fast | `just fast` | digest-bound 537-test standalone partition with all 537 executed and zero skipped; both Gitd binary variables are unset so product resolution fails closed | `COMPONENT_PROOF` |
 | lint | `just lint` | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, and inventory/workflow/observation/nightly meta-tests | hygiene gate; no evidence class |
 | contract | `just contract` | exactly 34 offline provider-protocol and simulation tests, executed once; no sibling daemon | `COMPONENT_PROOF` / `SYNTHETIC_PROOF` |
 | security | `just security` | gitleaks (no-git); `cargo deny fetch db` plus a lane-side freshness proof of the RustSec advisory database (refuses at 14 days); `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor --offline --no-ignores --strict-collection .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails | hygiene gate; no evidence class |
@@ -157,11 +157,11 @@ receipts. See [CI and test inventory](docs/testing.md).
 | Internal command worker | Authenticated invoked reconciliation; demo work settles only `UNKNOWN`, unsupported kinds only `FAILED` |
 | Provider contracts | Four bounded offline transcript/result subsets plus one common policy-gated live-conformance path; under the checked-in v1alpha1 policy every provider refuses (exit 78) before any spawn; no provider has a live receipt |
 | Policy loader | v1alpha1 and v1alpha2 (ADR 0012 mirror); live admission is legal only at generation ≥ 2 with an active `provider-runner` key; the committed fixture is v1alpha1, generation 1, live disabled |
-| Launch-grant authority | Offline operator keygen and mint from the durable lease; the verifier binds lease, admission, policy, and a single-use nonce; a constant authority epoch and zero freeze generation until durable counters exist |
+| Launch-grant authority | Offline operator keygen and mint from the durable lease; the verifier binds lease, admission, policy, a single-use nonce, and the ledger's durable authority epoch/freeze generation; no admitted online operation advances those revisions |
 | Egress isolation | Linux-only namespace/nftables/CONNECT-proxy boundary with a sealed receipt; `just egress` on a capable host, else neutral 78 |
 | farmd projections | Five read-only §25 routes, each one atomic ledger snapshot with a sequence watermark; consumed by the Portal; never authority |
-| Runner ↔ farmd leases | Refused: product CLI does not construct the dormant unsigned `HttpLeaseClient`; the experimental UDS transport lacks `SO_PEERCRED` identity binding and is not admitted |
-| Exact five-plane transaction | Not implemented or proven |
+| Runner ↔ farmd leases | Refused: product CLI constructs neither component client; the UDS predecessor binds both peers with `SO_PEERCRED` and socket identity, but registration is debug-fixture-only and acquire read-back metadata remains process-local |
+| Exact five-plane transaction | A family-only component fixture exercises the roles; the product `bullet transaction --json` returns typed `ABSENT` with exit 2, and no `TRANSACTION_PROOF` exists |
 | Production | Not eligible; operator-ratified live policy, signed lease transport, durable authority epoch and budgets, online BulletGit authority, freeze, and restore admission are incomplete |
 
 The product scaffold never selects Runner's private `#[cfg(test)]` workspace

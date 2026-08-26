@@ -1,11 +1,11 @@
 # `bullet` CLI reference
 
-Status: committed surface at HEAD `c797d51`
+Status: committed surface at HEAD `3fb9d8e`
 Owner: Bullet Farm maintainers
-Last reviewed: 2026-08-25
-Source of truth: `apps/bullet/src/{main,authority,provider,maintenance,contracts}.rs`,
-`apps/bullet/src/authority/mint.rs`
-<!-- bullet-doc-review:v1 subject=c797d51d75f80eb167f6ac5eb094755aca577688 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs -->
+Last reviewed: 2026-08-26
+Source of truth: `apps/bullet/src/{main,transaction,authority,provider,maintenance,contracts}.rs`,
+`apps/bullet/src/authority/mint.rs`, and the process-bin `main.rs` files below.
+<!-- bullet-doc-review:v1 subject=3fb9d8e450f59bf3e35531320381050357116cf2 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs -->
 
 Every command is offline except `provider live-conformance`, which can spawn a
 provider only after the policy, key, lease, admission, grant, and egress steps
@@ -23,11 +23,13 @@ all pass. Nothing here produces `LIVE_PROOF` or `RELEASE_PROOF`.
 
 | Command | Effect |
 | --- | --- |
-| `farm init` | create `<data-dir>/ledger.sqlite` and run migrations |
+| `farm init` | on Linux, admit/create a self-owned non-symlink 0700 `<data-dir>`, create `ledger.sqlite`, and run migrations; other platforms refuse |
 | `farm backup --database <existing> --output <absent> --receipt <absent>` | SQLite online-backup snapshot with schema/foreign-key/integrity checks, then a separate unsigned BLAKE3 receipt; a receipt failure can leave an unusable orphan snapshot |
+| `farm reap --database <existing>` | reclaim every writer lease already expired in the offline database; running farmd performs the same maintenance on its own tick |
 | `farm restore --backup <snapshot> --receipt <receipt> --destination <absent>` | verify the exact receipt-bound bytes, advance the restore epoch, publish to an absent destination; the result stays quarantined (normal open refuses) |
-| `demo` | deterministic ledger simulation; writes `<data-dir>/receipts.json`; fails on its own safety checks (stale refusal, idempotent materialize, fence `n` then `n+1`) |
+| `demo` | deterministic ledger simulation; writes `<data-dir>/receipts.json`; fails on its own safety checks and unless Candidate/Evidence/Effect all remain unproduced |
 | `demo-synthetic [--target <origin repo>]` | simulator-only integration scaffold; while production authority is unavailable it exits failed with a typed refusal and no Candidate |
+| `transaction --json` | emit the typed `transaction_proof: "ABSENT"`, `transaction_gate_eligible: false` receipt and exit 2; omitting `--json` also refuses |
 | `contracts generate` | regenerate `contracts/generated/api.ts` from `contracts/openapi.yaml` |
 | `contracts check` | fail when the generated TypeScript is stale (gates the fast lane) |
 | `authority keygen` | create the operator launch-grant signing key; see below |
@@ -146,7 +148,7 @@ the receipt fields are listed in
 
 | Binary | Flags | Notes |
 | --- | --- | --- |
-| `bullet-farmd` | `--data-dir` (default `./target/demo`), `--bind` (default `127.0.0.1:7420`; non-loopback refused), `--portal-origin <exact loopback origin>`, `--worker-token-file <protected file>` | routes in [`README.md`](../README.md#farmd-routes); the internal reconciler is inert without the worker token |
-| `bullet-runner` | legacy arguments remain parseable | returns typed `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, filesystem, provider, or gitd activity; no product lease transport is admitted |
+| `bullet-farmd` | `--data-dir` (default `./target/demo`), `--bind` (default `127.0.0.1:7420`; non-loopback refused), `--portal-origin <exact loopback origin>`, `--worker-token-file <protected file>`, `--reap-interval-ms <1..=500>`, reserved `--lease-transport-socket <abs>`; debug builds also expose `--fixture-lease-peer-registration <runner:epoch>` | routes in [`README.md`](../README.md#farmd-routes); the internal reconciler is inert without the worker token; the socket refuses without the debug-only exact peer registry |
+| `bullet-runner` | legacy arguments, including reserved `--lease-socket`, remain parseable | returns typed `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, filesystem, provider, or gitd activity; no product lease transport is admitted |
 | `bullet-verifier` | `--stdin` job JSON | refuses the writer identity |
-| `bullet-effects` | — | drives `LocalBareForge` through loss and reconciliation |
+| `bullet-effects` | no arguments, or `serve <durable-queue-dir>` | no arguments run a component `LocalBareForge` loss/reconciliation demo; `serve` processes at most one UNKNOWN job to `QUARANTINED` and reports `live_forge_success:false` |

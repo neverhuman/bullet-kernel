@@ -1,9 +1,9 @@
 # Kernel architecture
 
-Last reviewed: 2026-08-25 against HEAD `c797d51`. Every claim names the code
+Last reviewed: 2026-08-26 against HEAD `3fb9d8e`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
-<!-- bullet-doc-review:v1 subject=c797d51d75f80eb167f6ac5eb094755aca577688 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs -->
+<!-- bullet-doc-review:v1 subject=3fb9d8e450f59bf3e35531320381050357116cf2 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs -->
 
 ## Ledger core
 
@@ -318,8 +318,10 @@ a successful `apply_proposal` advances the capsule to the daemon's new
 checkpoint. `crates/verifier` (`apps/bullet-verifier`) reconstructs the
 candidate in a clean room and returns typed gate outcomes. `crates/effects`
 (`apps/bullet-effects`) is the effect broker and state machine over
-`LocalBareForge`; ambiguous loss stays `unknown` until reconciled, and the
-Jeryu adapter is a typed quarantine. These are isolated component boundaries.
+`LocalBareForge`; ambiguous loss stays `unknown` until reconciled. Its bounded
+on-disk queue persists `PENDING` and `OUTCOME_UNKNOWN`, and the local daemon can
+settle an unknown only as `QUARANTINED`, never as forge success. The Jeryu
+adapter is a typed quarantine. These are isolated component boundaries.
 There is no admitted live provider dispatch, online-authorized BulletGit
 mutation, or connected runner -> BulletGit -> independent verifier -> effect
 transaction, so none supplies production Evidence or integration truth.
@@ -347,11 +349,13 @@ exists only under `test-seams` (`issue_permit`), and `crates/runner/src/
 signed_lease.rs` (`SignedLeaseClient`, `test-seams` only) co-locates the
 signing key with the verifier, which makes it a simulator, never an admission
 path. `DirectLeaseClient` remains unsigned and test/embedded-only. A newer
-internal UDS prototype keeps the signing key in farmd and persists grant/nonces,
-but its owner-only socket still accepts a self-asserted hello without
-`SO_PEERCRED`, its client state is process-local, and it is not exposed by
-`bullet-runner`. No public `/api/v1/leases` route is remounted, no production
-workload transport is admitted, and this closes no five-plane gate.
+internal UDS predecessor keeps the signing key in farmd, persists grants/nonces,
+binds the connected Runner UID and registered Runner ID/epoch with `SO_PEERCRED`,
+and makes the client pin the farmd UID plus socket group/device/inode. Its
+registry is configurable only through a debug fixture, the client's acquire
+read-back metadata is process-local, and `bullet-runner` does not construct it.
+No public `/api/v1/leases` route is remounted, no production workload transport
+is admitted, and this closes no five-plane gate.
 
 ## Scaffolds
 
