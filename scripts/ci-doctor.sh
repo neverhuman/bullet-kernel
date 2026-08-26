@@ -12,17 +12,24 @@ set -euo pipefail
 
 lane="${1:-all}"
 case "$lane" in
-  fast)     tools=(bash cargo cargo-nextest dirname git jq rustc) ;;
-  contract) tools=(bash cargo cargo-nextest dirname git jq rustc) ;;
-  security) tools=(bash cargo cargo-deny date dirname git gitleaks jq rustc zizmor) ;;
-  required) tools=(bash cargo cargo-clippy cargo-deny cargo-nextest date dirname git gitleaks jq rustc rustfmt zizmor) ;;
+  required|gates|all) tools=(actionlint awk basename bash cargo cargo-clippy cargo-deny cargo-nextest cat cmp cp date dirname find git gitleaks grep jq ln mkdir mktemp mv python3 realpath rg rm rustc rustfmt sed seq sha256sum shellcheck sort sync xargs zizmor) ;;
+  fast)     tools=(awk basename bash cargo cargo-nextest dirname git jq mkdir mktemp mv rm rustc sync) ;;
+  lint)     tools=(actionlint awk bash cargo cargo-clippy cmp cp dirname git jq ln mktemp python3 rg rm rustc rustfmt sha256sum shellcheck sort) ;;
+  contract) tools=(awk basename bash cargo cargo-nextest dirname git jq mkdir mktemp mv rm rustc sync) ;;
+  security) tools=(bash cargo cargo-deny cat date dirname git gitleaks jq mktemp rm rustc xargs zizmor) ;;
+  docs)     tools=(awk bash cargo dirname git grep ln mkdir mktemp realpath rg rm rustc sed seq sort) ;;
+  family)   tools=(bash cargo cargo-nextest dirname git jq realpath rustc sha256sum) ;;
+  preflight) tools=(awk bash cat dirname find git gitleaks mktemp rg rm sort xargs) ;;
+  links)    tools=(bash dirname lychee rg sort) ;;
+  coverage) tools=(bash cargo cargo-llvm-cov cargo-nextest dirname git jq mkdir rm rustc) ;;
+  history-secrets) tools=(bash dirname git gitleaks) ;;
+  portable-refusal) tools=(bash cargo dirname git rustc) ;;
+  nightly)  tools=(bash cargo chmod date dirname git jq mkdir mktemp readlink rm rustc) ;;
   audit)    tools=(bash dirname git jankurai jq mkdir) ;;
-  egress)   tools=(bash cargo cat curl dirname git jq kill nft nsenter rustc slirp4netns unshare) ;;
-  nightly)  tools=(bash cargo dirname git jq rustc) ;;
-  toolchain-msrv) tools=(b3sum bash cargo dirname git jq rustup) ;;
-  all)      tools=(b3sum bash cargo cargo-clippy cargo-deny cargo-nextest cat curl date dirname git gitleaks jankurai jq kill mkdir rustc rustfmt rustup zizmor) ;;
+  egress)   tools=(bash cargo cargo-nextest cat curl dirname git jq kill nft nsenter rustc slirp4netns unshare) ;;
+  toolchain-msrv) tools=(awk b3sum bash cargo date dirname git grep jq rustup tee tr wc) ;;
   *)
-    echo "ci-doctor: expected fast|contract|security|required|audit|nightly|egress|toolchain-msrv|all" >&2
+    echo "ci-doctor: expected required|fast|lint|contract|security|docs|family|preflight|links|coverage|history-secrets|portable-refusal|nightly|audit|egress|toolchain-msrv|gates|all" >&2
     exit 2
     ;;
 esac
@@ -46,21 +53,33 @@ fi
 # Version pins. These are the exact versions the lanes and rust-toolchain.toml
 # already depend on; a mismatch is reported here rather than as a confusing
 # failure three minutes into a build.
-if [[ "$lane" =~ ^(fast|contract|security|required|nightly|egress|all)$ ]]; then
+if [[ "$lane" =~ ^(required|fast|lint|contract|security|docs|family|coverage|portable-refusal|nightly|egress|gates|all)$ ]]; then
   rust_version="$(rustc --version)"
   [[ "$rust_version" == "rustc 1.97.1 "* ]] || {
     printf 'ci-doctor: expected rustc 1.97.1 (rust-toolchain.toml), found %s\n' "$rust_version" >&2
     exit 1
   }
 fi
-if [[ "$lane" =~ ^(fast|contract|required|all)$ ]]; then
+if [[ "$lane" =~ ^(required|lint|gates|all)$ ]]; then
+  actionlint_version="$(actionlint -version | awk 'NR == 1 { print; exit }')"
+  [[ "$actionlint_version" == "1.7.8" ]] || {
+    printf 'ci-doctor: expected actionlint 1.7.8, found %s\n' "$actionlint_version" >&2
+    exit 1
+  }
+  shellcheck_version="$(shellcheck --version | awk '$1 == "version:" { print $2 }')"
+  [[ "$shellcheck_version" == "0.10.0" ]] || {
+    printf 'ci-doctor: expected ShellCheck 0.10.0, found %s\n' "$shellcheck_version" >&2
+    exit 1
+  }
+fi
+if [[ "$lane" =~ ^(required|fast|contract|family|coverage|egress|gates|all)$ ]]; then
   nextest_version="$(cargo-nextest --version)"
   [[ "$nextest_version" == "cargo-nextest 0.9.137 "* ]] || {
     printf 'ci-doctor: expected cargo-nextest 0.9.137, found %s\n' "$nextest_version" >&2
     exit 1
   }
 fi
-if [[ "$lane" =~ ^(security|required|all)$ ]]; then
+if [[ "$lane" =~ ^(required|security|gates|all)$ ]]; then
   [[ "$(gitleaks version)" == "8.21.2" ]] || {
     printf 'ci-doctor: expected gitleaks 8.21.2, found %s\n' "$(gitleaks version)" >&2
     exit 1
@@ -74,13 +93,31 @@ if [[ "$lane" =~ ^(security|required|all)$ ]]; then
     exit 1
   }
 fi
-if [[ "$lane" == audit || "$lane" == all ]]; then
+if [[ "$lane" == audit ]]; then
   [[ "$(jankurai --version)" == "jankurai 1.6.11" ]] || {
     printf 'ci-doctor: expected jankurai 1.6.11, found %s\n' "$(jankurai --version)" >&2
     exit 1
   }
 fi
-if [[ "$lane" == toolchain-msrv || "$lane" == all ]]; then
+if [[ "$lane" == links ]]; then
+  [[ "$(lychee --version)" == "lychee 0.24.0" ]] || {
+    printf 'ci-doctor: expected lychee 0.24.0, found %s\n' "$(lychee --version)" >&2
+    exit 1
+  }
+fi
+if [[ "$lane" == coverage ]]; then
+  [[ "$(cargo llvm-cov --version)" == "cargo-llvm-cov 0.8.7" ]] || {
+    printf 'ci-doctor: expected cargo-llvm-cov 0.8.7, found %s\n' "$(cargo llvm-cov --version)" >&2
+    exit 1
+  }
+fi
+if [[ "$lane" == preflight || "$lane" == history-secrets ]]; then
+  [[ "$(gitleaks version)" == "8.21.2" ]] || {
+    printf 'ci-doctor: expected gitleaks 8.21.2, found %s\n' "$(gitleaks version)" >&2
+    exit 1
+  }
+fi
+if [[ "$lane" == toolchain-msrv ]]; then
   [[ "$(b3sum --version)" == "b3sum 1.8.2" ]] || {
     printf 'ci-doctor: expected b3sum 1.8.2, found %s\n' "$(b3sum --version)" >&2
     exit 1

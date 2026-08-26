@@ -52,9 +52,7 @@ log "advisory database $advisory_db newest commit ${advisory_db_age_days}d old (
 
 # licenses/advisories/bans/sources are gated by the committed deny.toml policy.
 cargo deny --locked check licenses advisories bans sources
-# zizmor audits the committed workflow bytes. Without a GitHub API token it
-# reports that it is skipping its five online audits (impostor-commit,
-# ref-confusion, known-vulnerable-actions, stale-action-refs,
-# ref-version-mismatch); the offline audits still fail the lane on a finding.
-zizmor .
+# Audit only the committed workflow bytes. Offline mode is explicit, every
+# ignore is forbidden, and collection warnings fail the command.
+zizmor --offline --no-ignores --strict-collection .
 log "security lane passed"

@@ -10,7 +10,7 @@
 # missing scanner can never produce a green lane):
 #   gitleaks detect --source . --no-git --redact --no-banner
 #   cargo deny --locked check licenses advisories bans sources   (committed deny.toml)
-#   zizmor .                                                     (workflow bytes)
+#   zizmor --offline --no-ignores --strict-collection .          (workflow bytes)
 # The lane also proves the RustSec advisory database is present, readable and
 # newer than 14 days before it trusts `cargo deny check`, because cargo-deny
 # 0.19.8 reports a failed `git fetch` as success.

@@ -9,7 +9,7 @@ the same file.
 | `fast` | `ops/ci/fast.sh` | yes, atomic | digest-bound 520-test standalone partition, all executed with zero skipped; nonexistent daemon sentinel prevents sibling fallback |
 | `lint` | `ops/ci/lint.sh` | yes, atomic | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow/inventory/observation/nightly meta-tests |
 | `contract` | `ops/ci/contract.sh` | yes, atomic | exact 34-test offline provider-contract/simulation partition; never resolves `bullet-gitd` |
-| `security` | `ops/ci/security.sh` | yes | gitleaks; `cargo deny fetch db` then a lane-side freshness proof of the RustSec database; `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails |
+| `security` | `ops/ci/security.sh` | yes | gitleaks; `cargo deny fetch db` then a lane-side freshness proof of the RustSec database; `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor --offline --no-ignores --strict-collection .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails |
 | `docs` | `ops/ci/docs.sh` | yes, atomic | generated-contract drift, rustdoc, repository-relative links |
 | `required` | `ops/ci/required.sh` | local only | fast + lint + contract + security + docs, sequentially and exactly once |
 | `family` | `ops/ci/family.sh` | no | exact nine family tests; requires a canonical executable `BULLET_GITD_BIN` and exact `BULLET_GITD_SHA256`; no sibling fallback |
@@ -36,11 +36,9 @@ see it either because a failed `git fetch` still rewrites `FETCH_HEAD`. Never
 replace that gate with a `|| true`, a skip, or a wider age limit to get a green
 run on an offline host: an unrefreshed database means the scan is not trusted.
 
-`zizmor .` audits the workflow bytes. Without a GitHub API token it skips its
-five online audits (impostor-commit, ref-confusion, known-vulnerable-actions,
-stale-action-refs, ref-version-mismatch) and prints that it is doing so; the
-offline audits still fail the lane on a finding. Do not add a token to make the
-online audits run from a proof lane.
+`zizmor --offline --no-ignores --strict-collection .` audits the workflow
+bytes without API access, refuses configured ignores, and treats collection
+warnings as failures. Do not add a token or weaken those flags in a proof lane.
 
 `ops/ci/inventory.sh` is the single filter/count declaration;
 `ops/ci/inventory-test.sh` proves its nonzero, union, disjointness, complete
