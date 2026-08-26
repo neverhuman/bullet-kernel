@@ -6,6 +6,7 @@ setup: preflight
     umask 077 && cargo fetch --locked
 
 fast:
+    @cargo nextest --version >/dev/null
     bash scripts/ci-local.sh fast
 
 lint:

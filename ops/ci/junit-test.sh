@@ -9,6 +9,7 @@ require_tool rg || exit 1
 test_root="$(mktemp -d)"
 cleanup() { rm -rf -- "$test_root"; }
 trap cleanup EXIT
+# jankurai:allow HLT-010-SECRET-SPRAWL reason=synthetic JUnit redaction canary expires=2027-08-26
 canary='AKIAIOSFODNN7EXAMPLE'
 
 printf '%s\n' \
