@@ -2,7 +2,7 @@
 
 Status: first-build control plane; not release-ready
 Owner: Bullet Farm maintainers
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-26
 Applies to: bullet-kernel
 
 ## Role
@@ -16,8 +16,10 @@ live-conformance path, and trust-boundary process bins.
 ## Repositories
 
 - Initial source authority: Jeryu repository `root/bullet-kernel`
-- Public GitHub mirror: `neverhuman/bullet-kernel` per the family manifest; not
-  an authority source
+- Public GitHub index: `https://github.com/neverhuman/bulletfarm` (hub only;
+  not `neverhuman/bullet-farm` and not a `neverhuman/bullet-kernel` mirror);
+  this member has no separate GitHub publication remote and is never source
+  authority
 - Release tag pattern: `v0.1.0-alpha.N` as recorded in the hub `family.lock`
   (`v0.1.0-alpha.4` at last review)
 
