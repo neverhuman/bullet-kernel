@@ -1,6 +1,7 @@
 //! SQLite WAL ledger, split by table group. Migrations are embedded and
 //! applied in order through a `schema_version` table.
 
+mod authority;
 mod backup;
 mod commands;
 mod context;
@@ -26,7 +27,7 @@ use bullet_application::{
     ActiveLease, ActiveLeaseSubject, CommandRecord, CommandRequest, EffectIntentRecord,
     EffectReceiptRecord, EffectState, ExpiredLease, GraphDelta, HeartbeatRequest, IssuedNonce,
     LeaseGrant, LeaseRequest, Ledger, LedgerError, LedgerEvent, NonceError, NonceLedger,
-    NonceState, OutboxItem, ReadyRow, ReleaseRequest, StoredGraph,
+    NonceState, NormalizedAuthority, OutboxItem, ReadyRow, ReleaseRequest, StoredGraph,
 };
 use bullet_domain::{
     Attempt, AttemptId, Candidate, CandidateId, CommandPhase, Effect, EffectId, Evidence,
@@ -411,6 +412,10 @@ impl Ledger for SqliteLedger {
 
     fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError> {
         effects::unresolved_effects(&self.conn)
+    }
+
+    fn current_authority(&self) -> Result<NormalizedAuthority, LedgerError> {
+        authority::current(&self.conn)
     }
 
     fn with_lease_transport<T, E, F>(&mut self, f: F) -> Result<T, E>

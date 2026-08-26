@@ -25,7 +25,7 @@ pub use clock::{Clock, ManualClock, MonotonicClock, SelfKillDeadline};
 pub use error::RunnerError;
 pub use gate::{run_gate, GateRegistry, GateReport, REPOSITORY_GATE_ID};
 pub use gitd::{
-    gitd_available, gitd_binary, gitd_fixture_binary, CandidateBindings,
+    gitd_binary, gitd_fixture_binary, AdmittedGitdBinary, CandidateBindings,
     CandidateProvenanceRequest, CandidateReceipt, ChangeRequest, GitdSession,
     PrepareCandidateRequest, PreservationReceipt, SuccessorResume, WorkspaceInfo,
 };
@@ -39,4 +39,4 @@ pub use lease::{
 };
 #[cfg(feature = "test-seams")]
 pub use signed_lease::SignedLeaseClient;
-pub use signed_lease_rpc::SignedLeaseRpcClient;
+pub use signed_lease_rpc::{ExpectedLeaseServer, SignedLeaseRpcClient};

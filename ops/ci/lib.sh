@@ -103,12 +103,7 @@ scan_current_source_secrets() {
 }
 
 deny_sibling_gitd() {
-  local sentinel="$REPO_ROOT/target/ci/no-sibling-bullet-gitd"
-  if [[ -e "$sentinel" || -L "$sentinel" ]]; then
-    refuse NO_SIBLING_SENTINEL_COLLISION "$sentinel must remain absent"
-    return 1
-  fi
-  export BULLET_GITD_BIN="$sentinel"
+  unset BULLET_GITD_BIN BULLET_GITD_SHA256
 }
 
 partition_count() {

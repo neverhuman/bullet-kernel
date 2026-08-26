@@ -6,7 +6,7 @@
 //! signs, then a separate gateway verifies that permit and applies the
 //! ledger mutation in the same immediate transaction.
 
-use crate::launch_grant::KERNEL_AUTHORITY_EPOCH;
+use crate::launch_grant::GENESIS_AUTHORITY_EPOCH;
 use crate::records::{HeartbeatRequest, LeaseGrant, LeaseRequest, ReleaseRequest, StoredGraph};
 use crate::store::{LeaseTransportTxn, Ledger, LedgerError};
 use bullet_domain::{
@@ -303,6 +303,7 @@ impl KernelLeaseTransport {
         F: FnOnce(&mut dyn LeaseTransportTxn) -> Result<R, SignedLeaseError>,
     {
         let request_digest = request_digest(body).map_err(SignedLeaseError::Transport)?;
+        let authority_epoch = ledger.current_authority()?.authority_epoch();
         ledger.with_lease_transport(|txn| {
             let nonce = new_hex_64().map_err(SignedLeaseError::Transport)?;
             let permit_id = new_hex_64().map_err(SignedLeaseError::Transport)?;
@@ -327,7 +328,7 @@ impl KernelLeaseTransport {
                 request_digest: request_digest.clone(),
                 runner_id: runner_id.as_str().to_string(),
                 runner_epoch,
-                authority_epoch: KERNEL_AUTHORITY_EPOCH,
+                authority_epoch,
                 work_package_id: work_package_id.to_string(),
                 idempotency_digest: idempotency_digest.to_string(),
             };
@@ -340,7 +341,7 @@ impl KernelLeaseTransport {
                 request_digest,
                 runner_id: runner_id.as_str().to_string(),
                 runner_epoch,
-                authority_epoch: KERNEL_AUTHORITY_EPOCH,
+                authority_epoch,
                 work_package_id: work_package_id.to_string(),
                 idempotency_digest: idempotency_digest.to_string(),
                 now_unix_ms,
@@ -434,7 +435,7 @@ pub fn issue_operation_permit<T: Serialize>(
         request_digest: digest,
         runner_id: runner_id.as_str().to_string(),
         runner_epoch,
-        authority_epoch: KERNEL_AUTHORITY_EPOCH,
+        authority_epoch: GENESIS_AUTHORITY_EPOCH,
         work_package_id: work_package_id.to_string(),
         idempotency_digest: idem.clone(),
     };
@@ -605,7 +606,7 @@ impl SignedLeaseService {
             request_digest: digest,
             runner_id: runner_id.as_str().to_string(),
             runner_epoch,
-            authority_epoch: KERNEL_AUTHORITY_EPOCH,
+            authority_epoch: GENESIS_AUTHORITY_EPOCH,
             work_package_id: work_package_id.to_string(),
             idempotency_digest: idempotency_digest(idempotency_key)?,
             now_unix_ms,

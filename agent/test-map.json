@@ -18,8 +18,16 @@
       "purpose": "prove SQLite ledger and simulators"
     },
     "apps/": {
-      "command": "cargo test --workspace",
-      "purpose": "prove daemon and CLI surfaces"
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "prove app binaries and component tests in the standalone partition; connected family sources have exact overrides"
+    },
+    "apps/bullet/tests/synthetic_e2e.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the connected synthetic scaffold with an explicitly admitted digest-bound Gitd subject"
+    },
+    "apps/bullet/tests/transaction_demo.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove all five connected transaction-demo identities with an explicitly admitted digest-bound Gitd subject"
     },
     "apps/bullet-mcpd/": {
       "command": "cargo test -p bullet-mcpd",
@@ -36,6 +44,10 @@
     "apps/bullet-farmd/src/api/portal.rs": {
       "command": "BULLET_PORTAL_DIST=<absolute built bullet-portal dist> cargo test -p bullet-farmd --features embedded-portal --test portal_routes",
       "purpose": "prove same-origin static serving, cache headers, and that bootstrap/session/CSRF/origin rules are unchanged"
+    },
+    "apps/bullet-farmd/src/api/routes.rs": {
+      "command": "bash scripts/ci-local.sh docs",
+      "purpose": "prove the static route catalog constructs farmd and exactly projects README method/path/OpenAPI membership"
     },
     "contracts/": {
       "command": "cargo run -q -p bullet -- contracts check",
@@ -90,8 +102,24 @@
       "purpose": "prove allowlist/proxy/receipt units, then live namespace egress isolation (neutral 78 without tools)"
     },
     "crates/runner/": {
-      "command": "cargo test -p bullet-runner-core",
-      "purpose": "prove attempt loop, scope check, heartbeat self-fence"
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "prove Runner components, including sealed Gitd binary admission, in the standalone partition; connected family sources have exact overrides"
+    },
+    "crates/runner/tests/heartbeat_stale.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the connected stale-heartbeat identity with an explicitly admitted digest-bound Gitd subject"
+    },
+    "crates/runner/tests/kill_retry.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the connected successor-fence identity with an explicitly admitted digest-bound Gitd subject"
+    },
+    "crates/runner/tests/loop_sim.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the connected production-authority refusal identity with an explicitly admitted digest-bound Gitd subject"
+    },
+    "crates/runner/tests/support/mod.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the shared connected Runner fixture only under the admitted digest-bound Gitd family lane"
     },
     "crates/verifier/": {
       "command": "cargo test -p bullet-verifier-core",
@@ -126,8 +154,8 @@
       "purpose": "prove \u00a725 surfaces fail to unknown, not empty"
     },
     "README.md": {
-      "command": "bash scripts/ci-local.sh fast",
-      "purpose": "documentation; the fast lane proves the commands it names"
+      "command": "bash scripts/ci-local.sh docs",
+      "purpose": "prove the generated farmd route table and every repository-relative documentation link"
     },
     "AGENTS.md": {
       "command": "bash scripts/ci-local.sh fast",

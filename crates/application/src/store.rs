@@ -4,6 +4,7 @@
 //! RFC 3339 UTC strings. Lease authority time is owned by each store.
 
 use crate::authority::ActiveLeaseSubject;
+use crate::authority_revision::NormalizedAuthority;
 use crate::commands::{CommandRecord, CommandRequest};
 use crate::effect_state::EffectState;
 use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
@@ -413,6 +414,15 @@ pub trait Ledger {
     /// # Errors
     /// Store failure.
     fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError>;
+
+    /// Load the singleton normalized authority row.
+    ///
+    /// Empty stores must seed genesis exactly once. Grant minting reads this
+    /// row and must not substitute a compile-time epoch.
+    ///
+    /// # Errors
+    /// Store failure or a missing/invalid durable row.
+    fn current_authority(&self) -> Result<NormalizedAuthority, LedgerError>;
 
     /// Run `f` inside one immediate transaction. Nonce reserve, permit
     /// consumption, the lease mutation, and grant persistence must commit

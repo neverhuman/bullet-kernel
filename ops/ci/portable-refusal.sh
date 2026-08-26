@@ -5,7 +5,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
 
-unset BULLET_GITD_BIN
+unset BULLET_GITD_BIN BULLET_GITD_SHA256
 cargo check --locked --workspace --all-targets
 cargo test --locked -p bullet-application \
   live_conformance::tests::v1alpha1_policy_refuses_before_key_probe_or_spawn -- --exact

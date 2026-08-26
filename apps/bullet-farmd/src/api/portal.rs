@@ -17,6 +17,48 @@ use axum::{
     routing::get,
 };
 
+#[cfg(any(feature = "embedded-portal", test))]
+macro_rules! portal_route_catalog {
+    ($emit:ident) => {
+        $emit! {
+            Get, "/", index, false, "embedded-portal entry point; absent without the feature";
+            Get, "/index.html", index, false, "embedded-portal entry point alias; absent without the feature";
+            Get, "/assets/{file}", asset, false, "content-hashed embedded-portal asset; absent without the feature";
+        }
+    };
+}
+
+#[cfg(feature = "embedded-portal")]
+macro_rules! mount_portal_method {
+    (Get, $handler:ident) => {
+        get($handler)
+    };
+}
+
+#[cfg(feature = "embedded-portal")]
+macro_rules! mount_portal_routes {
+    ($( $kind:ident, $path:literal, $handler:ident, $openapi:literal, $meaning:literal; )+) => {
+        Router::new()$(.route($path, mount_portal_method!($kind, $handler)))+
+    };
+}
+
+#[cfg(test)]
+macro_rules! declare_portal_inventory {
+    ($( $kind:ident, $path:literal, $handler:ident, $openapi:literal, $meaning:literal; )+) => {
+        pub(super) const PORTAL_ROUTE_INVENTORY: &[super::routes::RouteSpec] = &[
+            $(super::routes::RouteSpec::new(
+                super::routes::RouteMethod::$kind,
+                $path,
+                $openapi,
+                $meaning,
+            )),+
+        ];
+    };
+}
+
+#[cfg(test)]
+portal_route_catalog!(declare_portal_inventory);
+
 /// Content-hashed asset lifetime; the file name changes when the bytes change.
 #[cfg(feature = "embedded-portal")]
 const ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
@@ -61,10 +103,7 @@ mod embedded {
 #[cfg(feature = "embedded-portal")]
 pub(crate) fn router() -> Router<SharedState> {
     tracing::info!("{}", startup_line());
-    Router::new()
-        .route("/", get(index))
-        .route("/index.html", get(index))
-        .route("/assets/{file}", get(asset))
+    portal_route_catalog!(mount_portal_routes)
 }
 
 /// Static routes for the embedded Portal; empty without the feature.

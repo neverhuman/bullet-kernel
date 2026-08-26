@@ -23,12 +23,12 @@ use std::time::Duration;
 
 /// Fail rather than silently passing when the real workspace daemon is absent.
 pub fn require_gitd() {
-    let binary = bullet_runner_core::gitd_binary();
-    assert!(
-        binary.is_file(),
-        "GITD_BINARY_ABSENT: build bullet-gitd or set BULLET_GITD_BIN; resolved {}",
-        binary.display()
-    );
+    bullet_runner_core::gitd_binary().unwrap_or_else(|error| {
+        panic!(
+            "{}: set BULLET_GITD_BIN and BULLET_GITD_SHA256 to the admitted daemon",
+            error.reason_code()
+        )
+    });
 }
 
 /// Create a real git origin with one commit; returns (repo path, base SHA).

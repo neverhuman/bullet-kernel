@@ -13,11 +13,11 @@ that aggregator fail.
 
 | Partition | Selected | Meaning |
 | --- | ---: | --- |
-| standalone | 520 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped |
+| standalone | 532 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped |
 | egress | 3 | the exact host-dependent namespace/nftables/CONNECT-proxy identities; only the capability-admitted `egress` lane executes them |
 | contract | 34 | four offline provider protocol binaries plus `bullet-test-simulation` |
 | family | 9 | five `transaction_demo` identities plus `heartbeat_stale`, `kill_retry`, `loop_sim`, and `synthetic_e2e` |
-| total | 566 | exact union of the four disjoint partitions above |
+| total | 578 | exact union of the four disjoint partitions above |
 
 `ops/ci/inventory-test.sh` independently lists all four partitions, requires
 every set to be nonzero, checks pairwise disjointness and exact union,
@@ -36,10 +36,11 @@ cargo nextest run --locked --workspace --run-ignored all --no-tests fail -E "$EG
 `ops/ci/inventory.sh`. Missing tools or unavailable unprivileged namespaces
 produce typed neutral 78; green means all three selected probes actually ran.
 
-`fast`, `contract`, and coverage export a checked nonexistent absolute
-`BULLET_GITD_BIN` sentinel. That overrides the product's canonical-family
-fallback, so accidentally selected or indirect daemon work fails instead of
-finding a sibling repository. The family lane is separate and fail-closed:
+`fast`, `contract`, and coverage remove both daemon path and digest variables.
+Product resolution has no sibling or sentinel fallback and returns typed
+`GITD_BINARY_UNPROVISIONED` or
+`GITD_BINARY_ADMISSION_REFUSED` before constructing a child command. The
+family lane is separate and fail-closed:
 
 ```bash
 BULLET_GITD_BIN=/canonical/absolute/path/to/bullet-gitd \
@@ -47,9 +48,14 @@ BULLET_GITD_SHA256=<lowercase-sha256> \
   bash scripts/ci-local.sh family
 ```
 
-The path must already be canonical, name a regular executable, and exist. Its
-bytes must match the supplied digest immediately before and after the family
-partition. The lane never falls back to `../bullet-git/target/...`. Family CI remains blocked
+The path must already be canonical, name a non-symlink regular executable, and
+exist. The runner streams the admitted native ELF into a bounded memfd, verifies
+its exact SHA-256, seals writes/growth/shrinkage, reads the seals back, and
+executes only that immutable Linux procfd; the wrapper separately checks the
+source digest immediately before and after the family partition. The path and
+digest are caller-declared component self-consistency, not authenticated
+provenance or release authority. The lane never falls back to
+`../bullet-git/target/...`. Family CI remains blocked
 until the Hub can provision immutable authenticated repository subjects and
 pass the exact daemon path.
 
@@ -57,7 +63,7 @@ pass the exact daemon path.
 
 | Lane | Scope |
 | --- | --- |
-| `fast` | exactly 520 standalone nextest identities, all executed with zero skipped |
+| `fast` | exactly 532 standalone nextest identities, all executed with zero skipped |
 | `lint` | rustfmt, all-target Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow policy, inventory/observation/nightly meta-tests |
 | `contract` | exactly 34 offline provider-contract and simulation tests |
 | `security` | current-tree gitleaks 8.21.2; full cargo-deny 0.19.8 advisories/bans/licenses/sources with independently proved RustSec freshness; zizmor 1.25.2 |

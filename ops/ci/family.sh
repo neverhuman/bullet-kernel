@@ -35,6 +35,7 @@ if [[ "$(sha256_file "$BULLET_GITD_BIN")" != "$BULLET_GITD_SHA256" ]]; then
   exit 1
 fi
 export BULLET_GITD_BIN
+export BULLET_GITD_SHA256
 run_partition_tests family family "$EXPECTED_FAMILY_TESTS" "$FAMILY_FILTER"
 if [[ "$(sha256_file "$BULLET_GITD_BIN")" != "$BULLET_GITD_SHA256" ]]; then
   refuse BULLET_GITD_DIGEST_MISMATCH after-family

@@ -9,8 +9,8 @@ use bullet_application::StoredGraph;
 use bullet_domain::{RunnerId, WorkPackageId};
 use bullet_harness_core::{AgentEvent, AgentSessionId, SessionHandle};
 use bullet_runner_core::{
-    gitd_available, run_attempt, AcquireRequest, AttemptConfig, AttemptOutcome, DirectLeaseClient,
-    MemoryJournal, MonotonicClock,
+    run_attempt, AcquireRequest, AttemptConfig, AttemptOutcome, DirectLeaseClient, MemoryJournal,
+    MonotonicClock,
 };
 use futures::StreamExt;
 use std::path::{Path, PathBuf};
@@ -40,9 +40,6 @@ pub async fn run_phase(
     fixture: &Fixture,
     data_dir: &Path,
 ) -> Result<RunnerPhase, String> {
-    if !gitd_available() {
-        return Err("GITD_BINARY_ABSENT: build bullet-gitd or set BULLET_GITD_BIN".into());
-    }
     let adapter = adapter_for("sim").ok_or("SIMULATOR_ADAPTER_UNAVAILABLE")?;
     let client = Arc::new(DirectLeaseClient::new(ledger.clone()));
     let journal = Arc::new(MemoryJournal::new());

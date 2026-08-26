@@ -4,7 +4,7 @@
 
 use bullet_application::launch_grant::{
     durable_lease_binding, LaunchGrantIssuer, LaunchGrantNonceStore, LaunchGrantRequest,
-    LedgerLaunchGrantIssuer, StoreNonceLedger, KERNEL_AUTHORITY_EPOCH, KERNEL_FREEZE_GENERATION,
+    LedgerLaunchGrantIssuer, StoreNonceLedger, GENESIS_AUTHORITY_EPOCH, GENESIS_FREEZE_GENERATION,
 };
 use bullet_application::{
     materialize_plan, LeaseService, Ledger, MemoryLedger, PlanInput, StoredGraph,
@@ -108,8 +108,16 @@ fn mint_binds_the_durable_lease_and_the_nonce_is_single_use() {
     );
     assert_eq!(durable.binding.attempt_fence, attempt.fence);
     assert_eq!(durable.binding.runner_epoch, attempt.runner_epoch);
-    assert_eq!(durable.binding.authority_epoch, KERNEL_AUTHORITY_EPOCH);
-    assert_eq!(durable.binding.freeze_generation, KERNEL_FREEZE_GENERATION);
+    assert_eq!(
+        durable.binding.authority_epoch,
+        ledger.current_authority().unwrap().authority_epoch()
+    );
+    assert_eq!(
+        durable.binding.freeze_generation,
+        ledger.current_authority().unwrap().freeze_generation()
+    );
+    assert_eq!(durable.binding.authority_epoch, GENESIS_AUTHORITY_EPOCH);
+    assert_eq!(durable.binding.freeze_generation, GENESIS_FREEZE_GENERATION);
     assert_eq!(durable.lease_expires_at_unix_ms, 15_000);
     let expectation = |live: bool, now_unix_ms: u64| LaunchGrantExpectation {
         now_unix_ms,

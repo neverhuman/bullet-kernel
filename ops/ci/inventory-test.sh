@@ -197,19 +197,29 @@ for standalone_lane in ops/ci/fast.sh ops/ci/contract.sh ops/ci/coverage.sh; do
     || { refuse SIBLING_GITD_GUARD_MISSING "$standalone_lane"; exit 1; }
 done
 deny_sibling_gitd
-[[ "$BULLET_GITD_BIN" == /* && ! -e "$BULLET_GITD_BIN" && ! -L "$BULLET_GITD_BIN" ]] \
-  || { refuse SIBLING_GITD_GUARD_INVALID "$BULLET_GITD_BIN"; exit 1; }
+[[ -z "${BULLET_GITD_BIN+x}" && -z "${BULLET_GITD_SHA256+x}" ]] \
+  || { refuse SIBLING_GITD_GUARD_INVALID "standalone lanes must leave daemon admission unprovisioned"; exit 1; }
 
 family_wrapper="$(<ops/ci/family.sh)"
 [[ "$family_wrapper" == *'BULLET_GITD_SHA256_REQUIRED'* \
-  && "$(grep -Fc 'sha256_file' ops/ci/family.sh)" -eq 2 ]] \
+  && "$(grep -Fc 'sha256_file' ops/ci/family.sh)" -eq 2 \
+  && "$family_wrapper" == *'export BULLET_GITD_SHA256'* ]] \
   || { refuse FAMILY_DAEMON_DIGEST_GUARD_MISSING ops/ci/family.sh; exit 1; }
+
+gitd_admission="$(<crates/runner/src/gitd/binary.rs)"
+for required in 'GITD_BINARY_UNPROVISIONED' 'BULLET_GITD_SHA256' 'OFlags::NOFOLLOW' \
+  'MemfdFlags::ALLOW_SEALING' 'SealFlags::WRITE' 'native ELF64 little-endian' '/proc/self/fd/' \
+  'sha256_and_count(&mut sealed_file)' \
+  'invalid_subjects_never_execute_canary' 'sealed_image_survives_same_inode_overwrite'; do
+  [[ "$gitd_admission" == *"$required"* ]] \
+    || { refuse PRODUCT_DAEMON_ADMISSION_GUARD_MISSING "$required"; exit 1; }
+done
 
 search_roots=()
 for candidate in apps/*/tests crates/*/tests tests; do
   [[ -d "$candidate" ]] && search_roots+=("$candidate")
 done
-rg -l 'require_gitd\(\)|BULLET_GITD_BIN|bullet-git/target/(debug|release)/bullet-gitd' \
+rg -l 'require_gitd\(\)|gitd_binary\(\)|BULLET_GITD_BIN|bullet-git/target/(debug|release)/bullet-gitd' \
   "${search_roots[@]}" | sort -u >"$test_root/actual-family-sources"
 printf '%s\n' "${FAMILY_TEST_SOURCES[@]}" | sort -u >"$test_root/expected-family-sources"
 if ! cmp -s "$test_root/expected-family-sources" "$test_root/actual-family-sources"; then
@@ -218,4 +228,4 @@ if ! cmp -s "$test_root/expected-family-sources" "$test_root/actual-family-sourc
   exit 1
 fi
 
-log "inventory passed: 566 total = 520 standalone + 3 egress + 34 contract + 9 family; fast has zero ignored tests"
+log "inventory passed: 578 total = 532 standalone + 3 egress + 34 contract + 9 family; fast has zero ignored tests"

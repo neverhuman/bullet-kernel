@@ -18,21 +18,21 @@ re-exports them), and the demo. `crates/adapters` owns SQLite (WAL,
 `Ledger`, runs no conformance, and reports `NotConfigured` without
 `DATABASE_URL`.
 
-The current `AuthorityToken` is an unsigned legacy in-process value, never a
-mutation capability. Kernel typed ids are prefix plus 64 lowercase hex
+The current `AuthorityToken` is still an unsigned legacy in-process value, never
+a mutation capability. Kernel typed ids are prefix plus 64 lowercase hex
 (`crates/domain/src/ids.rs`), while the frozen wire authority contract still
-requires different prefixes for some subjects. Lease and Attempt rows lack
-durable configuration/policy/routing/provider generations, and the legacy
-token still contains placeholder configuration, policy, and routing digests.
-The Kernel does have an admitted PASETO v4.public verifier for launch grants
+requires different prefixes for some subjects. Lease and Attempt rows now persist
+durable configuration/policy/routing/provider generations, authority epoch,
+and freeze generation through a singleton `authority_revisions` row.
+Grants now bind against `Ledger::current_authority()` rather than hard-coded
+constants, so durable rows can evolve with policy and provider claims.
+The kernel has an admitted PASETO v4.public verifier for launch grants
 (`crates/harness-core/src/launch_grant/verify.rs`, below) and a quarantined
 lease-transport permit verifier (`crates/harness-core/src/lease_transport.rs`),
-but grants bind the constant `KERNEL_AUTHORITY_EPOCH = 1` and
-`KERNEL_FREEZE_GENERATION = 0` because no durable epoch or freeze counter
-exists. V1-S1 wire consumption and normalized durable subject truth must land
-before a final-authority decision can exist. Until then, the online
-active-lease check is an observation only and unsigned authority stays
-refused.
+but production authority remains an online gate: V1-S1 wire consumption and
+normalized durable subject truth still need the remaining release proofs.
+Until then, the online active-lease check is an observation only and unsigned
+authority stays refused.
 
 SQLite maintenance is an offline boundary. `bullet farm backup` uses SQLite's
 online backup API, validates exact schema, foreign keys, and integrity, then

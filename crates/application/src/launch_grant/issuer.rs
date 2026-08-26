@@ -17,11 +17,11 @@ use bullet_harness_core::HarnessError;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-/// Kernel authority epoch bound into every grant until a durable epoch
-/// counter exists. Bumping it invalidates every outstanding grant.
-pub const KERNEL_AUTHORITY_EPOCH: u64 = 1;
-/// Kernel freeze generation; no freeze machinery exists, so it is zero.
-pub const KERNEL_FREEZE_GENERATION: u64 = 0;
+/// Initial durable epoch written once into an empty `authority_revisions` row.
+/// Grant minting reads [`crate::Ledger::current_authority`], never this constant.
+pub const GENESIS_AUTHORITY_EPOCH: u64 = 1;
+/// Initial freeze generation written with the genesis authority row.
+pub const GENESIS_FREEZE_GENERATION: u64 = 0;
 const BUDGET_RESERVATION_DOMAIN: &str = "launch-grant.budget-reservation.v1alpha1";
 
 /// Caller-supplied half of a mint request. Lease facts are never accepted.
@@ -154,6 +154,7 @@ pub fn durable_lease_binding<L: Ledger>(
         })
         .ok_or_else(|| refused("attempt variant is not in any durable graph"))?;
     let lease_expires_at_unix_ms = rfc3339_unix_ms(&lease.expires_at)?;
+    let authority = ledger.current_authority()?;
     Ok(DurableLeaseBinding {
         binding: LeaseBinding {
             mission_id: graph.mission.id.to_string(),
@@ -167,8 +168,8 @@ pub fn durable_lease_binding<L: Ledger>(
             runner_epoch: attempt.runner_epoch,
             workspace_id: attempt.workspace_id.to_string(),
             workspace_nonce_digest: workspace_nonce_digest(&attempt.workspace_nonce)?,
-            authority_epoch: KERNEL_AUTHORITY_EPOCH,
-            freeze_generation: KERNEL_FREEZE_GENERATION,
+            authority_epoch: authority.authority_epoch(),
+            freeze_generation: authority.freeze_generation(),
         },
         lease_expires_at_unix_ms,
     })

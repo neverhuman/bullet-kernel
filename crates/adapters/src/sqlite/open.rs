@@ -44,6 +44,7 @@ pub(super) fn initialized(path: &Path) -> Result<AdmittedConnection, LedgerError
             .map_err(store)?;
         migrations::enable_foreign_keys(&admitted.connection)?;
         migrations::verify_or_initialize(&mut admitted.connection)?;
+        super::authority::ensure_genesis(&admitted.connection)?;
         configure_durability(&admitted.connection)?;
         postflight(&admitted)
     })();

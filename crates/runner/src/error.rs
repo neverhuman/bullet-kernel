@@ -39,6 +39,18 @@ pub enum RunnerError {
         /// BulletGit's fail-closed detail.
         message: String,
     },
+    /// No immutable BulletGit daemon subject was configured.
+    #[error("gitd binary is unprovisioned: {variable} is missing or empty")]
+    GitdBinaryUnprovisioned {
+        /// Environment-backed configuration field that was absent.
+        variable: String,
+    },
+    /// The configured BulletGit daemon subject failed executable admission.
+    #[error("gitd binary admission refused: {reason}")]
+    GitdBinaryAdmission {
+        /// Stable, operator-actionable refusal detail.
+        reason: String,
+    },
     /// Provider adapter failure.
     #[error(transparent)]
     Harness(#[from] HarnessError),
@@ -96,6 +108,8 @@ impl RunnerError {
             Self::ScopeDenied { .. } => "SCOPE_DENIED",
             Self::Gitd { .. } => "GITD_REFUSED",
             Self::AuthorityContractUnavailable { .. } => "AUTHORITY_CONTRACT_UNAVAILABLE",
+            Self::GitdBinaryUnprovisioned { .. } => "GITD_BINARY_UNPROVISIONED",
+            Self::GitdBinaryAdmission { .. } => "GITD_BINARY_ADMISSION_REFUSED",
             Self::Harness(err) => err.reason_code(),
             Self::Lease { .. } => "LEASE_REFUSED",
             Self::Gate { .. } => "GATE_FAILED",
@@ -158,6 +172,17 @@ mod tests {
             }
             .reason_code(),
             "AUTHORITY_CONTRACT_UNAVAILABLE"
+        );
+        assert_eq!(
+            RunnerError::GitdBinaryUnprovisioned {
+                variable: "BULLET_GITD_BIN".into(),
+            }
+            .reason_code(),
+            "GITD_BINARY_UNPROVISIONED"
+        );
+        assert_eq!(
+            RunnerError::GitdBinaryAdmission { reason: "x".into() }.reason_code(),
+            "GITD_BINARY_ADMISSION_REFUSED"
         );
         assert_eq!(
             RunnerError::GateSelection { reason: "x".into() }.reason_code(),

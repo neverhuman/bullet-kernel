@@ -1,20 +1,8 @@
 //! Product scaffold conformance while production BulletGit authority is unavailable.
 
+use bullet_runner_core::gitd_binary;
 use std::path::PathBuf;
 use std::process::Command;
-
-fn gitd_binary() -> PathBuf {
-    std::env::var_os("BULLET_GITD_BIN").map_or_else(
-        || {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .ancestors()
-                .nth(3)
-                .expect("Bullet Farm family root")
-                .join("bullet-git/target/debug/bullet-gitd")
-        },
-        PathBuf::from,
-    )
-}
 
 fn verifier_sibling() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bullet"))
@@ -25,10 +13,12 @@ fn verifier_sibling() -> PathBuf {
 
 #[test]
 fn synthetic_scaffold_records_typed_authority_refusal_without_evidence() {
-    assert!(
-        gitd_binary().is_file(),
-        "GITD_BINARY_ABSENT: build bullet-gitd or set BULLET_GITD_BIN"
-    );
+    gitd_binary().unwrap_or_else(|error| {
+        panic!(
+            "{}: family lane must admit BULLET_GITD_BIN with BULLET_GITD_SHA256",
+            error.reason_code()
+        )
+    });
     let verifier = std::env::var_os("BULLET_VERIFIER_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(verifier_sibling);

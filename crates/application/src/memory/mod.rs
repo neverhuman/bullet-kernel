@@ -11,6 +11,7 @@ mod materialization;
 mod projections;
 
 use crate::authority::ActiveLeaseSubject;
+use crate::authority_revision::NormalizedAuthority;
 use crate::commands::{CommandRecord, CommandRequest};
 use crate::effect_state::EffectState;
 use crate::effects::{EffectIntentRecord, EffectReceiptRecord};
@@ -50,6 +51,7 @@ pub struct MemoryLedger {
     launch_grant_nonces: BTreeMap<String, StoredLaunchGrantNonce>,
     lease_transport_grants: BTreeMap<String, LeaseGrant>,
     lease_transport_nonces: BTreeMap<String, MemoryTransportNonce>,
+    authority: Option<NormalizedAuthority>,
     fail_after_writes: Option<u32>,
     simulation_clock_millis: i64,
 }
@@ -492,6 +494,13 @@ impl Ledger for MemoryLedger {
 
     fn effect_receipts(&self, intent: &EffectId) -> Result<Vec<EffectReceiptRecord>, LedgerError> {
         self.effect_receipts_impl(intent)
+    }
+
+    fn current_authority(&self) -> Result<NormalizedAuthority, LedgerError> {
+        Ok(self
+            .authority
+            .clone()
+            .unwrap_or_else(NormalizedAuthority::genesis))
     }
 
     fn unresolved_effects(&self) -> Result<Vec<EffectIntentRecord>, LedgerError> {

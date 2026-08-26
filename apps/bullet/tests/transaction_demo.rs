@@ -6,12 +6,13 @@ use bullet_harness_core::transaction_proof::{
     verify_transaction_component, TransactionComponentSigningKey, TransactionComponentSubject,
     TRANSACTION_COMPONENT_CLASS, TRANSACTION_COMPONENT_SCHEMA_VERSION, TRANSACTION_COMPONENT_TRUST,
 };
-use bullet_runner_core::gitd_binary;
-use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use bullet_runner_core::{gitd_binary, GitdSession};
+use serde_json::json;
 
-const TRANSACTION_DEMO_SOURCE: &str = include_str!("../src/bin/transaction_demo.rs");
+const TRANSACTION_DEMO_ROOT_SOURCE: &str = include_str!("../src/bin/transaction_demo.rs");
+const TRANSACTION_DEMO_SOURCE: &str = include_str!("../src/bin/transaction_demo/app.rs");
+const TRANSACTION_DEMO_SUPPORT_SOURCE: &str =
+    include_str!("../src/bin/transaction_demo/support.rs");
 
 fn subject() -> TransactionComponentSubject {
     TransactionComponentSubject {
@@ -46,8 +47,22 @@ fn signed_transaction_component_roundtrip() {
     assert!(TRANSACTION_DEMO_SOURCE.contains(".prefix(\"bullet-txn.\")"));
     assert!(!TRANSACTION_DEMO_SOURCE.contains("std::process::id()"));
     assert!(!TRANSACTION_DEMO_SOURCE.contains("fn free_port("));
-    assert!(TRANSACTION_DEMO_SOURCE.contains(".arg(\"127.0.0.1:0\")"));
-    assert!(TRANSACTION_DEMO_SOURCE.contains("impl Drop for FarmdGuard"));
+    assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("mod transaction_demo"));
+    assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("mod app;"));
+    assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("mod support;"));
+    assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("app::main_entry()"));
+    assert!(!TRANSACTION_DEMO_ROOT_SOURCE.contains("#[path"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains(".arg(\"127.0.0.1:0\")"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains(".arg(\"--fixture-lease-peer-registration\")"));
+    assert!(TRANSACTION_DEMO_SOURCE.contains("fs::Permissions::from_mode(0o710)"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("fs::metadata(\"/proc/self\")"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("SignedLeaseRpcClient::new_admitted("));
+    assert!(!TRANSACTION_DEMO_SUPPORT_SOURCE.contains("SignedLeaseRpcClient::new("));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("struct LeaseHeartbeatGuard"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("Duration::from_secs(3)"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("MissedTickBehavior::Delay"));
+    assert!(TRANSACTION_DEMO_SOURCE.contains("heartbeat.stop().await?"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("impl Drop for FarmdGuard"));
     assert!(TRANSACTION_DEMO_SOURCE.contains("farmd.stop()?"));
 }
 
@@ -82,51 +97,34 @@ fn zero_tests_never_satisfy_a_blocking_gate() {
     assert_eq!(REASON_ZERO_TESTS, "ZERO_TESTS");
 }
 
-#[test]
-fn production_gitd_constructor_child_still_refuses_clone() {
-    let binary = gitd_binary();
-    assert!(
-        binary.is_file(),
-        "family proof requires BULLET_GITD_BIN to resolve an existing daemon: {}",
-        binary.display()
-    );
+#[tokio::test]
+async fn production_gitd_constructor_child_still_refuses_clone() {
+    let binary = gitd_binary().expect("family proof requires an admitted production daemon");
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut child = Command::new(&binary)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env("HOME", temp.path())
-        .spawn()
-        .expect("spawn production gitd");
-    let mut stdin = child.stdin.take().expect("stdin");
-    let request = json!({
-        "id": 1,
-        "method": "clone",
-        "token": {
-            "organization_id": "org_x",
-            "variant_id": format!("var_{}", "2".repeat(64)),
-            "attempt_id": format!("atm_{}", "1".repeat(64)),
-            "attempt_fence": 1,
-            "workspace_nonce": [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],
-        },
-        "params": {
-            "source_repo": "/does/not/matter",
-            "base_sha": format!("sha1:{}", "a".repeat(40)),
-            "root": temp.path().join("farm").display().to_string(),
-            "created_at": "2026-08-24T00:00:00Z",
-            "allowed_prefixes": ["src"],
-            "commit_date": "2026-08-24T00:00:00+00:00"
-        }
+    let token = json!({
+        "organization_id": "org_x",
+        "variant_id": format!("var_{}", "2".repeat(64)),
+        "attempt_id": format!("atm_{}", "1".repeat(64)),
+        "attempt_fence": 1,
+        "workspace_nonce": [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],
     });
-    writeln!(stdin, "{request}").expect("write");
-    stdin.flush().expect("flush");
-    drop(stdin);
-    let mut line = String::new();
-    BufReader::new(child.stdout.take().expect("stdout"))
-        .read_line(&mut line)
-        .expect("read");
-    let response: Value = serde_json::from_str(&line).expect("json");
-    assert_eq!(response["err"]["code"], "AUTHORITY_CONTRACT_UNAVAILABLE");
-    let _ = child.kill();
-    let _ = child.wait();
+    let mut session = GitdSession::spawn_with(binary, std::iter::empty::<&str>(), token)
+        .await
+        .expect("spawn production gitd");
+    let error = session
+        .invoke(
+            "clone",
+            json!({
+                "source_repo": "/does/not/matter",
+                "base_sha": format!("sha1:{}", "a".repeat(40)),
+                "root": temp.path().join("farm").display().to_string(),
+                "created_at": "2026-08-24T00:00:00Z",
+                "allowed_prefixes": ["src"],
+                "commit_date": "2026-08-24T00:00:00+00:00"
+            }),
+        )
+        .await
+        .expect_err("production authority remains unavailable");
+    assert_eq!(error.reason_code(), "AUTHORITY_CONTRACT_UNAVAILABLE");
+    let _ = session.kill().await;
 }

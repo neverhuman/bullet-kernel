@@ -1,9 +1,12 @@
 //! Farmd-internal Unix JSON-RPC for Kernel-minted lease transport.
 //!
 //! Not a public `/api/v1` route. The operator signing key stays in this process.
-//! The current owner-only socket checks a self-asserted hello binding but does
-//! not yet bind it to `SO_PEERCRED`; product Runner admission therefore stays
-//! disabled.
+//! Each accepted session is bound to `SO_PEERCRED` and the listening socket's
+//! device/inode identity. Public `/v1/leases/*` stay absent.
+
+mod peer;
+
+pub use peer::{LeasePeerRegistry, RegisteredRunnerPeer};
 
 use crate::api::SharedState;
 use bullet_application::lease_transport::{
@@ -14,11 +17,12 @@ use bullet_application::{LeaseGrant, LeaseService, Ledger, StoredGraph};
 use bullet_domain::{RunnerId, VariantId, WorkPackageId};
 use serde::{Deserialize, Serialize};
 use std::io::{Error, ErrorKind};
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixStream;
+
+use peer::{admit_peer, admit_runner, bind_admitted_socket, BoundSocketIdentity, PeerCred};
 
 const PROTO: &str = "bullet-farm.lease-transport.rpc.v1";
 const HELLO_MAX: usize = 4_096;
@@ -33,68 +37,36 @@ pub async fn serve(
     socket: PathBuf,
     state: SharedState,
     transport: Arc<KernelLeaseTransport>,
+    registry: Arc<LeasePeerRegistry>,
 ) -> Result<(), Error> {
-    let listener = bind_admitted_socket(&socket)?;
+    let (listener, bound) = bind_admitted_socket(&socket, &registry)?;
     loop {
         let (stream, _) = listener.accept().await?;
+        let peer = match admit_peer(&socket, &listener, &bound, &stream) {
+            Ok(peer) => peer,
+            Err(error) => {
+                tracing::warn!("lease-transport peer refused: {error}");
+                continue;
+            }
+        };
         let state = Arc::clone(&state);
         let transport = Arc::clone(&transport);
+        let registry = Arc::clone(&registry);
         tokio::spawn(async move {
-            if let Err(error) = handle(stream, state, transport).await {
+            if let Err(error) = handle(stream, state, transport, registry, bound, peer).await {
                 tracing::warn!("lease-transport session: {error}");
             }
         });
     }
 }
 
-fn bind_admitted_socket(path: &Path) -> Result<UnixListener, Error> {
-    let parent = path.parent().ok_or_else(|| {
-        Error::new(
-            ErrorKind::InvalidInput,
-            "lease-transport socket needs a parent directory",
-        )
-    })?;
-    let meta = std::fs::metadata(parent)?;
-    if !meta.is_dir() {
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
-            "lease-transport parent must be a directory",
-        ));
-    }
-    if meta.permissions().mode() & 0o777 != 0o700 {
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
-            "lease-transport parent must be mode 0700",
-        ));
-    }
-    let self_uid = std::fs::metadata("/proc/self")
-        .map(|info| info.uid())
-        .unwrap_or(u32::MAX);
-    if meta.uid() != self_uid {
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
-            "lease-transport parent must be owned by the farmd effective user",
-        ));
-    }
-    if path.exists() {
-        let existing = std::fs::metadata(path)?;
-        if !existing.file_type().is_socket() {
-            return Err(Error::new(
-                ErrorKind::AlreadyExists,
-                "refusing to unlink a non-socket lease-transport path",
-            ));
-        }
-        std::fs::remove_file(path)?;
-    }
-    let listener = UnixListener::bind(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(listener)
-}
-
 async fn handle(
     mut stream: UnixStream,
     state: SharedState,
     transport: Arc<KernelLeaseTransport>,
+    registry: Arc<LeasePeerRegistry>,
+    bound: BoundSocketIdentity,
+    peer: PeerCred,
 ) -> Result<(), Error> {
     let hello: Hello = serde_json::from_slice(&read_line(&mut stream, HELLO_MAX).await?)
         .map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
@@ -109,11 +81,27 @@ async fn handle(
     }
     let runner_id = RunnerId::parse(&hello.runner_id)
         .map_err(|err| Error::new(ErrorKind::InvalidData, err.to_string()))?;
+    if admit_runner(&registry, &runner_id, hello.runner_epoch, &peer).is_err() {
+        return write_err(
+            &mut stream,
+            None,
+            "LEASE_TRANSPORT_PEER_UNREGISTERED",
+            "Runner ID/epoch is not registered for the connected peer UID",
+        )
+        .await;
+    }
     write_json(
         &mut stream,
         &HelloAck {
             ok: true,
             proto: PROTO,
+            peer_uid: peer.uid,
+            peer_gid: peer.gid,
+            peer_pid: peer.pid,
+            socket_dev: bound.socket_dev(),
+            socket_ino: bound.socket_ino(),
+            listener_dev: bound.listener_dev(),
+            listener_ino: bound.listener_ino(),
         },
     )
     .await?;
@@ -422,6 +410,13 @@ struct Hello {
 struct HelloAck {
     ok: bool,
     proto: &'static str,
+    peer_uid: u32,
+    peer_gid: u32,
+    peer_pid: i32,
+    socket_dev: u64,
+    socket_ino: u64,
+    listener_dev: u64,
+    listener_ino: u64,
 }
 
 #[derive(Deserialize)]

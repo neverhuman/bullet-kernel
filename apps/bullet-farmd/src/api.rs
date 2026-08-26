@@ -2,14 +2,13 @@
 
 pub(crate) mod meta;
 pub(crate) mod portal;
+mod routes;
 mod safe_integer;
-use crate::commands::{self, reconcile};
-use crate::{errors::ApiError, projections};
+use crate::errors::ApiError;
 use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::sse::{Event as SseFrame, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use bullet_adapters::SqliteLedger;
 use bullet_application::{derive_receipt, Ledger, LedgerError, LedgerEvent, OutboxItem};
@@ -107,28 +106,7 @@ pub fn daemon(
         auth: Mutex::new(auth.map_err(LedgerError::Store)?),
         reaper: crate::reaper::ReapObservation::default(),
     });
-    let router = Router::new()
-        .route("/health", get(meta::health))
-        .route("/openapi.yaml", get(meta::openapi))
-        .route("/api/v1/missions", get(list_missions))
-        .route("/api/v1/missions/{id}", get(get_mission))
-        .route("/api/v1/demo", get(get_demo))
-        .route("/api/v1/demo/run", post(removed_demo_mutation))
-        .route("/api/v1/auth/bootstrap", post(crate::auth::bootstrap))
-        .route("/api/v1/commands", post(commands::submit))
-        .route("/api/v1/commands/{id}", get(commands::get))
-        .route("/internal/v1/commands/{id}/reconcile", post(reconcile))
-        .route("/api/v1/outbox", get(outbox))
-        .route("/api/v1/events", get(events))
-        .route("/api/v1/ready", get(crate::leases::next_ready))
-        .route("/api/v1/fleet", get(projections::fleet))
-        .route("/api/v1/sessions", get(projections::sessions))
-        .route("/api/v1/context-lineage", get(projections::context_lineage))
-        .route("/api/v1/merge-rail", get(projections::merge_rail))
-        .route("/api/v1/quality-lab", get(projections::quality_lab))
-        .route("/api/v1/audit", get(projections::audit))
-        .route("/v1", any(retired_api_version))
-        .route("/v1/{*path}", any(retired_api_version))
+    let router = routes::router()
         .merge(portal::router())
         .fallback(api_not_found)
         .with_state(Arc::clone(&state));

@@ -1,6 +1,6 @@
 use super::{migration_checksum, Migration, CREATE_METADATA, MIGRATIONS};
 use crate::sqlite::SqliteLedger;
-use bullet_application::LedgerError;
+use bullet_application::{Ledger, LedgerError, NormalizedAuthority};
 use bullet_domain::{EffectId, EffectReceiptId};
 use rusqlite::{params, Connection, Error};
 use tempfile::TempDir;
@@ -82,6 +82,11 @@ fn fresh_creation_records_exact_checksums_and_reopens() {
         assert_eq!(row.2, migration_checksum(migration));
     }
 
+    assert_eq!(
+        ledger.current_authority().unwrap(),
+        NormalizedAuthority::genesis()
+    );
+
     assert!(ledger
         .conn
         .execute(
@@ -154,13 +159,10 @@ fn fresh_creation_records_exact_checksums_and_reopens() {
     ledger
         .conn
         .execute(
-            "INSERT INTO authority_revisions (
-               singleton, graph_revision, workspace_generation, scope_digest,
-               policy_generation, routing_generation, authority_epoch, freeze_generation
-             ) VALUES (1, 2, 1, ?1, 1, 1, 1, 0)",
-            ["a".repeat(64)],
+            "UPDATE authority_revisions SET graph_revision = 2 WHERE singleton = 1",
+            [],
         )
-        .expect("valid normalized authority");
+        .expect("monotonic advance from genesis");
     assert!(ledger
         .conn
         .execute(

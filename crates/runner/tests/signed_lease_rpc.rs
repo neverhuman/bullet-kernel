@@ -5,7 +5,7 @@ use std::mem::size_of_val;
 
 #[test]
 fn client_has_no_signing_key_field() {
-    // The type is constructed from a socket and runner identity only.
+    // The unconfigured constructor stores no signing key or caller-selected UID.
     // A signing-key argument would add at least a 64-byte secret field.
     let client = SignedLeaseRpcClient::new(
         "/tmp/unused.sock",

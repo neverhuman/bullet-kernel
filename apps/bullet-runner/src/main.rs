@@ -25,9 +25,12 @@ const LEASE_TRANSPORT_REPAIR: &str = "product Runner dispatch requires an authen
 #[derive(Parser)]
 #[command(name = "bullet-runner", about = "Bullet Farm attempt runner")]
 struct Args {
-    /// farmd control-plane base URL.
+    /// farmd control-plane base URL. Not a lease-transport admission path.
     #[arg(long, default_value = "http://127.0.0.1:7420")]
     farmd: String,
+    /// Reserved Kernel socket input. Product admission remains unavailable.
+    #[arg(long)]
+    lease_socket: Option<PathBuf>,
     /// Exact runner identity (run_<32hex>).
     #[arg(long)]
     runner_id: String,
@@ -130,12 +133,9 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> ExitCode {
-    // Keep the quarantined attempt path compiler-checked without making it reachable from the
-    // product CLI. Re-enable only after the lease transport has mutual process authentication,
-    // durable request/result reconciliation, and restart-safe read-back.
-    let _preserved_adapter = adapter_for;
-    let _preserved_runner_id_parser = parse_runner_id;
-    let _preserved_attempt_path = run_quarantined;
+    // Both component clients remain compiler-checked but unreachable from the
+    // product CLI until durable runner registration supplies the two pinned UIDs.
+    let _preserved_http_path = run_quarantined;
     let _ = args;
     let (code, message) = lease_transport_refusal();
     eprintln!("bullet-runner: {code}: {message}");
@@ -164,7 +164,7 @@ async fn run_quarantined(args: Args) -> ExitCode {
         );
         return ExitCode::from(2);
     };
-    let client = match HttpLeaseClient::new(&args.farmd) {
+    let client: Arc<dyn LeaseClient> = match HttpLeaseClient::new(&args.farmd) {
         Ok(client) => Arc::new(client),
         Err(err) => {
             eprintln!("bullet-runner: {err}");
@@ -209,7 +209,7 @@ async fn run_quarantined(args: Args) -> ExitCode {
 
 async fn execute(
     args: Args,
-    client: Arc<HttpLeaseClient>,
+    client: Arc<dyn LeaseClient>,
     adapter: Arc<dyn HarnessAdapter>,
     journal: Arc<SupervisorJournal>,
     runner_id: RunnerId,
@@ -255,6 +255,7 @@ async fn execute(
 mod tests {
     use super::{lease_transport_refusal, parse_runner_id, run, Args};
     use bullet_domain::RunnerId;
+    use std::path::PathBuf;
     use std::process::ExitCode;
 
     #[tokio::test]
@@ -297,10 +298,58 @@ mod tests {
             data_dir: journal.clone(),
             idempotency_key: None,
             ttl_seconds: 0,
+            lease_socket: None,
         })
         .await;
         assert_eq!(status, ExitCode::from(2));
         assert!(!workspace.exists(), "workspace must remain absent");
         assert!(!journal.exists(), "supervisor journal must remain absent");
+
+        let relative = run(Args {
+            farmd: "http://127.0.0.1:9".into(),
+            runner_id: expected.as_str().into(),
+            runner_epoch: 1,
+            provider: "sim".into(),
+            workspace_root: workspace.clone(),
+            source_repo: root.join("missing-source"),
+            base_sha: "a".repeat(40),
+            objective: "must not dispatch".into(),
+            gate_ids: vec!["gate".into()],
+            scope: vec!["src".into()],
+            data_dir: journal.clone(),
+            idempotency_key: None,
+            ttl_seconds: 15,
+            lease_socket: Some(PathBuf::from("relative/lease.sock")),
+        })
+        .await;
+        assert_eq!(relative, ExitCode::from(2));
+        assert!(
+            !workspace.exists(),
+            "relative socket must not create a workspace"
+        );
+
+        let configured_but_unregistered = run(Args {
+            farmd: "http://127.0.0.1:9".into(),
+            runner_id: expected.as_str().into(),
+            runner_epoch: 1,
+            provider: "sim".into(),
+            workspace_root: workspace.clone(),
+            source_repo: root.join("missing-source"),
+            base_sha: "a".repeat(40),
+            objective: "must not dispatch".into(),
+            gate_ids: vec!["gate".into()],
+            scope: vec!["src".into()],
+            data_dir: journal.clone(),
+            idempotency_key: None,
+            ttl_seconds: 15,
+            lease_socket: Some(root.join("lease.sock")),
+        })
+        .await;
+        assert_eq!(configured_but_unregistered, ExitCode::from(2));
+        assert!(
+            !workspace.exists(),
+            "socket input must not create a workspace"
+        );
+        assert!(!journal.exists(), "socket input must not create a journal");
     }
 }

@@ -33,44 +33,57 @@ Evidence classes follow
 
 ## farmd routes
 
-Source of truth: `build_router` in `apps/bullet-farmd/src/api.rs`. Every route
-below is mounted there and every mounted route is below; anything else answers
-the router fallback `NOT_FOUND`. `contracts/openapi.yaml` documents all of them
-except the internal reconciler, and `bullet contracts check` gates the
-generated client against that YAML.
+Source of truth: the closed method-token catalogs in
+`apps/bullet-farmd/src/api/routes.rs` and `api/portal.rs`. Each catalog token
+generates both its Axum mount and the marked projection below; the docs lane
+compares that projection and its explicit OpenAPI membership exactly. Anything
+else answers the router fallback `NOT_FOUND`. `bullet contracts check` also
+gates the generated client against the complete OpenAPI document.
 
+<!-- bullet-farmd-route-table:v1:start -->
 | Method | Path | In `openapi.yaml` | Meaning |
 | --- | --- | --- | --- |
 | GET | `/health` | yes | liveness `{"status":"ok"}` |
 | GET | `/openapi.yaml` | yes | the embedded contract bytes |
 | GET | `/api/v1/missions` | yes | mission list snapshot |
-| GET | `/api/v1/missions/{id}` | yes | one mission; `X-Bullet-As-Of-Sequence` watermark |
+| GET | `/api/v1/missions/{id}` | yes | one mission with its sequence watermark |
 | GET | `/api/v1/demo` | yes | demo receipt re-derived from ledger rows |
-| POST | `/api/v1/demo/run` | yes | `410 MUTATION_ENDPOINT_REMOVED`; submit a `run_demo` command instead |
-| POST | `/api/v1/auth/bootstrap` | yes | one-time local-browser session bootstrap (600 s token, 8 h session, CSRF header) |
-| POST | `/api/v1/commands` | yes | authenticated command submission; records `PENDING` |
+| POST | `/api/v1/demo/run` | yes | retired direct mutation; submit a `run_demo` command |
+| POST | `/api/v1/auth/bootstrap` | yes | one-time local-browser session bootstrap |
+| POST | `/api/v1/commands` | yes | authenticated command submission records `PENDING` |
 | GET | `/api/v1/commands/{id}` | yes | command status |
-| POST | `/internal/v1/commands/{id}/reconcile` | no | worker-bearer reconciler; inert without `--worker-token-file`; settles `UNKNOWN` or `FAILED` only |
+| POST | `/internal/v1/commands/{id}/reconcile` | no | worker-bearer reconciler, outside the public contract |
 | GET | `/api/v1/outbox` | yes | outbox snapshot |
-| GET | `/api/v1/events` | yes | SSE ledger events with bounded replay (64 per batch, 1024 max) |
-| GET | `/api/v1/ready` | yes | next ready work package; `X-Bullet-As-Of-Sequence` watermark |
-| GET | `/api/v1/fleet` | yes | §25 projection; one atomic ledger snapshot |
-| GET | `/api/v1/sessions` | yes | §25 projection; one atomic ledger snapshot |
-| GET | `/api/v1/merge-rail` | yes | §25 projection; one atomic ledger snapshot |
-| GET | `/api/v1/quality-lab` | yes | §25 projection; one atomic ledger snapshot |
-| GET | `/api/v1/audit` | yes | §25 projection; one atomic ledger snapshot |
+| GET | `/api/v1/events` | yes | SSE ledger events with bounded replay |
+| GET | `/api/v1/ready` | yes | next ready work package with its sequence watermark |
+| GET | `/api/v1/fleet` | yes | fleet projection from one atomic ledger snapshot |
+| GET | `/api/v1/sessions` | yes | sessions projection from one atomic ledger snapshot |
+| GET | `/api/v1/context-lineage` | yes | context-lineage projection from one atomic ledger snapshot |
+| GET | `/api/v1/merge-rail` | yes | merge-rail projection from one atomic ledger snapshot |
+| GET | `/api/v1/quality-lab` | yes | quality-lab projection from one atomic ledger snapshot |
+| GET | `/api/v1/audit` | yes | audit projection from one atomic ledger snapshot |
+| ANY | `/v1` | no | retired operator API root; always `410 API_VERSION_RETIRED` |
+| ANY | `/v1/{*path}` | no | retired operator API subtree; always `410 API_VERSION_RETIRED` |
+| GET | `/` | no | embedded-portal entry point; absent without the feature |
+| GET | `/index.html` | no | embedded-portal entry point alias; absent without the feature |
+| GET | `/assets/{file}` | no | content-hashed embedded-portal asset; absent without the feature |
+<!-- bullet-farmd-route-table:v1:end -->
 
 No `/api/v1/leases/*` or `/api/v1/attempts/advance` route is mounted. Runner mutation
-RPC stays off the browser API until a signed lease transport is exposed; the
-committed `SignedLeaseService` is in-process only.
+RPC stays off the browser API. A signed UDS transport exists only behind farmd's
+debug-only fixture peer registration; the product `bullet-runner` still refuses
+with `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, workspace, provider,
+or Gitd activity because no durable workload peer registry is admitted.
 
 ## Quick start
 
 ```bash
-just setup
 just fast
 BULLET_DATA_DIR=./target/demo cargo run -p bullet --bin bullet -- demo
 ```
+
+Run `just setup` only if this checkout has not yet been prepared (toolchain
+and repo-side dependencies).
 
 The demo receipt is re-derived from ledger rows on every run and proves the
 permanent fence advanced (fence 1, then fence 2 on the same variant), that a
@@ -109,12 +122,12 @@ or an authority recovery procedure.
 Every lane is one script under `ops/ci/`, reachable as `just <lane>` or
 `bash scripts/ci-local.sh <lane>`.
 
-The exact 566-test inventory is disjoint: 520 standalone, three host-dependent
+The exact 578-test inventory is disjoint: 532 standalone, three host-dependent
 egress, 34 contract, and nine family identities.
 
 | Lane | Command | Contents | Evidence class |
 | --- | --- | --- | --- |
-| fast | `just fast` | digest-bound 520-test standalone partition with all 520 executed and zero skipped; a checked nonexistent daemon sentinel prevents sibling fallback | `COMPONENT_PROOF` |
+| fast | `just fast` | digest-bound 532-test standalone partition with all 532 executed and zero skipped; both Gitd binary variables are unset so product resolution fails closed | `COMPONENT_PROOF` |
 | lint | `just lint` | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, and inventory/workflow/observation/nightly meta-tests | hygiene gate; no evidence class |
 | contract | `just contract` | exactly 34 offline provider-protocol and simulation tests, executed once; no sibling daemon | `COMPONENT_PROOF` / `SYNTHETIC_PROOF` |
 | security | `just security` | gitleaks (no-git); `cargo deny fetch db` plus a lane-side freshness proof of the RustSec advisory database (refuses at 14 days); `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor --offline --no-ignores --strict-collection .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails | hygiene gate; no evidence class |

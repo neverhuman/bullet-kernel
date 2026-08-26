@@ -16,32 +16,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
-const FAMILY_BINARY: &str = "../../../bullet-git/target/debug/bullet-gitd";
-const FAMILY_FIXTURE_BINARY: &str = "../../../bullet-git/target/debug/bullet-gitd-fixture";
 
-/// Resolve the daemon binary: `BULLET_GITD_BIN` or the family default path.
-#[must_use]
-pub fn gitd_binary() -> PathBuf {
-    std::env::var_os("BULLET_GITD_BIN").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join(FAMILY_BINARY),
-        PathBuf::from,
-    )
-}
-
-/// Resolve the fixture-only daemon: `BULLET_GITD_FIXTURE_BIN` or family default.
-#[must_use]
-pub fn gitd_fixture_binary() -> PathBuf {
-    std::env::var_os("BULLET_GITD_FIXTURE_BIN").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join(FAMILY_FIXTURE_BINARY),
-        PathBuf::from,
-    )
-}
-
-/// True when the daemon binary exists.
-#[must_use]
-pub fn gitd_available() -> bool {
-    gitd_binary().is_file()
-}
+mod binary;
+pub use binary::{gitd_binary, gitd_fixture_binary, AdmittedGitdBinary};
 
 /// Private clone location returned by `clone`.
 #[derive(Clone, Debug, Deserialize)]
@@ -255,32 +232,36 @@ impl GitdSession {
     ///
     /// # Errors
     ///
-    /// Returns `IO_FAILED` when the binary cannot be started (set
-    /// `BULLET_GITD_BIN` or build bullet-gitd) or the token fails to encode.
+    /// Returns `GITD_BINARY_UNPROVISIONED` or
+    /// `GITD_BINARY_ADMISSION_REFUSED` before spawning when the exact binary
+    /// subject is absent or invalid. Encoding and post-admission process I/O
+    /// failures return `IO_FAILED`.
     pub async fn spawn(token: &AuthorityToken) -> Result<Self, RunnerError> {
         let token =
             serde_json::to_value(token).map_err(|err| io_err("encode authority token", err))?;
-        Self::spawn_with(gitd_binary(), std::iter::empty::<&str>(), token).await
+        Self::spawn_with(gitd_binary()?, std::iter::empty::<&str>(), token).await
     }
 
-    /// Spawn a specific binary, including the fixture-only daemon.
+    /// Spawn an already admitted binary, including the debug-only fixture.
     ///
     /// # Errors
     ///
     /// Returns `IO_FAILED` when the binary cannot be started.
     pub async fn spawn_with(
-        binary: PathBuf,
+        binary: AdmittedGitdBinary,
         args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
         token: Value,
     ) -> Result<Self, RunnerError> {
-        let mut child = Command::new(&binary)
+        let spawn_path = binary.spawn_path()?;
+        let display_path = binary.path().display().to_string();
+        let mut child = Command::new(&spawn_path)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|err| io_err(&format!("spawn {}", binary.display()), err))?;
+            .map_err(|err| io_err(&format!("spawn {display_path}"), err))?;
         let stdin = child
             .stdin
             .take()

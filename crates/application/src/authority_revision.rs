@@ -177,4 +177,14 @@ impl NormalizedAuthority {
     pub const fn freeze_generation(&self) -> u64 {
         self.freeze_generation
     }
+
+    /// First durable singleton written once into an empty authority table.
+    ///
+    /// Grants must read the stored row, not this constructor, after the
+    /// ledger has been opened.
+    #[must_use]
+    pub fn genesis() -> Self {
+        Self::new(1, 1, "0".repeat(64), 1, 1, 1, 0)
+            .expect("genesis authority counters are representable")
+    }
 }

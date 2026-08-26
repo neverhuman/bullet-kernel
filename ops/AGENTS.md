@@ -6,7 +6,7 @@ the same file.
 
 | Lane | Script | Hosted (`.github/workflows/ci.yml`) | Exit contract |
 | --- | --- | --- | --- |
-| `fast` | `ops/ci/fast.sh` | yes, atomic | digest-bound 520-test standalone partition, all executed with zero skipped; nonexistent daemon sentinel prevents sibling fallback |
+| `fast` | `ops/ci/fast.sh` | yes, atomic | digest-bound 532-test standalone partition, all executed with zero skipped; both Gitd binary variables are unset so product resolution fails closed |
 | `lint` | `ops/ci/lint.sh` | yes, atomic | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow/inventory/observation/nightly meta-tests |
 | `contract` | `ops/ci/contract.sh` | yes, atomic | exact 34-test offline provider-contract/simulation partition; never resolves `bullet-gitd` |
 | `security` | `ops/ci/security.sh` | yes | gitleaks; `cargo deny fetch db` then a lane-side freshness proof of the RustSec database; `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor --offline --no-ignores --strict-collection .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails |
@@ -42,7 +42,7 @@ warnings as failures. Do not add a token or weaken those flags in a proof lane.
 
 `ops/ci/inventory.sh` is the single filter/count declaration;
 `ops/ci/inventory-test.sh` proves its nonzero, union, disjointness, complete
-identity digests, exact family/egress identities, daemon sentinel, and source
+identity digests, exact family/egress identities, unprovisioned Gitd-variable refusal, and source
 inventory. `ops/ci/nightly-test.sh` pins the nightly wrapper's exact
 calls and exit precedence. Edits under `ops/` are routed to `just check` by
 `agent/test-map.json`. Full lane semantics live in `docs/testing.md`.
