@@ -21,6 +21,17 @@ const WIDE_EXPIRY_MS: u64 = 4_000_000_000_000;
 
 type Mutate = fn(&mut serde_json::Value);
 
+fn private_temp_dir() -> TempDir {
+    let directory = TempDir::new().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    directory
+}
+
+fn create_private_dir(path: &Path) {
+    fs::create_dir_all(path).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
 fn bullet(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bullet"))
         .args(args)
@@ -84,10 +95,11 @@ fn write_marker(path: &Path, spawned: &Path) {
 
 #[test]
 fn live_conformance_refuses_under_v1alpha1_without_spawning() {
-    let directory = TempDir::new().unwrap();
+    let directory = private_temp_dir();
     let base = directory.path().canonicalize().unwrap();
     let data_dir = base.join("data");
-    fs::create_dir_all(data_dir.join("policy")).unwrap();
+    create_private_dir(&data_dir);
+    create_private_dir(&data_dir.join("policy"));
     fs::write(data_dir.join("policy/policy.json"), POLICY).unwrap();
 
     let marker = base.join("claude");
@@ -136,10 +148,10 @@ fn live_conformance_refuses_under_v1alpha1_without_spawning() {
 
 #[test]
 fn live_conformance_admits_a_ratified_v1alpha2_policy_and_reports_it() {
-    let directory = TempDir::new().unwrap();
+    let directory = private_temp_dir();
     let base = directory.path().canonicalize().unwrap();
     let data_dir = base.join("data");
-    fs::create_dir_all(&data_dir).unwrap();
+    create_private_dir(&data_dir);
     let policy = base.join("policy-v1alpha2.json");
     fs::write(&policy, v1alpha2_policy(|_| {})).unwrap();
     let marker = base.join("claude");
@@ -203,10 +215,10 @@ fn live_conformance_refuses_v1alpha2_policies_the_hub_validator_rejects() {
         ),
     ];
     for (name, mutate, expected) in cases {
-        let directory = TempDir::new().unwrap();
+        let directory = private_temp_dir();
         let base = directory.path().canonicalize().unwrap();
         let data_dir = base.join("data");
-        fs::create_dir_all(&data_dir).unwrap();
+        create_private_dir(&data_dir);
         let policy = base.join("policy.json");
         fs::write(&policy, v1alpha2_policy(mutate)).unwrap();
         let marker = base.join("claude");

@@ -1,8 +1,19 @@
 //! Product scaffold conformance while production BulletGit authority is unavailable.
 
 use bullet_runner_core::gitd_binary;
+#[cfg(target_os = "linux")]
+use std::fs;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
+
+fn private_temp_dir() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().expect("tempdir");
+    #[cfg(target_os = "linux")]
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).expect("0700");
+    directory
+}
 
 fn verifier_sibling() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bullet"))
@@ -26,7 +37,7 @@ fn synthetic_scaffold_records_typed_authority_refusal_without_evidence() {
         verifier.is_file(),
         "VERIFIER_BINARY_ABSENT: cargo must build bullet-verifier with this test"
     );
-    let data = tempfile::tempdir().expect("tempdir");
+    let data = private_temp_dir();
     let out = Command::new(env!("CARGO_BIN_EXE_bullet"))
         .arg("demo-synthetic")
         .env("BULLET_DATA_DIR", data.path())

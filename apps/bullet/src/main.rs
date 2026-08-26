@@ -111,6 +111,52 @@ fn data_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("./target/demo"))
 }
 
+#[cfg(target_os = "linux")]
+fn ensure_private_data_dir(path: &std::path::Path) -> Result<(), String> {
+    use rustix::fs::{fchmod, fstat, open, Mode, OFlags};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder
+        .create(path)
+        .map_err(|err| format!("create private data dir: {err}"))?;
+
+    let descriptor = open(
+        path,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|err| format!("open private data dir without following links: {err}"))?;
+    let before = fstat(&descriptor).map_err(|err| format!("inspect private data dir: {err}"))?;
+    let effective_uid = rustix::process::geteuid().as_raw();
+    if before.st_uid != effective_uid {
+        return Err(format!(
+            "private data dir must be owned by effective uid {effective_uid}"
+        ));
+    }
+    fchmod(&descriptor, Mode::from_raw_mode(0o700))
+        .map_err(|err| format!("set private data dir mode 0700: {err}"))?;
+    let after = fstat(&descriptor).map_err(|err| format!("reinspect private data dir: {err}"))?;
+    let public = fs::symlink_metadata(path)
+        .map_err(|err| format!("reinspect private data dir pathname: {err}"))?;
+    if public.file_type().is_symlink()
+        || public.dev() != after.st_dev
+        || public.ino() != after.st_ino
+        || public.uid() != effective_uid
+        || public.mode() & 0o7777 != 0o700
+        || after.st_mode & 0o7777 != 0o700
+    {
+        return Err("private data dir changed or remained unsafe during mode admission".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_private_data_dir(_path: &std::path::Path) -> Result<(), String> {
+    Err("private authority data directories require Linux".into())
+}
+
 fn run(command: Commands) -> Result<(), String> {
     match command {
         Commands::Provider { .. } => unreachable!("provider is handled in main"),
@@ -118,7 +164,7 @@ fn run(command: Commands) -> Result<(), String> {
         Commands::Farm { command } => match command {
             FarmCommands::Init => {
                 let dir = data_dir();
-                fs::create_dir_all(&dir).map_err(|err| format!("create data dir: {err}"))?;
+                ensure_private_data_dir(&dir)?;
                 let path = dir.join("ledger.sqlite");
                 SqliteLedger::open(&path).map_err(|err| format!("init ledger: {err}"))?;
                 println!("initialized {}", path.display());

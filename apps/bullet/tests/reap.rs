@@ -2,8 +2,19 @@
 //! reclamation. It grants no authority, refuses a database that does not exist,
 //! and prints one stable JSON report. It runs only the `bullet` binary itself.
 
+#[cfg(target_os = "linux")]
+use std::fs;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use tempfile::TempDir;
+
+fn private_temp_dir() -> TempDir {
+    let directory = TempDir::new().expect("tempdir");
+    #[cfg(target_os = "linux")]
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).expect("0700");
+    directory
+}
 
 fn reap(database: &std::path::Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_bullet"))
@@ -15,7 +26,7 @@ fn reap(database: &std::path::Path) -> std::process::Output {
 
 #[test]
 fn reap_refuses_a_missing_database_and_reports_an_empty_sweep_idempotently() {
-    let directory = TempDir::new().expect("tempdir");
+    let directory = private_temp_dir();
     let data = directory.path().join("data");
     let database = data.join("ledger.sqlite");
 
