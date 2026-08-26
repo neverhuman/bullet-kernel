@@ -2,8 +2,12 @@
 //! the same write that issues the permit. A successful check is not itself
 //! a capability.
 
+#[path = "mutation_permit/mod.rs"]
+pub mod mutation_permit;
+
 use crate::authority::ActiveLeaseSubject;
 use crate::store::LedgerError;
+use bullet_domain::Digest;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -23,7 +27,7 @@ pub trait LeaseGate {
 pub struct MutationReserveRequest {
     /// Caller-chosen mutation identity.
     pub mutation_id: String,
-    /// Operation name (`clone`, `apply_change`, …).
+    /// Hub-authored kebab-case mutation-operation label.
     pub operation: String,
     /// Domain-separated request digest (hex).
     pub request_digest: String,
@@ -128,7 +132,10 @@ impl<G: LeaseGate> MutationReservationStore<G> {
         }
         self.gate.check_active_lease(subject)?;
         let permit = OneUsePermit {
-            reservation_id: format!("rsv_{}", request.mutation_id),
+            reservation_id: format!(
+                "rsv_{}",
+                Digest::of(request.mutation_id.as_bytes()).to_hex()
+            ),
             mutation_id: request.mutation_id.clone(),
             operation: request.operation.clone(),
             request_digest: request.request_digest.clone(),

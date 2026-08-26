@@ -3,6 +3,7 @@
 //! live dispatch without signed Kernel authority and audited egress isolation.
 
 mod credentials;
+mod mutation_permit;
 mod protocol;
 mod receipt;
 mod signed;
@@ -23,6 +24,12 @@ use std::path::{Path, PathBuf};
 
 pub use crate::launch_grant::environment_digest;
 pub use credentials::{CredentialGrant, CredentialReceipt};
+pub use mutation_permit::{
+    mutation_operation_audience, parse_mutation_operation, require_signed_mutation_permit,
+    AuthorityAudience, MutationOperation, MutationPermitClaims, MutationPermitExpectation,
+    MutationPermitSigningKey, MutationPermitVerificationKey, SignedMutationPermit,
+    MAX_MUTATION_PERMIT_TTL_MS, MUTATION_PERMIT_IMPLICIT_ASSERTION, MUTATION_PERMIT_SCHEMA_VERSION,
+};
 pub use protocol::{ProtocolRequirement, ProviderProtocol};
 pub use receipt::{
     AdmissionBlocker, CanarySecrets, ConformanceEvidence, ProviderConformanceReceipt,

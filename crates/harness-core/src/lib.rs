@@ -29,11 +29,15 @@ pub use adapter::{
     SteeringMessage, Turn, TurnHandle,
 };
 pub use admission::{
-    capability_digest, descriptor_digest, environment_digest, executable_digest, AdmissionBlocker,
-    CanarySecrets, ConformanceEvidence, CredentialGrant, CredentialReceipt,
-    EgressIsolationEvidence, EgressIsolationRecord, EgressProbe, EgressProbeOutcome,
-    EvaluatedAdmission, ProtocolRequirement, ProviderAdmission, ProviderAdmissionPolicy,
-    ProviderConformanceReceipt, ProviderProtocol, RuntimeProbeSnapshot, SignedAuthorityRecord,
+    capability_digest, descriptor_digest, environment_digest, executable_digest,
+    mutation_operation_audience, parse_mutation_operation, require_signed_mutation_permit,
+    AdmissionBlocker, AuthorityAudience, CanarySecrets, ConformanceEvidence, CredentialGrant,
+    CredentialReceipt, EgressIsolationEvidence, EgressIsolationRecord, EgressProbe,
+    EgressProbeOutcome, EvaluatedAdmission, MutationOperation, MutationPermitClaims,
+    MutationPermitExpectation, MutationPermitSigningKey, MutationPermitVerificationKey,
+    ProtocolRequirement, ProviderAdmission, ProviderAdmissionPolicy, ProviderConformanceReceipt,
+    ProviderProtocol, RuntimeProbeSnapshot, SignedAuthorityRecord, SignedMutationPermit,
+    MAX_MUTATION_PERMIT_TTL_MS, MUTATION_PERMIT_IMPLICIT_ASSERTION, MUTATION_PERMIT_SCHEMA_VERSION,
 };
 pub use argv::{filter_env, ArgvBuilder, InvocationBudget, PreparedInvocation};
 pub use capability::{Capability, CapabilityMatrix, CapabilityState, PromotionStage};

@@ -226,6 +226,14 @@ pub enum HarnessError {
         /// Exact policy field that refuses live admission.
         field: String,
     },
+    /// A signed mutation permit was missing, expired, replayed, or unbound.
+    #[error("mutation permit refused: {reason}")]
+    MutationPermitRefused {
+        /// Stable machine-readable code from the wire permit contract.
+        code: &'static str,
+        /// Non-secret refusal detail.
+        reason: String,
+    },
 }
 
 impl HarnessError {
@@ -266,6 +274,7 @@ impl HarnessError {
             Self::PolicyUnavailable { .. } => "POLICY_UNAVAILABLE",
             Self::PolicyInvalid { .. } => "POLICY_INVALID",
             Self::PolicyLiveAdmissionDisabled { .. } => "POLICY_LIVE_ADMISSION_DISABLED",
+            Self::MutationPermitRefused { code, .. } => code,
         }
     }
 }
@@ -294,5 +303,10 @@ mod tests {
             provider: "claude".into(),
         };
         assert_eq!(unavailable.reason_code(), "RUNTIME_PROBE_UNAVAILABLE");
+        let permit = HarnessError::MutationPermitRefused {
+            code: "MUTATION_PERMIT_MISSING",
+            reason: "apply has no signed permit".into(),
+        };
+        assert_eq!(permit.reason_code(), "MUTATION_PERMIT_MISSING");
     }
 }
