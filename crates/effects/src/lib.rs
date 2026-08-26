@@ -5,6 +5,7 @@
 
 pub mod attest;
 pub mod broker;
+pub mod durable;
 pub mod error;
 pub mod forge;
 pub mod git_env;
@@ -20,6 +21,7 @@ pub use broker::{authorize, dispatch, propose, reconcile, IntentInput, Reconcile
 pub use bullet_application::{
     receipt_id, EffectIntentRecord, EffectReceiptRecord, EffectState, ReceiptVerdict, ZERO_OID,
 };
+pub use durable::{DurableJob, DurableQueue};
 pub use error::EffectsError;
 pub use forge::{
     is_create, require_candidate_ref, require_oid, ForgeDescriptor, ForgeEffects, PushRequest,

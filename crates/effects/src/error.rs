@@ -39,6 +39,9 @@ pub enum EffectsError {
     /// Process spawn or filesystem failure.
     #[error("io failed: {0}")]
     Io(String),
+    /// A durable effect-queue record or transition was unsafe or inconsistent.
+    #[error("durable queue invalid: {0}")]
+    DurableQueueInvalid(String),
     /// The intent is not in the phase this operation requires.
     #[error("illegal effect phase: {found} where {wanted} is required")]
     IllegalPhase {
@@ -88,6 +91,7 @@ impl EffectsError {
             Self::ResponseLost(_) => "RESPONSE_LOST",
             Self::GitFailed(_) => "GIT_FAILED",
             Self::Io(_) => "IO_FAILED",
+            Self::DurableQueueInvalid(_) => "DURABLE_QUEUE_INVALID",
             Self::IllegalPhase { .. } => "ILLEGAL_EFFECT_PHASE",
             Self::RetryWithoutReconcile(_) => "RETRY_WITHOUT_RECONCILE",
             Self::Ledger(err) => err.reason_code(),

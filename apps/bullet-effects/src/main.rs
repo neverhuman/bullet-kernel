@@ -8,7 +8,7 @@ use bullet_application::{
 };
 use bullet_domain::{AuthorityToken, TaskClass};
 use bullet_effects_core::{
-    authorize, dispatch, propose, reconcile, EffectsError, ForgeEffects, IntentInput,
+    authorize, dispatch, propose, reconcile, DurableQueue, EffectsError, ForgeEffects, IntentInput,
     LocalBareForge, LossMode, LostResponseForge, ReconcileOutcome, ZERO_OID,
 };
 use chrono::Utc;
@@ -131,7 +131,55 @@ fn lost_response_flow(
     }
 }
 
+fn serve(queue_root: &Path) {
+    let queue = DurableQueue::open(queue_root)
+        .unwrap_or_else(|err| fail("open durable queue", &err.to_string()));
+    let processed_job_id = if let Some(job) = queue
+        .take_unknown()
+        .unwrap_or_else(|err| fail("take unknown", &err.to_string()))
+    {
+        // Lost response stays UNKNOWN until identity-exact adopt or quarantine.
+        // This path never invents live forge success.
+        let id = job.id.clone();
+        or_die(
+            queue.mark_settled(job, "QUARANTINED"),
+            "settle unknown without live forge success",
+        );
+        Some(id)
+    } else {
+        None
+    };
+    let disposition = if processed_job_id.is_some() {
+        "QUARANTINED"
+    } else {
+        "NO_WORK"
+    };
+    let summary = serde_json::json!({
+        "mode": "daemon",
+        "queue": queue_root.display().to_string(),
+        "processed_job_id": processed_job_id,
+        "disposition": disposition,
+        "live_forge_success": false,
+    });
+    println!("{summary}");
+}
+
 fn main() {
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        None => {}
+        Some("serve") => {
+            let queue = args
+                .next()
+                .unwrap_or_else(|| fail("usage", "bullet-effects serve <durable-queue-dir>"));
+            if args.next().is_some() {
+                fail("usage", "bullet-effects serve <durable-queue-dir>");
+            }
+            serve(Path::new(&queue));
+            return;
+        }
+        Some(other) => fail("usage", &format!("unknown argument {other}")),
+    }
     let scratch = tempfile::tempdir().unwrap_or_else(|err| fail("tempdir", &err.to_string()));
     let (workspace, head) = workspace_repo(scratch.path());
     let mut ledger = MemoryLedger::new();
