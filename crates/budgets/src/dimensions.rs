@@ -8,7 +8,7 @@
 //! tool `call`s and model `invocation`s as different events (§15.5 vs. the
 //! "settle tool calls" step), so both stay distinct dimensions.
 
-use crate::classes::ReserveClass;
+use crate::classes::{BudgetPolicyError, BudgetPolicySubject, ReserveClass};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
@@ -304,6 +304,8 @@ pub struct SettlementRecord {
     pub id: String,
     /// Reserve class the reservation was admitted under.
     pub class: ReserveClass,
+    /// Exact policy identity and generation used for admission.
+    pub policy: BudgetPolicySubject,
     /// Forecast vector at reservation.
     pub forecast: ReservationVector,
     /// Observed usage at settlement.
@@ -389,6 +391,8 @@ pub struct VectorReservation {
     pub id: String,
     /// Class the reservation was admitted under.
     pub class: ReserveClass,
+    /// Exact policy identity and generation used for admission.
+    pub policy: BudgetPolicySubject,
     /// Forecast vector held.
     pub forecast: ReservationVector,
 }
@@ -398,6 +402,9 @@ pub struct VectorReservation {
 /// [`Dimension::ALL`] order and leave the ledger untouched.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum DimensionError {
+    /// Policy snapshot admission failed before budget accounting.
+    #[error(transparent)]
+    Policy(#[from] BudgetPolicyError),
     /// Reservation identity or vector is not admissible.
     #[error("invalid reservation: {0}")]
     Invalid(String),
@@ -449,6 +456,7 @@ impl DimensionError {
     #[must_use]
     pub const fn reason_code(&self) -> &'static str {
         match self {
+            Self::Policy(error) => error.reason_code(),
             Self::Invalid(_) => "BUDGET_RESERVATION_INVALID",
             Self::Duplicate(_) => "BUDGET_RESERVATION_DUPLICATE",
             Self::Exhausted { .. } => "BUDGET_DIMENSION_EXHAUSTED",
@@ -470,7 +478,7 @@ impl DimensionError {
             Self::Conservation(dimension)
             | Self::ArithmeticOverflow(dimension)
             | Self::UnknownIsNotHeadroom(dimension) => Some(*dimension),
-            Self::Invalid(_) | Self::Duplicate(_) | Self::NotFound => None,
+            Self::Policy(_) | Self::Invalid(_) | Self::Duplicate(_) | Self::NotFound => None,
         }
     }
 }

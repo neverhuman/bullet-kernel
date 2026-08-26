@@ -8,14 +8,17 @@
 //!
 //! Two ledgers live here. [`BudgetLedger`] is the original single-dimension
 //! ledger. [`VectorLedger`] reserves every roadmap dimension atomically under a
-//! reserve class ([`classes`]) and settles with forecast-error records
-//! ([`dimensions`]). Neither knows time; `expires_at` belongs to the durable
-//! Wave 2 adapter that owns database time.
+//! reserve class and an exact admitted [`BudgetPolicySnapshot`], then settles
+//! with forecast-error records. Neither knows time; `expires_at` belongs to the
+//! durable Wave 2 adapter that owns database time.
 
 pub mod classes;
 pub mod dimensions;
 
-pub use classes::{emergency_floor_units, floor_units, ReserveClass, EMERGENCY_FLOOR_PERCENT};
+pub use classes::{
+    floor_units, BudgetPolicyError, BudgetPolicySnapshot, BudgetPolicySubject, ReserveClass,
+    ReserveClassFloor,
+};
 pub use dimensions::{
     Dimension, DimensionError, DimensionState, ForecastError, ForecastOutcome, ReservationVector,
     SettlementRecord, Usage, UsageVector, VectorReservation, DIMENSION_COUNT,
@@ -224,8 +227,9 @@ impl BudgetLedger {
 
 /// In-memory ledger over every roadmap dimension. `reserve` is all-or-nothing:
 /// a refusal names the first failing dimension and changes nothing.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VectorLedger {
+    policy: BudgetPolicySnapshot,
     pots: [DimensionState; DIMENSION_COUNT],
     open: BTreeMap<String, VectorReservation>,
     issued: BTreeSet<String>,
@@ -250,10 +254,14 @@ fn check(dimension: Dimension, pot: &DimensionState) -> Result<(), DimensionErro
 }
 
 impl VectorLedger {
-    /// Open a ledger with known capacity and pre-existing unknown liability
-    /// (recorded as overrun, outside every pot).
+    /// Open a ledger with known capacity, pre-existing unknown liability, and
+    /// the exact policy snapshot admitted by the owning authority boundary.
     #[must_use]
-    pub fn new(opening: ReservationVector, unknown: ReservationVector) -> Self {
+    pub fn new(
+        opening: ReservationVector,
+        unknown: ReservationVector,
+        policy: BudgetPolicySnapshot,
+    ) -> Self {
         let mut pots = [DimensionState::default(); DIMENSION_COUNT];
         for (dimension, units) in opening.iter() {
             pots[dimension.index()] = DimensionState {
@@ -264,9 +272,17 @@ impl VectorLedger {
             };
         }
         Self {
+            policy,
             pots,
-            ..Self::default()
+            open: BTreeMap::new(),
+            issued: BTreeSet::new(),
         }
+    }
+
+    /// Exact policy snapshot pinned when this ledger was opened.
+    #[must_use]
+    pub const fn policy(&self) -> &BudgetPolicySnapshot {
+        &self.policy
     }
 
     /// Snapshot of one dimension.
@@ -310,6 +326,7 @@ impl VectorLedger {
     ///
     /// # Errors
     ///
+    /// `BUDGET_POLICY_*` when the exact admitted snapshot is absent or differs;
     /// `BUDGET_DIMENSION_EXHAUSTED` naming the first dimension (canonical
     /// order) that cannot cover its units; `BUDGET_CLASS_FLOOR` when the class
     /// would cross its floor there; `BUDGET_RESERVATION_INVALID`,
@@ -319,7 +336,9 @@ impl VectorLedger {
         id: impl Into<String>,
         class: ReserveClass,
         forecast: ReservationVector,
+        policy: Option<&BudgetPolicySnapshot>,
     ) -> Result<VectorReservation, DimensionError> {
+        self.policy.require_exact(policy)?;
         let id = id.into();
         if id.is_empty() || forecast.is_zero() {
             return Err(DimensionError::Invalid(
@@ -341,7 +360,7 @@ impl VectorLedger {
                 });
             }
             let after = remaining - requested;
-            let floor = class.floor_units(pot.opening);
+            let floor = self.policy.floor_units(class, pot.opening);
             if after < floor {
                 return Err(DimensionError::BelowFloor {
                     dimension,
@@ -358,6 +377,7 @@ impl VectorLedger {
         let row = VectorReservation {
             id,
             class,
+            policy: self.policy.subject().clone(),
             forecast,
         };
         self.pots = next;
@@ -374,13 +394,16 @@ impl VectorLedger {
     ///
     /// # Errors
     ///
+    /// `BUDGET_POLICY_*` when the exact admitted snapshot is absent or differs;
     /// `BUDGET_RESERVATION_NOT_FOUND`; `BUDGET_ARITHMETIC_OVERFLOW` when
-    /// overrun cannot be recorded (nothing changes).
+    /// overrun cannot be recorded. On any error nothing changes.
     pub fn settle(
         &mut self,
         id: &str,
         usage: &UsageVector,
+        policy: Option<&BudgetPolicySnapshot>,
     ) -> Result<SettlementRecord, DimensionError> {
+        self.policy.require_exact(policy)?;
         let row = self.open.get(id).ok_or(DimensionError::NotFound)?.clone();
         let mut next = self.pots;
         let mut errors = Vec::new();
@@ -430,6 +453,7 @@ impl VectorLedger {
         Ok(SettlementRecord {
             id: row.id,
             class: row.class,
+            policy: row.policy,
             forecast: row.forecast,
             usage: *usage,
             errors,

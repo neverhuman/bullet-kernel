@@ -2,12 +2,15 @@
 //! outcomes, unknown-usage retention, reserve-class floors, and random
 //! interleavings.
 
+mod support;
+
 use bullet_budgets::{
-    emergency_floor_units, Dimension, DimensionError, ForecastOutcome, ReservationVector,
-    ReserveClass, Usage, UsageVector, VectorLedger, DIMENSION_COUNT,
+    Dimension, DimensionError, ForecastOutcome, ReservationVector, ReserveClass, Usage,
+    UsageVector, DIMENSION_COUNT,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
+use support::{assert_policy_validation_refusals, policy, PolicyLedger};
 
 fn uniform(units: u64) -> ReservationVector {
     ReservationVector::from_fn(|_| units)
@@ -48,7 +51,7 @@ fn reserve_is_all_or_nothing_and_names_first_exhausted_dimension() {
     let opening = uniform(100)
         .with(Dimension::Memory, 10)
         .with(Dimension::Probe, 10);
-    let mut ledger = VectorLedger::new(opening, ReservationVector::ZERO);
+    let mut ledger = PolicyLedger::new(opening, ReservationVector::ZERO);
     let before = ledger.clone();
     let request = only(Dimension::Token, 50)
         .with(Dimension::Memory, 11)
@@ -93,7 +96,8 @@ fn reserve_is_all_or_nothing_and_names_first_exhausted_dimension() {
 
 #[test]
 fn invalid_duplicate_and_not_found_refusals() {
-    let mut ledger = VectorLedger::new(uniform(10), ReservationVector::ZERO);
+    assert_policy_validation_refusals();
+    let mut ledger = PolicyLedger::new(uniform(10), ReservationVector::ZERO);
     let one = only(Dimension::Call, 1);
     assert_eq!(
         code(ledger.reserve("", ReserveClass::Normal, one)),
@@ -127,22 +131,31 @@ fn invalid_duplicate_and_not_found_refusals() {
 
 #[test]
 fn settle_records_exact_under_over_and_unknown_per_dimension() {
-    let mut ledger = VectorLedger::new(uniform(100), ReservationVector::ZERO);
+    let mut ledger = PolicyLedger::new(uniform(100), ReservationVector::ZERO);
     let forecast = only(Dimension::Token, 10)
         .with(Dimension::Cost, 10)
         .with(Dimension::Egress, 10)
         .with(Dimension::Effect, 10);
-    ledger
+    let reservation = ledger
         .reserve("r", ReserveClass::Normal, forecast)
         .expect("reserve");
+    assert_eq!(&reservation.policy, ledger.admitted_policy().subject());
     let usage = UsageVector::UNKNOWN
         .with_known(Dimension::Token, 10)
         .with_known(Dimension::Cost, 4)
         .with_known(Dimension::Egress, 17)
         .with_known(Dimension::Probe, 3);
+    let wrong_generation = policy(2);
+    let before = ledger.clone();
+    assert_eq!(
+        code(ledger.settle_with_policy("r", &usage, Some(&wrong_generation))),
+        "BUDGET_POLICY_GENERATION_MISMATCH"
+    );
+    assert_eq!(ledger, before, "wrong-generation settlement is atomic");
     let record = ledger.settle("r", &usage).expect("settle");
     assert_eq!(record.id, "r");
     assert_eq!(record.class, ReserveClass::Normal);
+    assert_eq!(&record.policy, ledger.admitted_policy().subject());
     assert_eq!(record.forecast, forecast);
     assert_eq!(record.usage, usage);
     assert_eq!(
@@ -216,7 +229,8 @@ fn settle_records_exact_under_over_and_unknown_per_dimension() {
 
 #[test]
 fn a_class_cannot_spend_below_its_floor_but_emergency_classes_can() {
-    let mut ledger = VectorLedger::new(only(Dimension::Token, 100), ReservationVector::ZERO);
+    let mut ledger = PolicyLedger::new(only(Dimension::Token, 100), ReservationVector::ZERO);
+    ledger.assert_reserve_policy_refusals();
     let before = ledger.clone();
     let err = ledger
         .reserve("s0", ReserveClass::Speculative, only(Dimension::Token, 51))
@@ -286,7 +300,7 @@ fn a_class_cannot_spend_below_its_floor_but_emergency_classes_can() {
 
 #[test]
 fn speculative_work_cannot_consume_critical_reserve() {
-    let mut ledger = VectorLedger::new(uniform(100), ReservationVector::ZERO);
+    let mut ledger = PolicyLedger::new(uniform(100), ReservationVector::ZERO);
     ledger
         .reserve("spec", ReserveClass::Speculative, uniform(50))
         .expect("speculative to its floor");
@@ -353,7 +367,7 @@ proptest! {
         opening in vector(40),
         ops in prop::collection::vec(op(), 1..48),
     ) {
-        let mut ledger = VectorLedger::new(opening, ReservationVector::ZERO);
+        let mut ledger = PolicyLedger::new(opening, ReservationVector::ZERO);
         let mut slots: Vec<Option<String>> = vec![None; SLOTS];
         for (seq, op) in ops.into_iter().enumerate() {
             let before = ledger.clone();
@@ -395,7 +409,7 @@ proptest! {
         let expected = Dimension::ALL
             .into_iter()
             .find(|d| request.get(*d) > opening.get(*d));
-        let mut ledger = VectorLedger::new(opening, ReservationVector::ZERO);
+        let mut ledger = PolicyLedger::new(opening, ReservationVector::ZERO);
         let before = ledger.clone();
         let result = ledger.reserve("r", ReserveClass::Incident, request);
         match (expected, result) {
@@ -422,17 +436,17 @@ proptest! {
         opening in vector(64),
         ops in prop::collection::vec((3..ReserveClass::LADDER.len(), vector(16)), 1..32),
     ) {
-        let mut ledger = VectorLedger::new(opening, ReservationVector::ZERO);
+        let mut ledger = PolicyLedger::new(opening, ReservationVector::ZERO);
         for (seq, (rank, forecast)) in ops.into_iter().enumerate() {
             let class = ReserveClass::LADDER[rank];
-            prop_assert!(!class.may_spend_emergency_reserve());
+            prop_assert!(!ledger.admitted_policy().may_spend_emergency_reserve(class));
             let before = ledger.clone();
             match ledger.reserve(format!("r{seq}"), class, forecast) {
                 Ok(_) => {}
                 Err(DimensionError::BelowFloor { dimension, floor, remaining, requested, .. }) => {
                     prop_assert_eq!(&ledger, &before);
                     prop_assert!(requested <= remaining && remaining - requested < floor);
-                    prop_assert_eq!(floor, class.floor_units(opening.get(dimension)));
+                    prop_assert_eq!(floor, ledger.admitted_policy().floor_units(class, opening.get(dimension)));
                 }
                 Err(DimensionError::Exhausted { .. } | DimensionError::Invalid(_)) => {
                     prop_assert_eq!(&ledger, &before);
@@ -441,7 +455,7 @@ proptest! {
             }
             for d in Dimension::ALL {
                 prop_assert!(
-                    ledger.state(d).remaining >= emergency_floor_units(opening.get(d)),
+                    ledger.state(d).remaining >= ledger.admitted_policy().emergency_floor_units(opening.get(d)),
                     "{class} crossed the emergency floor on {d}"
                 );
             }

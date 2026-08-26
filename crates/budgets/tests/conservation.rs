@@ -1,10 +1,14 @@
 //! Reservation/settlement conservation and unknown-liability retention.
 
+#[allow(dead_code)]
+mod support;
+
 use bullet_budgets::{
     BudgetError, BudgetLedger, Dimension, DimensionError, ForecastOutcome, ReservationVector,
-    ReserveClass, Usage, UsageVector, VectorLedger,
+    ReserveClass, Usage, UsageVector,
 };
 use proptest::prelude::*;
+use support::PolicyLedger;
 
 fn uniform(units: u64) -> ReservationVector {
     ReservationVector::from_fn(|_| units)
@@ -102,7 +106,7 @@ fn reserve_beyond_remaining_is_refused() {
 
 #[test]
 fn unknown_usage_stays_reserved_and_never_becomes_headroom() {
-    let mut ledger = VectorLedger::new(uniform(20), ReservationVector::ZERO);
+    let mut ledger = PolicyLedger::new(uniform(20), ReservationVector::ZERO);
     ledger
         .reserve("r", ReserveClass::Incident, only(Dimension::Token, 15))
         .expect("reserve");
@@ -142,7 +146,7 @@ fn unknown_usage_stays_reserved_and_never_becomes_headroom() {
     assert_eq!(ledger.state(Dimension::Token).retained, 15);
     assert!(ledger.conserved());
 
-    let mut overflow = VectorLedger::new(uniform(1), only(Dimension::Cost, u64::MAX));
+    let mut overflow = PolicyLedger::new(uniform(1), only(Dimension::Cost, u64::MAX));
     overflow
         .reserve("o", ReserveClass::Incident, only(Dimension::Cost, 1))
         .expect("reserve");
@@ -162,7 +166,7 @@ fn unknown_usage_stays_reserved_and_never_becomes_headroom() {
 
 #[test]
 fn release_returns_every_unit_without_a_forecast_record() {
-    let mut ledger = VectorLedger::new(uniform(30), ReservationVector::ZERO);
+    let mut ledger = PolicyLedger::new(uniform(30), ReservationVector::ZERO);
     let forecast = only(Dimension::Cpu, 7).with(Dimension::VerifierBacklog, 3);
     ledger
         .reserve("r", ReserveClass::Benchmark, forecast)
@@ -179,7 +183,7 @@ fn release_returns_every_unit_without_a_forecast_record() {
 
 #[test]
 fn unforecast_usage_is_typed_liability_not_silence() {
-    let mut ledger = VectorLedger::new(uniform(10), ReservationVector::ZERO);
+    let mut ledger = PolicyLedger::new(uniform(10), ReservationVector::ZERO);
     ledger
         .reserve("r", ReserveClass::Incident, only(Dimension::Token, 4))
         .expect("reserve");
@@ -287,7 +291,7 @@ proptest! {
     ) {
         let token = |units| ReservationVector::ZERO.with(Dimension::Token, units);
         let mut single = BudgetLedger::new(opening, 0);
-        let mut vector = VectorLedger::new(token(opening), ReservationVector::ZERO);
+        let mut vector = PolicyLedger::new(token(opening), ReservationVector::ZERO);
         for (index, (amount, actual)) in steps.into_iter().enumerate() {
             let id = format!("r{index}");
             let one = single.reserve(&id, amount);
