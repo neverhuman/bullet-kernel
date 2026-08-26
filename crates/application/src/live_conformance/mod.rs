@@ -1,11 +1,11 @@
-//! Positive live-conformance orchestration: policy load and the live-admission
-//! gate, operator key custody, a durable conformance lease, local provider
-//! admission, launch-grant mint/verify, egress isolation, and exactly one
-//! dispatched read-only turn — then a sealed, fsync'd receipt. Under the
-//! checked-in v1alpha1 policy this refuses at `POLICY_LIVE_ADMISSION_DISABLED`
-//! before any key read, probe, namespace, or spawn; a v1alpha2 policy that
-//! enables live admission (ADR 0012) must also be active at the run instant
-//! with an active `provider-runner` key, or the run fails at the same step.
+//! Guarded live-conformance orchestration: policy load, runtime observation,
+//! operator key custody, a durable conformance lease, local provider admission,
+//! launch-grant mint/verify, egress isolation, and exactly one dispatched
+//! read-only turn — then a sealed, fsync'd receipt. The checked-in v1alpha1
+//! policy refuses at `POLICY_LIVE_ADMISSION_DISABLED`; a valid v1alpha2 policy
+//! reaches the production adapters' `RUNTIME_PROBE_UNAVAILABLE` refusal before
+//! key read, authority mutation, egress, or spawn. Only strict unit tests
+//! provide an observed fixture subject and reach the later mechanics.
 
 mod steps;
 
@@ -45,9 +45,9 @@ pub struct LiveConformanceOptions {
     pub provider: String,
     /// Absolute canonical executable path, resolved and digested by the caller.
     pub executable: PathBuf,
-    /// Operator-attested runtime version bound into the admission subject.
+    /// Expected runtime version checked against the observed admission subject.
     pub version: String,
-    /// Operator-attested account email the probe identity verifies against.
+    /// Expected account email checked against the observed profile identity.
     pub profile_email: String,
     /// Adapter label recorded in the grant.
     pub adapter_label: String,
@@ -209,8 +209,8 @@ impl StepFailure {
     }
 }
 
-/// Run the positive live-conformance path. Always writes a receipt: a `PONG`
-/// outcome or a designed policy refusal returns `Ok`; any other failure
+/// Run the guarded live-conformance path. Always writes a receipt: a `PONG`
+/// outcome or a designed policy/runtime-observation refusal returns `Ok`; any other failure
 /// returns `Err`, both after the receipt has been sealed and fsync'd.
 ///
 /// # Errors

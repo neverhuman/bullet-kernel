@@ -47,7 +47,7 @@ enum Commands {
         #[command(subcommand)]
         command: authority::AuthorityCommands,
     },
-    /// Provider live-conformance: mint, admit, sandbox, and one read-only turn.
+    /// Provider live-conformance: policy-gated and fail-closed at runtime observation.
     Provider {
         #[command(subcommand)]
         command: provider::ProviderCommands,

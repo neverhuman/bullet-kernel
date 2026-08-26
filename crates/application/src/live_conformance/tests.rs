@@ -1,5 +1,7 @@
 //! Full-path live-conformance tests. No real provider binary is spawned: a
-//! fake `claude` shell script emits a canned stream-JSON transcript. The
+//! fake `claude` shell script emits a canned stream-JSON transcript. A strict
+//! `cfg(test)` dispatcher supplies the otherwise unavailable observed runtime
+//! subject; no production adapter can synthesize it. The
 //! v1alpha2 test policy is loaded through the production loader (no bypass);
 //! a no-op egress backend supplies well-formed containment evidence. The
 //! fake-binary harness is shared with `policy_tests`.
@@ -10,13 +12,19 @@ use super::{run_live_conformance, LiveConformanceOptions};
 use crate::launch_grant::StoreNonceLedger;
 use crate::memory::MemoryLedger;
 use crate::policy_snapshot::LoadedPolicy;
+use bullet_domain::Observation;
 use bullet_harness_claude::ClaudeAdapter;
 use bullet_harness_core::launch_grant::{verify_launch_grant, write_new_signing_key};
 use bullet_harness_core::{
-    EgressBackend, EgressIsolationEvidence, EgressProbe, EgressProbeOutcome, HarnessError,
-    LiveOutcome, LiveStep, PreparedEgress,
+    executable_digest, AgentEvent, AgentEventKind, CommandFactory, EgressBackend,
+    EgressIsolationEvidence, EgressProbe, EgressProbeOutcome, EventNormalizer, HarnessDescriptor,
+    HarnessError, LiveDispatcher, LiveOutcome, LiveStep, LiveTurnOutcome, LiveTurnRequest,
+    NativeMeta, PatchMutation, PatchOperation, PatchProposal, Preimage, PreparedEgress,
+    ProbeResult, ProfileIdentity, ProfileRef, ProviderProtocol, RuntimeConformanceObservation,
+    RuntimeProbeSnapshot,
 };
 use chrono::{DateTime, TimeZone, Utc};
+use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -112,6 +120,129 @@ fn now() -> DateTime<Utc> {
     Utc.timestamp_millis_opt(1_000).single().unwrap()
 }
 
+/// Strict-test-only observed subject. Production adapters inherit
+/// `LiveDispatcher`'s typed default refusal and can never construct this
+/// positive path.
+pub(super) struct ObservedClaudeDispatcher {
+    inner: ClaudeAdapter,
+}
+
+impl ObservedClaudeDispatcher {
+    pub(super) const fn new() -> Self {
+        Self {
+            inner: ClaudeAdapter::new(),
+        }
+    }
+}
+
+impl LiveDispatcher for ObservedClaudeDispatcher {
+    fn provider(&self) -> &str {
+        <ClaudeAdapter as LiveDispatcher>::provider(&self.inner)
+    }
+
+    fn descriptor(&self) -> HarnessDescriptor {
+        <ClaudeAdapter as LiveDispatcher>::descriptor(&self.inner)
+    }
+
+    fn observed_runtime_version(&self) -> &str {
+        <ClaudeAdapter as LiveDispatcher>::observed_runtime_version(&self.inner)
+    }
+
+    fn required_protocol(&self) -> ProviderProtocol {
+        <ClaudeAdapter as LiveDispatcher>::required_protocol(&self.inner)
+    }
+
+    fn observe_runtime_conformance(
+        &self,
+        executable: &Path,
+        profile: &ProfileRef,
+        observed_at: DateTime<Utc>,
+    ) -> Result<RuntimeConformanceObservation, HarnessError> {
+        let mut descriptor = self.descriptor();
+        descriptor.binary = executable
+            .file_name()
+            .expect("fixture executable basename")
+            .to_string_lossy()
+            .into_owned();
+        descriptor.version = Observation::value(self.observed_runtime_version().to_string());
+        let probe = RuntimeProbeSnapshot {
+            descriptor,
+            executable: executable.to_path_buf(),
+            executable_blake3: executable_digest(executable)?,
+            protocol: self.required_protocol(),
+            identity: ProbeResult {
+                profile: Observation::value(ProfileIdentity {
+                    provider: self.provider().to_string(),
+                    email: profile.expected.email.clone(),
+                    account_id: None,
+                    subscription: None,
+                    auth_method: Some("strict-test-fixture".into()),
+                }),
+                version: self.observed_runtime_version().to_string(),
+            },
+            observed_at,
+        };
+        RuntimeConformanceObservation::new(
+            probe,
+            vec![],
+            vec![],
+            conformance_events(self.provider()),
+            conformance_proposal(),
+        )
+    }
+
+    fn dispatch_live_turn(
+        &self,
+        admission: &bullet_harness_core::EvaluatedAdmission,
+        factory: &CommandFactory<'_>,
+        request: &LiveTurnRequest,
+    ) -> Result<LiveTurnOutcome, HarnessError> {
+        <ClaudeAdapter as LiveDispatcher>::dispatch_live_turn(
+            &self.inner,
+            admission,
+            factory,
+            request,
+        )
+    }
+}
+
+fn conformance_events(provider: &str) -> Vec<AgentEvent> {
+    let mut normalizer = EventNormalizer::new(
+        bullet_harness_core::AgentSessionId::new("live-admission"),
+        provider,
+    );
+    vec![
+        normalizer.accept(AgentEventKind::TurnStarted, json!({}), &NativeMeta::none()),
+        normalizer.accept(
+            AgentEventKind::TurnCompleted,
+            json!({}),
+            &NativeMeta::none(),
+        ),
+    ]
+}
+
+fn conformance_proposal() -> PatchProposal {
+    PatchProposal {
+        schema_version: 1,
+        proposal_id: format!("cnt_{}", "1".repeat(64)),
+        producing_attempt_id: format!("atm_{}", "2".repeat(64)),
+        base_checkpoint_id: format!("ckp_{}", "3".repeat(64)),
+        base_checkpoint_digest: "4".repeat(64),
+        intent_summary: "strict-test live conformance subject".into(),
+        operations: vec![PatchOperation {
+            path: "PONG.txt".into(),
+            preimage: Preimage::Absent,
+            mutation: PatchMutation::Write {
+                content_utf8: "PONG\n".into(),
+            },
+        }],
+        gate_ids: vec![super::steps::PROPOSAL_GATE_ID.to_string()],
+        claims: vec![],
+        uncertainties: vec![],
+        done: true,
+    }
+}
+
 pub(super) fn options(harness: &Harness, canary: &str) -> LiveConformanceOptions {
     LiveConformanceOptions {
         provider: "claude".into(),
@@ -179,7 +310,7 @@ fn v1alpha2_test_policy_dispatches_pong_and_consumes_the_nonce() {
         &harness.data_dir,
         &mut ledger,
         &policy,
-        &ClaudeAdapter::new(),
+        &ObservedClaudeDispatcher::new(),
         &egress,
         &options(&harness, HAPPY_CANARY),
         now(),
@@ -223,7 +354,7 @@ fn v1alpha2_test_policy_dispatches_pong_and_consumes_the_nonce() {
             &hostile.data_dir,
             &mut ledger,
             &policy,
-            &ClaudeAdapter::new(),
+            &ObservedClaudeDispatcher::new(),
             &NoopEgressBackend::new(),
             &hostile_options,
             now(),
@@ -248,7 +379,7 @@ fn a_tampered_executable_never_verifies_and_never_dispatches() {
         &harness.data_dir,
         &mut ledger,
         &policy,
-        &ClaudeAdapter::new(),
+        &ObservedClaudeDispatcher::new(),
         &egress,
         &options(&harness, HAPPY_CANARY),
         now(),
@@ -287,7 +418,7 @@ fn egress_evidence_that_reached_a_destination_blocks_dispatch() {
         &harness.data_dir,
         &mut ledger,
         &policy,
-        &ClaudeAdapter::new(),
+        &ObservedClaudeDispatcher::new(),
         &egress,
         &options(&harness, HAPPY_CANARY),
         now(),
@@ -311,7 +442,7 @@ fn a_canary_in_provider_output_fails_the_run() {
         &harness.data_dir,
         &mut ledger,
         &policy,
-        &ClaudeAdapter::new(),
+        &ObservedClaudeDispatcher::new(),
         &egress,
         &options(&harness, EXPOSED_CANARY),
         now(),

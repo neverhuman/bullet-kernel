@@ -59,6 +59,14 @@ provenance or release authority. The lane never falls back to
 until the Hub can provision immutable authenticated repository subjects and
 pass the exact daemon path.
 
+The standalone live-conformance tests keep positive PONG mechanics behind a
+strict `cfg(test)` observed-subject wrapper. A separate valid-v1alpha2 test
+uses the real Claude adapter and proves `RUNTIME_PROBE_UNAVAILABLE` leaves the
+operator-key, Mission/graph, lease, nonce, egress, and child-process surfaces
+untouched. The product CLI test tables all four selectors against the same
+typed `ADMISSION` refusal. These are fail-closed component proofs, not runtime
+provider conformance.
+
 ## Atomic lanes
 
 | Lane | Scope |

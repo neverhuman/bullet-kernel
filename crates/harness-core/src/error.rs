@@ -44,6 +44,12 @@ pub enum HarnessError {
         /// Known provider executable that was refused.
         provider: String,
     },
+    /// No independently observed runtime-conformance subject is available.
+    #[error("runtime probe unavailable for {provider}")]
+    RuntimeProbeUnavailable {
+        /// Provider whose production adapter cannot yet produce the observation.
+        provider: String,
+    },
     /// Provider admission input or filesystem identity was invalid.
     #[error("provider admission refused: {reason}")]
     AdmissionRefused {
@@ -233,6 +239,7 @@ impl HarnessError {
             Self::WorktreeFlagDenied { .. } => "WORKTREE_FLAG_DENIED",
             Self::KillSwitch => "PROVIDER_KILL_ACTIVE",
             Self::LiveAdmissionUnavailable { .. } => "LIVE_ADMISSION_UNAVAILABLE",
+            Self::RuntimeProbeUnavailable { .. } => "RUNTIME_PROBE_UNAVAILABLE",
             Self::AdmissionRefused { .. } => "ADMISSION_REFUSED",
             Self::AdmissionBlocked { .. } => "PROVIDER_ADMISSION_BLOCKED",
             Self::SecretCanaryExposure { .. } => "SECRET_CANARY_EXPOSURE",
@@ -283,5 +290,9 @@ mod tests {
         };
         assert_eq!(disabled.reason_code(), "POLICY_LIVE_ADMISSION_DISABLED");
         assert!(disabled.to_string().contains("generation 1"));
+        let unavailable = HarnessError::RuntimeProbeUnavailable {
+            provider: "claude".into(),
+        };
+        assert_eq!(unavailable.reason_code(), "RUNTIME_PROBE_UNAVAILABLE");
     }
 }

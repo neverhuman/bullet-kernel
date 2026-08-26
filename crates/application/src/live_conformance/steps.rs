@@ -1,9 +1,9 @@
-//! The ordered provider-side + authority steps of the positive live path. Each
+//! The ordered provider-side + authority steps of the guarded live path. Each
 //! step records its own status; a step that never ran stays `NotRun`. The
-//! probe is executable-digest + operator-attested identity (no provider is
-//! spawned to probe); the only provider spawn is the single dispatched turn,
-//! and it happens only after every blocker has been cleared by its own
-//! evidence.
+//! runtime/conformance observation is requested immediately after policy
+//! validation and before credentials or authority. Production adapters fail
+//! closed until a real observation boundary exists; only strict unit tests
+//! supply observed fixture data.
 
 use super::{LiveConformanceOptions, ReceiptFields, StepFailure, StepSuccess};
 use crate::launch_grant::{
@@ -15,21 +15,18 @@ use crate::materializer::{materialize_plan, PlanInput};
 use crate::policy_snapshot::LoadedPolicy;
 use crate::records::StoredGraph;
 use crate::store::{Ledger, LedgerError};
-use bullet_domain::{Attempt, Observation, ProfileId, TaskClass};
+use bullet_domain::{Attempt, ProfileId, TaskClass};
 use bullet_harness_core::launch_grant::{
     environment_digest, load_signing_key, verify_launch_grant, LaunchGrantExpectation,
     ProviderBinding, LAUNCH_GRANT_AUDIENCE,
 };
 use bullet_harness_core::{
-    descriptor_digest, executable_digest, is_pong, AgentEvent, AgentEventKind, CanarySecrets,
-    Capability, CapabilityState, CommandFactory, ConformanceEvidence, EgressBackend,
-    EvaluatedAdmission, EventNormalizer, ExpectedProfile, HarnessDescriptor, HarnessError,
-    LiveDispatcher, LiveStep, LiveTurnRequest, NativeMeta, PatchProposal, ProbeResult,
-    ProfileIdentity, ProfileRef, PromotionStage, ProviderAdmission, ProviderAdmissionPolicy,
-    ProviderProtocol, RuntimeProbeSnapshot, StepLog,
+    descriptor_digest, executable_digest, is_pong, CanarySecrets, CommandFactory,
+    ConformanceEvidence, EgressBackend, EvaluatedAdmission, ExpectedProfile, HarnessError,
+    LiveDispatcher, LiveStep, LiveTurnRequest, ProfileRef, ProviderAdmission,
+    ProviderAdmissionPolicy, ProviderProtocol, RuntimeConformanceObservation, StepLog,
 };
 use chrono::{DateTime, Utc};
-use serde_json::json;
 use std::path::Path;
 use std::time::Duration;
 
@@ -56,7 +53,7 @@ pub(super) fn run_steps<L>(
 where
     L: Ledger + LaunchGrantNonceStore,
 {
-    // 1. POLICY — refuse before any key read, probe, namespace, or spawn. A
+    // 1. POLICY — refuse before any key read, runtime observation, namespace, or spawn. A
     // policy that keeps live admission disabled is the designed, neutral,
     // clock-independent refusal; a live-enabled policy must additionally be
     // active at `now` with an active provider-runner key (bullet-wire
@@ -72,6 +69,25 @@ where
     fields.policy_snapshot_digest = Some(policy.digest().to_string());
     fields.policy_generation = Some(policy.generation());
     log.pass(LiveStep::Policy);
+
+    // Request the observed runtime subject before reading operator custody or
+    // touching graph/lease/nonce/egress/process state. Every production
+    // adapter currently inherits the typed default refusal.
+    let profile = ProfileRef {
+        profile_id: ProfileId::from_seed(&options.provider),
+        expected: ExpectedProfile {
+            email: Some(options.profile_email.clone()),
+            account_id_prefix: None,
+        },
+    };
+    let observation =
+        match dispatcher.observe_runtime_conformance(&options.executable, &profile, now) {
+            Ok(observation) => observation,
+            Err(error @ HarnessError::RuntimeProbeUnavailable { .. }) => {
+                return Err(StepFailure::refusal(LiveStep::Admission, &error));
+            }
+            Err(error) => return Err(StepFailure::harness(LiveStep::Admission, &error)),
+        };
 
     // 2. OPERATOR KEY — load 0600 custody and confirm the policy admits it.
     let key = load_signing_key(data_dir, &options.issuer, &options.key_id)
@@ -109,8 +125,16 @@ where
         .map_err(|error| StepFailure::harness(LiveStep::Admission, &error))?;
     let canaries = CanarySecrets::new(options.canaries.clone())
         .map_err(|error| StepFailure::harness(LiveStep::Admission, &error))?;
-    let admission = build_admission(dispatcher, options, &runtime_root, &canaries, now)
-        .map_err(|error| StepFailure::harness(LiveStep::Admission, &error))?;
+    let admission = build_admission(
+        dispatcher,
+        options,
+        profile,
+        observation,
+        &runtime_root,
+        &canaries,
+        now,
+    )
+    .map_err(|error| StepFailure::harness(LiveStep::Admission, &error))?;
     let receipt = admission.receipt().clone();
     fields.executable_path = Some(receipt.executable.clone());
     fields.executable_blake3 = Some(receipt.executable_blake3.clone());
@@ -295,6 +319,8 @@ fn materialize_and_lease<L: Ledger>(
 fn build_admission(
     dispatcher: &dyn LiveDispatcher,
     options: &LiveConformanceOptions,
+    profile: ProfileRef,
+    observation: RuntimeConformanceObservation,
     runtime_root: &Path,
     canaries: &CanarySecrets,
     now: DateTime<Utc>,
@@ -302,132 +328,29 @@ fn build_admission(
     let executable = options.executable.clone();
     let exe_digest = executable_digest(&executable)?;
     let protocol = dispatcher.required_protocol();
-    let required = required_capabilities(protocol);
-    let descriptor = probe_descriptor(dispatcher, &executable, &options.version, &required);
-    let descriptor_blake3 = descriptor_digest(&descriptor)?;
-    let expected = ExpectedProfile {
-        email: Some(options.profile_email.clone()),
-        account_id_prefix: None,
-    };
+    let (probe, stdout, stderr, events, proposal) = observation.into_parts();
+    let descriptor_blake3 = descriptor_digest(&probe.descriptor)?;
     let policy = ProviderAdmissionPolicy {
         provider: options.provider.clone(),
         executable: executable.clone(),
         executable_blake3: exe_digest.clone(),
         version: options.version.clone(),
         descriptor_blake3,
-        profile: ProfileRef {
-            profile_id: ProfileId::from_seed(&options.provider),
-            expected: expected.clone(),
-        },
+        profile,
         required_protocol: protocol,
         max_probe_age_seconds: 300,
         runtime_root: runtime_root.to_path_buf(),
         credential_targets: vec![],
         credentials: vec![],
     };
-    let identity = ProbeResult {
-        profile: Observation::value(ProfileIdentity {
-            provider: options.provider.clone(),
-            email: expected.email,
-            account_id: None,
-            subscription: None,
-            auth_method: Some("operator-attested".into()),
-        }),
-        version: options.version.clone(),
-    };
-    let probe = RuntimeProbeSnapshot {
-        descriptor,
-        executable,
-        executable_blake3: exe_digest,
-        protocol,
-        identity,
-        observed_at: now,
-    };
     ProviderAdmission::prepare(policy, probe, std::env::vars(), canaries.clone(), now)?.finalize(
         ConformanceEvidence {
-            stdout: b"",
-            stderr: b"",
-            events: &conformance_events(&options.provider),
-            proposal: &conformance_proposal(),
+            stdout: &stdout,
+            stderr: &stderr,
+            events: &events,
+            proposal: &proposal,
         },
     )
-}
-
-fn probe_descriptor(
-    dispatcher: &dyn LiveDispatcher,
-    executable: &Path,
-    version: &str,
-    required: &[Capability],
-) -> HarnessDescriptor {
-    let mut descriptor = dispatcher.descriptor();
-    descriptor.binary = executable
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    descriptor.version = Observation::value(version.to_string());
-    descriptor.stage = PromotionStage::ContractPass;
-    for capability in required {
-        descriptor
-            .capabilities
-            .set(*capability, CapabilityState::Supported);
-    }
-    descriptor
-}
-
-/// Required capability set per protocol. Mirrors
-/// `bullet_harness_core::admission::protocol::requirement`.
-fn required_capabilities(protocol: ProviderProtocol) -> Vec<Capability> {
-    match protocol {
-        ProviderProtocol::AntigravityHeadlessStructured
-        | ProviderProtocol::AntigravityHeadlessText => vec![
-            Capability::StructuredOutputSchema,
-            Capability::HeadlessMode,
-            Capability::MultilinePrompt,
-        ],
-        _ => vec![
-            Capability::StructuredEvents,
-            Capability::StructuredOutputSchema,
-            Capability::HeadlessMode,
-            Capability::MultilinePrompt,
-        ],
-    }
-}
-
-fn conformance_events(provider: &str) -> Vec<AgentEvent> {
-    let mut normalizer = EventNormalizer::new(
-        bullet_harness_core::AgentSessionId::new("live-admission"),
-        provider,
-    );
-    vec![
-        normalizer.accept(AgentEventKind::TurnStarted, json!({}), &NativeMeta::none()),
-        normalizer.accept(
-            AgentEventKind::TurnCompleted,
-            json!({}),
-            &NativeMeta::none(),
-        ),
-    ]
-}
-
-fn conformance_proposal() -> PatchProposal {
-    PatchProposal {
-        schema_version: 1,
-        proposal_id: format!("cnt_{}", "1".repeat(64)),
-        producing_attempt_id: format!("atm_{}", "2".repeat(64)),
-        base_checkpoint_id: format!("ckp_{}", "3".repeat(64)),
-        base_checkpoint_digest: "4".repeat(64),
-        intent_summary: "live conformance admission subject".into(),
-        operations: vec![bullet_harness_core::PatchOperation {
-            path: "PONG.txt".into(),
-            preimage: bullet_harness_core::Preimage::Absent,
-            mutation: bullet_harness_core::PatchMutation::Write {
-                content_utf8: "PONG\n".into(),
-            },
-        }],
-        gate_ids: vec![PROPOSAL_GATE_ID.to_string()],
-        claims: vec![],
-        uncertainties: vec![],
-        done: true,
-    }
 }
 
 fn provider_binding(

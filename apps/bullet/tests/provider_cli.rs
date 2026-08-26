@@ -2,8 +2,10 @@
 //! the checked-in v1alpha1 policy it refuses (exit 78) before spawning any
 //! provider, writes a receipt, and never touches the real provider binary. A
 //! v1alpha2 policy (ADR 0012) is admitted only by the production loader's
-//! rules and is reported with its schema version and generation. It runs only
-//! the `bullet` binary itself, pointed at a marker executable.
+//! rules and is reported with its schema version and generation. Each real
+//! provider selector then refuses at runtime observation before credentials,
+//! authority writes, egress, or child execution. It runs only the `bullet`
+//! binary itself, pointed at marker executables.
 
 #![cfg(unix)]
 
@@ -65,24 +67,33 @@ fn v1alpha2_policy(mutate: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
     bullet_harness_core::launch_grant::canonical_json(&value).unwrap()
 }
 
-fn live_conformance_args<'a>(data: &'a str, executable: &'a str) -> [&'a str; 8] {
+fn live_conformance_args<'a>(
+    data: &'a str,
+    provider: &'a str,
+    executable: &'a str,
+) -> [&'a str; 8] {
     [
         "provider",
         "live-conformance",
         "--data-dir",
         data,
         "--provider",
-        "claude",
+        provider,
         "--executable",
         executable,
     ]
 }
 
-fn receipt_json(data_dir: &Path) -> String {
+fn receipt_json(data_dir: &Path, provider: &str) -> String {
     let receipt = fs::read_dir(data_dir.join("live"))
         .expect("live directory")
         .filter_map(Result::ok)
-        .find(|entry| entry.file_name().to_string_lossy().starts_with("claude-"))
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{provider}-"))
+        })
         .expect("a receipt was written");
     fs::read_to_string(receipt.path()).unwrap()
 }
@@ -141,51 +152,82 @@ fn live_conformance_refuses_under_v1alpha1_without_spawning() {
         "the provider binary must never be spawned"
     );
 
-    let json = receipt_json(&data_dir);
+    let json = receipt_json(&data_dir, "claude");
     assert!(json.contains("\"outcome\": \"REFUSED\""), "{json}");
     assert!(json.contains("\"failed_step\": \"POLICY\""), "{json}");
 }
 
 #[test]
 fn live_conformance_admits_a_ratified_v1alpha2_policy_and_reports_it() {
-    let directory = private_temp_dir();
-    let base = directory.path().canonicalize().unwrap();
-    let data_dir = base.join("data");
-    create_private_dir(&data_dir);
-    let policy = base.join("policy-v1alpha2.json");
-    fs::write(&policy, v1alpha2_policy(|_| {})).unwrap();
-    let marker = base.join("claude");
-    let spawned = base.join("SPAWNED");
-    write_marker(&marker, &spawned);
+    for (provider, basename) in [
+        ("claude", "claude"),
+        ("codex", "codex"),
+        ("cursor", "cursor-agent"),
+        ("agy", "agy"),
+    ] {
+        let directory = private_temp_dir();
+        let base = directory.path().canonicalize().unwrap();
+        let data_dir = base.join("data");
+        create_private_dir(&data_dir);
+        let policy = base.join("policy-v1alpha2.json");
+        fs::write(&policy, v1alpha2_policy(|_| {})).unwrap();
+        let marker = base.join(basename);
+        let spawned = base.join("SPAWNED");
+        write_marker(&marker, &spawned);
 
-    // No operator key is installed: the path must pass POLICY and stop at
-    // OPERATOR_KEY, still before any spawn.
-    let data = data_dir.to_string_lossy().into_owned();
-    let executable = marker.to_string_lossy().into_owned();
-    let output = bullet_with_policy(&live_conformance_args(&data, &executable), &policy);
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains(
-            "policy: schema_version=v1alpha2 generation=2 live_admission_enabled=true digest="
-        ),
-        "stdout: {stdout}"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("failed at OperatorKey"), "stderr: {stderr}");
-    assert!(
-        !spawned.exists(),
-        "the provider binary must never be spawned"
-    );
-    let json = receipt_json(&data_dir);
-    assert!(json.contains("\"outcome\": \"FAILED\""), "{json}");
-    assert!(json.contains("\"failed_step\": \"OPERATOR_KEY\""), "{json}");
-    assert!(json.contains("\"policy_generation\": 2"), "{json}");
+        // No operator key is installed. Runtime observation must refuse even
+        // earlier, and all four product adapters inherit the same default.
+        let data = data_dir.to_string_lossy().into_owned();
+        let executable = marker.to_string_lossy().into_owned();
+        let output = bullet_with_policy(
+            &live_conformance_args(&data, provider, &executable),
+            &policy,
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(78),
+            "{provider}: stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(
+                "policy: schema_version=v1alpha2 generation=2 live_admission_enabled=true digest="
+            ),
+            "{provider}: stdout: {stdout}"
+        );
+        assert!(
+            stdout.contains(&format!(
+                "live-conformance {provider}: refused (RUNTIME_PROBE_UNAVAILABLE); neutral"
+            )),
+            "{provider}: stdout: {stdout}"
+        );
+        assert!(
+            !spawned.exists(),
+            "{provider}: the provider binary must never be spawned"
+        );
+        assert!(
+            !data_dir.join("authority/launch-grant.key").exists(),
+            "{provider}: operator custody must not be read or created"
+        );
+        let json = receipt_json(&data_dir, provider);
+        assert!(
+            json.contains("\"outcome\": \"REFUSED\""),
+            "{provider}: {json}"
+        );
+        assert!(
+            json.contains("\"failed_step\": \"ADMISSION\""),
+            "{provider}: {json}"
+        );
+        assert!(
+            json.contains("\"refusal_reason\": \"RUNTIME_PROBE_UNAVAILABLE\""),
+            "{provider}: {json}"
+        );
+        assert!(
+            json.contains("\"policy_generation\": 2"),
+            "{provider}: {json}"
+        );
+    }
 }
 
 #[test]
@@ -227,7 +269,10 @@ fn live_conformance_refuses_v1alpha2_policies_the_hub_validator_rejects() {
 
         let data = data_dir.to_string_lossy().into_owned();
         let executable = marker.to_string_lossy().into_owned();
-        let output = bullet_with_policy(&live_conformance_args(&data, &executable), &policy);
+        let output = bullet_with_policy(
+            &live_conformance_args(&data, "claude", &executable),
+            &policy,
+        );
         assert_eq!(output.status.code(), Some(1), "{name}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(

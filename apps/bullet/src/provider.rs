@@ -1,11 +1,13 @@
-//! `bullet provider live-conformance`: the operator entry point to the positive
+//! `bullet provider live-conformance`: the operator entry point to the guarded
 //! live-conformance path. It loads the on-disk policy (v1alpha1 or an
 //! operator-ratified v1alpha2 generation, ADR 0012), reports its schema
 //! version, generation, and digest, selects the provider adapter and the real
 //! `bullet-harness-egress` backend, and drives
 //! `bullet_application::run_live_conformance`. Under v1alpha1 every provider
-//! refuses at `POLICY_LIVE_ADMISSION_DISABLED` (exit 78) before any key read,
-//! probe, namespace, or spawn.
+//! refuses at `POLICY_LIVE_ADMISSION_DISABLED`; a valid v1alpha2 policy reaches
+//! the production adapters' `RUNTIME_PROBE_UNAVAILABLE` refusal. Both are
+//! neutral exit 78 before operator-key read, authority mutation, egress, or
+//! provider spawn.
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::policy_snapshot::load_policy_from_environment;
@@ -22,15 +24,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
-/// Neutral exit code for a policy refusal (per-provider positive half).
+/// Neutral exit code for a designed policy or runtime-observation refusal.
 const NEUTRAL_REFUSAL: u8 = 78;
 const DEFAULT_MAX_COST_MICRO_USD: u64 = 50_000;
 
 /// `bullet provider ...`
 #[derive(Subcommand)]
 pub(super) enum ProviderCommands {
-    /// Run the positive live-conformance path for one provider. Under
-    /// v1alpha1 policy this refuses (exit 78) before any provider is spawned.
+    /// Run the guarded live-conformance path for one provider. Production
+    /// adapters currently refuse (exit 78) before any provider is spawned.
     LiveConformance(Box<LiveConformanceArgs>),
 }
 

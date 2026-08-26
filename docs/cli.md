@@ -7,9 +7,10 @@ Source of truth: `apps/bullet/src/{main,transaction,authority,provider,maintenan
 `apps/bullet/src/authority/mint.rs`, and the process-bin `main.rs` files below.
 <!-- bullet-doc-review:v1 subject=3fb9d8e450f59bf3e35531320381050357116cf2 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs -->
 
-Every command is offline except `provider live-conformance`, which can spawn a
-provider only after the policy, key, lease, admission, grant, and egress steps
-all pass. Nothing here produces `LIVE_PROOF` or `RELEASE_PROOF`.
+Every command is offline except the guarded `provider live-conformance` path.
+Every current production adapter refuses at runtime observation before it can
+read the operator key, mutate graph/lease/nonce authority, prepare egress, or
+spawn a provider. Nothing here produces `LIVE_PROOF` or `RELEASE_PROOF`.
 
 ## Environment
 
@@ -34,7 +35,7 @@ all pass. Nothing here produces `LIVE_PROOF` or `RELEASE_PROOF`.
 | `contracts check` | fail when the generated TypeScript is stale (gates the fast lane) |
 | `authority keygen` | create the operator launch-grant signing key; see below |
 | `authority mint-launch-grant` | mint one signed launch grant from the durable active lease; see below |
-| `provider live-conformance` | run the 13-step positive live path for one provider; see below |
+| `provider live-conformance` | run the guarded 13-step live path for one provider; see below |
 
 ## `authority keygen`
 
@@ -131,10 +132,12 @@ seed `live-conformance-<provider>`, one random 64-hex canary. The real
 `bullet-harness-egress` backend is always used; `agy` maps to the
 `antigravity` allowlist.
 
-Exit codes: `0` outcome `PONG`; `78` outcome `REFUSED` (neutral; today always
-`POLICY_LIVE_ADMISSION_DISABLED` at step `POLICY`, before any key read, probe,
-namespace, or spawn; a v1alpha2 policy that enables live admission must also
-pass `validate_at(now)` at the same step or the run is `FAILED`); `1` outcome
+Exit codes: `0` outcome `PONG`; `78` outcome `REFUSED` (neutral). The checked-in
+v1alpha1 policy returns `POLICY_LIVE_ADMISSION_DISABLED` at `POLICY`. A valid,
+active v1alpha2 policy reaches `RUNTIME_PROBE_UNAVAILABLE` at `ADMISSION` for
+all four production adapters, before operator-key read, graph/Mission or lease/
+nonce writes, egress preparation, or provider spawn. An invalid or inactive
+v1alpha2 policy fails at `POLICY`; `1` also covers outcome
 `FAILED` or a pre-run error (relative
 `--data-dir`, unknown provider, executable not found, policy or ledger open
 failure). Stdout first prints `policy: schema_version=… generation=…
@@ -143,6 +146,13 @@ receipts are sealed and fsync'd
 to `<data-dir>/live/<provider>-<utc>.json` on every outcome. The 13 steps and
 the receipt fields are listed in
 [`architecture.md`](architecture.md#live-conformance-path).
+
+The v1alpha1 receipt has `POLICY=REFUSED` and 12 `NOT_RUN` records. The valid
+v1alpha2 product receipt has `POLICY=PASS`, `ADMISSION=REFUSED`, and all other
+11 records—including `OPERATOR_KEY` and `LEASE`—`NOT_RUN`; the observation is
+checked early but mapped to the existing `ADMISSION` slot. The CLI opens its
+SQLite ledger before orchestration, but the refusal creates no Mission, graph,
+lease, or nonce row.
 
 ## Daemons and process bins
 

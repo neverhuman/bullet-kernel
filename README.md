@@ -136,7 +136,7 @@ egress, 34 contract, and nine family identities.
 | family | `BULLET_GITD_BIN=/canonical/absolute/bullet-gitd BULLET_GITD_SHA256=<lowercase-sha256> just family` | exactly nine connected family tests: five transaction-demo identities, three runner identities, and `synthetic_e2e`; missing, relative, non-canonical, non-executable, or digest-mismatched daemon subjects fail | family observation only; not registered until immutable family provisioning exists |
 | audit | `just audit` | Jankurai audit against the committed ratchet floor (`AUDIT_FLOOR=57`, may only rise); artifacts under `.jankurai/`; a missing auditor fails | hygiene gate; no evidence class |
 | egress | `just egress` | exactly three host-dependent live proofs, kept outside standalone by the inventory ratchet, cover namespace, uplink, nftables, CONNECT proxy, receipt, and teardown; exits 78 (neutral) when any of `unshare nsenter slirp4netns nft curl cat kill` or unprivileged user namespaces is missing; never green unless all three capability-admitted probes run | `COMPONENT_PROOF` on a Linux host |
-| nightly | `just nightly` | per selected provider: exact live-feature refusal test plus positive live-conformance half. All PONG is 0; any policy refusal without a hard failure is neutral 78; any test, execution, or spawn failure is 1. Default mode uses marker executables and the checked-in policy, never a real provider | default: `COMPONENT_PROOF` of refusal without spawn; not `LIVE_PROOF` |
+| nightly | `just nightly` | per selected provider: exact live-feature refusal test plus guarded live-conformance half. All PONG is 0; any typed policy or runtime-observation refusal without a hard failure is neutral 78; any test, execution, or spawn failure is 1. Default mode uses marker executables and the checked-in policy, never a real provider | default: `COMPONENT_PROOF` of refusal without spawn; not `LIVE_PROOF` |
 | toolchain-msrv | `just toolchain-msrv` | release-schema observation under Rust 1.95.0; separate from standalone required CI and still family-bound while its frozen receipt argv tests all targets | `COMPONENT_PROOF`; unsigned input to a future release receipt only |
 
 `.github/workflows/ci.yml` scans source and lockfiles before dependency work,
@@ -155,7 +155,7 @@ receipts. See [CI and test inventory](docs/testing.md).
 | `bullet demo-synthetic` | Offline non-gating scaffold; while production authority is unavailable, it exits failed with a typed refusal and no Candidate |
 | `bullet farm backup\|restore` | Offline integrity/subject maintenance; restored truth remains quarantined |
 | Internal command worker | Authenticated invoked reconciliation; demo work settles only `UNKNOWN`, unsupported kinds only `FAILED` |
-| Provider contracts | Four bounded offline transcript/result subsets plus one common policy-gated live-conformance path; under the checked-in v1alpha1 policy every provider refuses (exit 78) before any spawn; no provider has a live receipt |
+| Provider contracts | Four bounded offline transcript/result subsets plus one common policy-gated live-conformance path; the checked-in v1alpha1 policy refuses at `POLICY`, while a valid v1alpha2 policy reaches the production adapters' typed `RUNTIME_PROBE_UNAVAILABLE` refusal at `ADMISSION`; both exit 78 before any provider spawn, and no provider has a live receipt |
 | Policy loader | v1alpha1 and v1alpha2 (ADR 0012 mirror); live admission is legal only at generation ≥ 2 with an active `provider-runner` key; the committed fixture is v1alpha1, generation 1, live disabled |
 | Launch-grant authority | Offline operator keygen and mint from the durable lease; the verifier binds lease, admission, policy, a single-use nonce, and the ledger's durable authority epoch/freeze generation; no admitted online operation advances those revisions |
 | Egress isolation | Linux-only namespace/nftables/CONNECT-proxy boundary with a sealed receipt; `just egress` on a capable host, else neutral 78 |
@@ -186,9 +186,13 @@ blocker remains. A deserialized receipt never dispatches (`UNSIGNED_RECEIPT`).
 Codex App Server JSONL, Cursor ACP, Antigravity structured headless with
 1.1.19's flags-before-prompt-last-`-p=` ordering, and Claude stream JSON are the
 frozen protocol requirements; runtime probes, not provider names, determine
-conformance. No provider has an admitted live runtime: the checked-in v1alpha1
-policy makes `verify_launch_grant` refuse with `POLICY_LIVE_ADMISSION_DISABLED`
-before any spawn.
+conformance. No production adapter can yet produce the owned runtime and
+conformance observation. Its default port returns `RUNTIME_PROBE_UNAVAILABLE`
+immediately after a valid policy check and before operator-key read, Mission/
+graph materialization, lease or nonce writes, egress, or spawn. The checked-in
+v1alpha1 policy refuses even earlier with `POLICY_LIVE_ADMISSION_DISABLED`.
+Only a strict `cfg(test)` application wrapper constructs positive observed
+fixture data, so its PONG paths remain component mechanics, never live proof.
 
 The four committed provider machines accept only bounded offline protocol
 subsets: Claude stream messages, Codex App Server JSONL, Cursor ACP, and

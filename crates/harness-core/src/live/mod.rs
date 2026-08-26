@@ -20,10 +20,82 @@ pub use receipt::{
 pub use request::{LiveTurnRequest, CONFORMANCE_EXPECTED_RESPONSE, CONFORMANCE_PROMPT};
 
 use crate::adapter::HarnessDescriptor;
-use crate::admission::{EgressIsolationEvidence, EvaluatedAdmission, ProviderProtocol};
+use crate::admission::{
+    EgressIsolationEvidence, EvaluatedAdmission, ProviderProtocol, RuntimeProbeSnapshot,
+};
 use crate::error::HarnessError;
+use crate::event::AgentEvent;
+use crate::probe::ProfileRef;
+use crate::proposal::PatchProposal;
+use chrono::{DateTime, Utc};
 use std::path::Path;
 use std::process::Command;
+
+/// Owned output of an isolated runtime and conformance observation.
+///
+/// This is validated data, not an authority grant or independently signed
+/// proof. Production adapters currently return a typed refusal instead of
+/// manufacturing any of these fields.
+#[derive(Clone, Debug)]
+pub struct RuntimeConformanceObservation {
+    /// Exact runtime probe subject.
+    probe: RuntimeProbeSnapshot,
+    /// Captured stdout bytes scanned during admission.
+    stdout: Vec<u8>,
+    /// Captured stderr bytes scanned during admission.
+    stderr: Vec<u8>,
+    /// Normalized conformance events.
+    events: Vec<AgentEvent>,
+    /// Structurally validated proposal produced by the observation.
+    proposal: PatchProposal,
+}
+
+impl RuntimeConformanceObservation {
+    /// Construct an owned observation after validating its proposal subject.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed proposal error when the proposed mutation contract is
+    /// malformed. Full probe/profile/capability validation remains the
+    /// responsibility of `ProviderAdmission`.
+    pub fn new(
+        probe: RuntimeProbeSnapshot,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        events: Vec<AgentEvent>,
+        proposal: PatchProposal,
+    ) -> Result<Self, HarnessError> {
+        proposal.validate()?;
+        Ok(Self {
+            probe,
+            stdout,
+            stderr,
+            events,
+            proposal,
+        })
+    }
+
+    /// Consume the validated observation into the inputs independently
+    /// rechecked by `ProviderAdmission`.
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        RuntimeProbeSnapshot,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<AgentEvent>,
+        PatchProposal,
+    ) {
+        (
+            self.probe,
+            self.stdout,
+            self.stderr,
+            self.events,
+            self.proposal,
+        )
+    }
+}
 
 /// True when a response is exactly the single admitted word, ignoring only
 /// surrounding whitespace.
@@ -47,6 +119,29 @@ pub trait LiveDispatcher {
 
     /// Frozen V1 protocol a runtime probe must demonstrate.
     fn required_protocol(&self) -> ProviderProtocol;
+
+    /// Produce independently observed runtime and conformance facts without
+    /// reading Kernel authority, preparing egress, or dispatching a task.
+    ///
+    /// The default is deliberately fail-closed. A future production
+    /// implementation requires its own read-only probe authority and
+    /// containment contract; none of the product adapters implements that
+    /// boundary yet.
+    ///
+    /// # Errors
+    ///
+    /// `RUNTIME_PROBE_UNAVAILABLE` unless an adapter supplies a real observed
+    /// subject, or another typed observation failure.
+    fn observe_runtime_conformance(
+        &self,
+        _executable: &Path,
+        _profile: &ProfileRef,
+        _observed_at: DateTime<Utc>,
+    ) -> Result<RuntimeConformanceObservation, HarnessError> {
+        Err(HarnessError::RuntimeProbeUnavailable {
+            provider: self.provider().to_string(),
+        })
+    }
 
     /// Dispatch exactly one read-only turn against an admission that has
     /// cleared every blocker, running it through `factory` (the egress

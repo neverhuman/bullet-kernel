@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Meta-test for ops/ci/nightly.sh. It replaces `cargo` with a logger so it can
 # assert the nightly emits, for every provider, both the frozen feature-gated
-# refusal test AND the positive live-conformance CLI run — and that a failing
+# refusal test AND the guarded live-conformance CLI run — and that a failing
 # refusal test makes the whole lane fail. This keeps a zero-test nightly from
 # passing: the exact `--exact` refusal test lines must be present.
 set -euo pipefail
@@ -31,7 +31,7 @@ printf '%s\n' "$*" >>"${BULLET_NIGHTLY_TEST_LOG:?}"
 if [[ -n "${BULLET_NIGHTLY_FAIL_CRATE:-}" && "$*" == *"-p ${BULLET_NIGHTLY_FAIL_CRATE} "* ]]; then
   exit 17
 fi
-# The positive live-conformance half refuses (78) under the v1alpha1 policy.
+# The product returns 78 for either policy or runtime-observation refusal.
 if [[ "$*" == *"provider live-conformance"* ]]; then
   if [[ -n "${BULLET_NIGHTLY_PONG_PROVIDER:-}" && "$*" == *"--provider ${BULLET_NIGHTLY_PONG_PROVIDER} "* ]]; then
     exit 0
@@ -49,7 +49,7 @@ PATH="$test_root:/usr/bin:/bin" \
 neutral_code=$?
 set -e
 if [[ "$neutral_code" -ne 78 ]]; then
-  fail "four policy refusals must return neutral 78, got $neutral_code"
+  fail "four typed refusals must return neutral 78, got $neutral_code"
 fi
 
 mapfile -t calls <"$log_file"
@@ -94,7 +94,7 @@ PATH="$test_root:/usr/bin:/bin" BULLET_NIGHTLY_TEST_LOG="$log_file" BULLET_LIVE_
 real_code=$?
 set -e
 if [[ "$real_code" -ne 78 ]]; then
-  fail "real-mode policy refusals must return neutral 78, got $real_code"
+  fail "real-mode typed refusals must return neutral 78, got $real_code"
 fi
 mapfile -t real_calls <"$log_file"
 if [[ "${#real_calls[@]}" -ne 4 ]]; then

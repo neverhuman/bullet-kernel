@@ -1,19 +1,22 @@
 //! v1alpha2 gating of the live-conformance path through the production loader
-//! (`load_policy` / `LoadedPolicy::from_bytes`, no test seam): the hub fixture
-//! with its fixture-only key reaches PONG; every ADR 0012 refusal, plus an
-//! out-of-window instant, stops before the operator key is read and before the
-//! fake provider binary can run (marker-file assertion).
+//! (`load_policy` / `LoadedPolicy::from_bytes`, no policy bypass). Positive
+//! fixture dispatch uses the strict `cfg(test)` observation wrapper; a real
+//! product adapter with a valid policy/key refuses at runtime observation
+//! before authority, egress, or provider process activity.
 
 use super::egress::NoopEgressBackend;
 use super::run_live_conformance;
-use super::tests::{options, FakeMode, Harness, HAPPY_CANARY};
+use super::tests::{options, FakeMode, Harness, ObservedClaudeDispatcher, HAPPY_CANARY};
 use crate::memory::MemoryLedger;
 use crate::policy_snapshot::{
     load_policy, LoadedPolicy, PolicySchemaVersion, LIVE_ADMISSION_MIN_GENERATION,
 };
+use crate::store::Ledger;
 use bullet_harness_claude::ClaudeAdapter;
 use bullet_harness_core::launch_grant::{canonical_json, signing_key_path};
-use bullet_harness_core::{LiveOutcome, LiveStep, StepStatus};
+use bullet_harness_core::{
+    EgressBackend, HarnessError, LiveOutcome, LiveStep, PreparedEgress, StepStatus,
+};
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{json, Value};
 use std::fs;
@@ -110,6 +113,23 @@ fn step_status(run_steps: &[bullet_harness_core::LiveStepRecord], step: LiveStep
         .status
 }
 
+/// Any call proves the runtime-observation refusal happened too late.
+struct RejectIfCalledEgress;
+
+impl EgressBackend for RejectIfCalledEgress {
+    fn sandbox_manifest_digest(&self, _provider: &str) -> Result<String, HarnessError> {
+        panic!("egress manifest requested before runtime observation")
+    }
+
+    fn prepare(
+        &self,
+        _provider: &str,
+        _workdir: &Path,
+    ) -> Result<Box<dyn PreparedEgress + '_>, HarnessError> {
+        panic!("egress prepared before runtime observation")
+    }
+}
+
 #[test]
 fn hub_fixture_passes_the_policy_step_through_the_production_loader_and_pongs() {
     let harness = Harness::new(FakeMode::Pong);
@@ -127,7 +147,7 @@ fn hub_fixture_passes_the_policy_step_through_the_production_loader_and_pongs() 
         &harness.data_dir,
         &mut ledger,
         &policy,
-        &ClaudeAdapter::new(),
+        &ObservedClaudeDispatcher::new(),
         &NoopEgressBackend::new(),
         &fixture_options(&harness),
         in_window(),
@@ -280,7 +300,7 @@ fn an_out_of_window_instant_fails_the_policy_step_before_the_key_is_read() {
         &harness.data_dir,
         &mut ledger,
         &policy,
-        &ClaudeAdapter::new(),
+        &ObservedClaudeDispatcher::new(),
         &NoopEgressBackend::new(),
         &fixture_options(&harness),
         in_window(),
@@ -332,13 +352,38 @@ fn a_runner_key_not_yet_active_fails_the_policy_step_at_that_instant() {
         &mut ledger,
         &policy,
         &ClaudeAdapter::new(),
-        &NoopEgressBackend::new(),
+        &RejectIfCalledEgress,
         &fixture_options(&harness),
         instant(activates),
     )
-    .expect("PONG once the key is active");
-    assert_eq!(run.receipt.outcome, LiveOutcome::Pong);
-    assert_eq!(harness.marker_runs(), 1);
+    .expect("missing runtime observation is a designed refusal");
+    assert_eq!(run.receipt.outcome, LiveOutcome::Refused);
+    assert_eq!(
+        run.receipt.refusal_reason.as_deref(),
+        Some("RUNTIME_PROBE_UNAVAILABLE")
+    );
+    assert_eq!(run.receipt.failed_step, Some(LiveStep::Admission));
+    assert_eq!(
+        step_status(&run.receipt.steps, LiveStep::Policy),
+        StepStatus::Pass
+    );
+    assert_eq!(
+        step_status(&run.receipt.steps, LiveStep::Admission),
+        StepStatus::Refused
+    );
+    assert_eq!(
+        step_status(&run.receipt.steps, LiveStep::OperatorKey),
+        StepStatus::NotRun
+    );
+    assert_eq!(
+        step_status(&run.receipt.steps, LiveStep::Lease),
+        StepStatus::NotRun
+    );
+    assert!(run.grant.is_none(), "no launch-grant nonce may be minted");
+    assert!(ledger.list_missions().unwrap().is_empty());
+    assert!(ledger.list_events().unwrap().is_empty());
+    assert_eq!(harness.marker_runs(), 0);
+    run.receipt.verify().unwrap();
 }
 
 #[test]

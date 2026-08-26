@@ -2,7 +2,7 @@
 
 Status: **no release exists; every release gate is BLOCKED**
 Owner: bullet-kernel maintainers (`agent/owner-map.json`)
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-26
 Applies to: bullet-kernel
 
 This page is a fail-closed contract, not a plan of record. Nothing in this
@@ -40,7 +40,7 @@ checker. Today every gate is BLOCKED. The honest status of each:
 | Rollback | a rehearsed rollback procedure | there is no down-migration and there deliberately never will be one pre-1.0. Rollback is restore-from-verified-backup; a physically restored database refuses every operation with `RESTORE_ADMISSION_REQUIRED` until admitted, and no production admission path exists in V1. Implemented in code, unproven as a procedure |
 | Monitoring | telemetry, dashboards and alerts | BLOCKED: none exist. What exists is typed reason codes on every failure (`reason_code()`, pinned by `reason_codes_are_stable`), the observation projections the daemon serves, and the fail-closed egress receipts in `crates/harness-egress/src/receipt.rs`. That is structured evidence a human can read, not monitoring |
 | Abuse and rate limits | a rate-limited, authenticated public surface | no public surface exists to rate limit. What is bounded today: writer leases are capped to 1..=15 seconds (`db/migrations/0005_lease_ttl.sql` plus `DomainError::InvalidLeaseTtl`), fences refuse reuse, provider egress is default-deny through the allowlist and in-namespace nftables ruleset (`crates/harness-egress`, `docs/egress-isolation.md`), and the authority gateway is fail-closed |
-| Live provider oracle | a green live-conformance run against real provider binaries | BLOCKED: under the checked-in `v1alpha1` policy every positive half refuses at `POLICY_LIVE_ADMISSION_DISABLED` and `ops/ci/nightly.sh` exits 78. Exit 78 is neutral, never green |
+| Live provider oracle | a green live-conformance run against real provider binaries | BLOCKED: the checked-in `v1alpha1` policy refuses at `POLICY_LIVE_ADMISSION_DISABLED`; even a valid v1alpha2 policy reaches `RUNTIME_PROBE_UNAVAILABLE` in every production adapter before spawn. `ops/ci/nightly.sh` exits 78 for either typed refusal. Exit 78 is neutral, never green |
 
 ## Rules
 

@@ -1,5 +1,5 @@
 //! The durable-shaped live-conformance receipt. It records exactly what each
-//! step of the positive path did — a step that never ran is `NOT_RUN`, never
+//! step of the guarded path did — a step that never ran is `NOT_RUN`, never
 //! omitted — plus the provider dispatch facts, and is sealed with a
 //! domain-separated digest so a tampered receipt fails verification.
 
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Frozen receipt schema identifier.
 pub const LIVE_CONFORMANCE_SCHEMA_VERSION: &str = "bullet.live-conformance.v1";
 
-/// Ordered steps of the positive live-conformance path. Each records its own
+/// Ordered steps of the guarded live-conformance path. Each records its own
 /// status; nothing is ever collapsed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -93,7 +93,7 @@ pub struct LiveStepRecord {
 pub enum LiveOutcome {
     /// The provider replied `PONG`; every step passed.
     Pong,
-    /// A designed refusal (today always `POLICY_LIVE_ADMISSION_DISABLED`).
+    /// A designed policy or runtime-observation refusal.
     Refused,
     /// A step failed; the exact step and reason are recorded.
     Failed,

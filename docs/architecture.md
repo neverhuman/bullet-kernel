@@ -122,7 +122,11 @@ admitted `gate_ids`; narrative fields are retained for review only and are
 never serialized to the writer. Free text is never authority, and a proposal is
 not Evidence. Their feature-gated tests are non-ignored refusal contracts, not
 live smokes or runtime conformance. Installed-version and schema observations
-only freeze test inputs. All raw provider frames use strict recursive decoding
+only freeze test inputs. Their shared `LiveDispatcher` observation port defaults
+to `RUNTIME_PROBE_UNAVAILABLE`; no production adapter overrides it. The owned
+observation type validates a proposal but is neither signed proof nor authority.
+Only the application's strict `cfg(test)` Claude wrapper constructs positive
+runtime/profile/event/proposal fixture data. All raw provider frames use strict recursive decoding
 that rejects decoded-equivalent duplicate object keys and trailing data; Codex
 applies it again to its inner proposal text. RFC 8785 identity is enforced only
 on the launch-grant, lease-transport, and policy paths (`launch_grant/canonical.rs`,
@@ -253,17 +257,23 @@ Source: `crates/application/src/live_conformance/{mod,steps}.rs`; ports in
 
 1. `POLICY` — `require_live_admission`, then `validate_at(now)`. The committed
    v1alpha1 policy refuses here (`REFUSED`, outcome `REFUSED`, CLI exit 78)
-   before any key read, probe, namespace, or spawn; a live-enabled v1alpha2
+   before any key read, runtime observation, namespace, or spawn; a live-enabled v1alpha2
    policy that is not active with an active `provider-runner` key at `now`
    fails here instead.
+   Immediately after this pass, the application requests an independently
+   observed runtime/conformance subject. If unavailable, the existing
+   `ADMISSION` record becomes `REFUSED` with `RUNTIME_PROBE_UNAVAILABLE`; all
+   other 11 records, including schema-earlier `OPERATOR_KEY` and `LEASE`, stay
+   `NOT_RUN`. This early safety check preserves the frozen 13-step schema.
 2. `OPERATOR_KEY` — load the 0600 key; `authority_key_at` must admit it and
    the public halves must be equal.
 3. `LEASE` — materialize a deterministic conformance Mission/graph from the
    seed and acquire a durable lease (TTL 15 s).
-4. `ADMISSION` — `ProviderAdmission::prepare`/`finalize` from an
-   executable-digest plus operator-attested identity probe (no provider is
-   spawned to probe), fresh canaries, an empty credential set, and a fixed
-   two-event / one-operation conformance evidence subject.
+4. `ADMISSION` — consume the already obtained owned runtime/conformance
+   observation in `ProviderAdmission::prepare`/`finalize`, with fresh canaries
+   and an empty credential set. No production adapter can supply that
+   observation today. The fixed descriptor/profile/two-event/one-operation
+   subject exists only in the strict `cfg(test)` dispatcher wrapper.
 5. `MINT` — `LedgerLaunchGrantIssuer::mint` binding the durable lease, the
    receipt's digests, the egress backend's `sandbox_manifest_digest`
    (`EgressPolicy::allowlist_digest` for the real backend), and the staged
@@ -298,10 +308,12 @@ steps that did not run are `null`. It is written fsync'd to
 and failure.
 
 Evidence class: the workspace test run drives this path through a fake
-provider process and the no-op egress double (`live_conformance/egress.rs`,
-`test-seams` only, never wired into the CLI); that is `COMPONENT_PROOF`.
+provider process, the strict `cfg(test)` observation wrapper, and the no-op
+egress double (`live_conformance/egress.rs`, `test-seams` only, never wired
+into the CLI); that is `COMPONENT_PROOF`.
 `ops/ci/nightly.sh` default mode is `COMPONENT_PROOF` of refusal without spawn.
-No provider has a real-mode receipt; a real-mode `PONG` would be
+Every current product adapter refuses at runtime observation under an otherwise
+valid v1alpha2 policy. No provider has a real-mode receipt; a future real-mode `PONG` would be
 provider-conformance evidence for one read-only turn, not `LIVE_PROOF` of the
 exact-subject transaction.
 

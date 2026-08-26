@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Nightly provider lane. For each provider it (a) runs the frozen feature-gated
-# refusal test and (b) runs the positive live-conformance half through the CLI.
+# refusal test and (b) runs the guarded live-conformance half through the CLI.
 # Under the checked-in v1alpha1 policy every positive half refuses at
-# POLICY_LIVE_ADMISSION_DISABLED (exit 78) before any provider is spawned; that
-# is a neutral outcome. The lane is green only if every provider's positive
-# half produced a PONG-matching receipt (exit 0). Any policy refusal makes the
-# lane itself neutral (78), and any refusal-test/execution/spawn failure wins as
-# exit 1. This prevents an all-refused credential-free run from looking proved.
+# POLICY_LIVE_ADMISSION_DISABLED. With a valid v1alpha2 policy, every current
+# production adapter instead refuses at RUNTIME_PROBE_UNAVAILABLE before
+# operator-key read, authority writes, egress, or spawn. Both are neutral 78.
+# The lane is green only if every provider's future positive half produces a
+# PONG-matching receipt (exit 0). Any typed refusal makes the lane neutral, and
+# any refusal-test/execution/spawn failure wins as exit 1.
 # BULLET_LIVE_PROVIDERS unset returns 78 to distinguish unregistered from success.
 #
 # Real mode (operator only): BULLET_LIVE_REAL=1 together with BULLET_POLICY_PATH
@@ -89,7 +90,7 @@ for provider in "${providers[@]}"; do
   case "$code" in
     0) log "positive half $provider: PONG receipt (data dir $data_dir)" ;;
     78)
-      log "positive half $provider: POLICY_LIVE_ADMISSION_DISABLED (neutral refusal)"
+      log "positive half $provider: typed neutral refusal (policy or runtime observation unavailable)"
       neutral=1
       ;;
     *) echo "[ci] positive half $provider failed (exit $code)" >&2; status=1 ;;
