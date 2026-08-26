@@ -5,17 +5,17 @@ use sha2::{Digest as Sha2Digest, Sha256};
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
 #[cfg(target_os = "linux")]
-use std::fs::File;
+use std::fs::{File, Metadata};
 #[cfg(target_os = "linux")]
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
-const PATH_ENV: &str = "BULLET_VERIFIER_FIXTURE_BIN";
+const FD_ENV: &str = "BULLET_VERIFIER_FIXTURE_FD";
 #[cfg(target_os = "linux")]
 const DIGEST_ENV: &str = "BULLET_VERIFIER_FIXTURE_SHA256";
 #[cfg(target_os = "linux")]
@@ -48,7 +48,7 @@ impl AdmittedVerifierFixture {
 pub(super) fn verifier_fixture_binary() -> Result<AdmittedVerifierFixture, String> {
     configured_for_build(
         cfg!(debug_assertions),
-        std::env::var_os(PATH_ENV),
+        std::env::var_os(FD_ENV),
         std::env::var_os(DIGEST_ENV),
     )
 }
@@ -66,7 +66,7 @@ fn non_linux_refusal() -> String {
 #[cfg(target_os = "linux")]
 fn configured_for_build(
     fixture_enabled: bool,
-    path_value: Option<OsString>,
+    fd_value: Option<OsString>,
     digest_value: Option<OsString>,
 ) -> Result<AdmittedVerifierFixture, String> {
     if !fixture_enabled {
@@ -74,9 +74,19 @@ fn configured_for_build(
             "the verifier fixture is unavailable in release binaries",
         ));
     }
-    let path = path_value
+    let fd_text = fd_value
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| unprovisioned(PATH_ENV))?;
+        .ok_or_else(|| unprovisioned(FD_ENV))?
+        .into_string()
+        .map_err(|_| refusal("fixture descriptor must be a UTF-8 canonical decimal integer"))?;
+    let fd = fd_text
+        .parse::<i32>()
+        .map_err(|_| refusal("fixture descriptor must be a UTF-8 canonical decimal integer"))?;
+    if fd < 3 || fd.to_string() != fd_text {
+        return Err(refusal(
+            "fixture descriptor must be a canonical decimal integer greater than two",
+        ));
+    }
     let digest = digest_value
         .filter(|value| !value.is_empty())
         .ok_or_else(|| unprovisioned(DIGEST_ENV))?
@@ -87,7 +97,7 @@ fn configured_for_build(
             "fixture digest must be exactly 64 lowercase hexadecimal characters",
         ));
     }
-    admit_path(PathBuf::from(path), &digest)
+    admit_inherited_fd(fd, &digest)
 }
 
 #[cfg(target_os = "linux")]
@@ -103,50 +113,85 @@ fn refusal(reason: impl AsRef<str>) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn admit_path(path: PathBuf, expected_sha256: &str) -> Result<AdmittedVerifierFixture, String> {
-    if !path.is_absolute() {
-        return Err(refusal("fixture executable path must be absolute"));
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceIdentity {
+    device: u64,
+    inode: u64,
+    size: u64,
+    links: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+#[cfg(target_os = "linux")]
+impl SourceIdentity {
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            size: metadata.len(),
+            links: metadata.nlink(),
+            mode: metadata.mode(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+            changed_seconds: metadata.ctime(),
+            changed_nanoseconds: metadata.ctime_nsec(),
+        }
     }
-    let metadata = std::fs::symlink_metadata(&path)
-        .map_err(|error| refusal(format!("fixture executable metadata failed: {error}")))?;
-    if !metadata.file_type().is_file()
-        || metadata.len() > MAX_EXECUTABLE_BYTES
-        || metadata.nlink() != 1
-    {
-        return Err(refusal(
-            "fixture executable must be a bounded single-link non-symlink regular file",
-        ));
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| refusal(format!("canonicalize fixture executable failed: {error}")))?;
-    if canonical != path {
-        return Err(refusal("fixture executable path must already be canonical"));
-    }
-    if metadata.permissions().mode() & 0o111 == 0 {
-        return Err(refusal("fixture executable has no execute bit"));
-    }
+}
+
+#[cfg(target_os = "linux")]
+fn admit_inherited_fd(fd: i32, expected_sha256: &str) -> Result<AdmittedVerifierFixture, String> {
+    admit_inherited_fd_with_hook(fd, expected_sha256, || {})
+}
+
+#[cfg(target_os = "linux")]
+fn admit_inherited_fd_with_hook(
+    fd: i32,
+    expected_sha256: &str,
+    before_copy: impl FnOnce(),
+) -> Result<AdmittedVerifierFixture, String> {
+    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    let inherited_metadata = std::fs::metadata(&descriptor_path).map_err(|error| {
+        refusal(format!(
+            "inspect inherited fixture descriptor failed: {error}"
+        ))
+    })?;
+    let inherited = SourceIdentity::from_metadata(&inherited_metadata);
+    admit_source_metadata(&inherited_metadata, inherited)?;
     let mut source_file = {
         use rustix::fs::{open, Mode, OFlags};
-        let fd = open(
-            &path,
-            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        let duplicate = open(
+            &descriptor_path,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
             Mode::empty(),
         )
-        .map_err(|error| refusal(format!("open exact fixture executable failed: {error}")))?;
-        File::from(fd)
+        .map_err(|error| refusal(format!("open inherited fixture descriptor failed: {error}")))?;
+        File::from(duplicate)
     };
-    let opened = source_file
+    let before_metadata = source_file
         .metadata()
-        .map_err(|error| refusal(format!("opened fixture metadata failed: {error}")))?;
-    if metadata.dev() != opened.dev()
-        || metadata.ino() != opened.ino()
-        || metadata.len() != opened.len()
-        || opened.nlink() != 1
-        || !opened.file_type().is_file()
-    {
-        return Err(refusal("fixture executable identity changed while opening"));
+        .map_err(|error| refusal(format!("inherited fixture metadata failed: {error}")))?;
+    let before = SourceIdentity::from_metadata(&before_metadata);
+    admit_source_metadata(&before_metadata, before)?;
+    if before != inherited {
+        return Err(refusal(
+            "inherited fixture descriptor identity changed while duplicating",
+        ));
     }
+    source_file.seek(SeekFrom::Start(0)).map_err(|error| {
+        refusal(format!(
+            "rewind inherited fixture descriptor failed: {error}"
+        ))
+    })?;
+    before_copy();
 
     use rustix::fs::{
         fchmod, fcntl_add_seals, fcntl_get_seals, memfd_create, MemfdFlags, Mode, SealFlags,
@@ -162,11 +207,7 @@ fn admit_path(path: PathBuf, expected_sha256: &str) -> Result<AdmittedVerifierFi
     let after = source_file
         .metadata()
         .map_err(|error| refusal(format!("post-hash fixture metadata failed: {error}")))?;
-    if opened.dev() != after.dev()
-        || opened.ino() != after.ino()
-        || opened.len() != after.len()
-        || after.nlink() != 1
-    {
+    if SourceIdentity::from_metadata(&after) != before {
         return Err(refusal("fixture executable changed while hashing"));
     }
     if actual_sha256 != expected_sha256 {
@@ -197,6 +238,22 @@ fn admit_path(path: PathBuf, expected_sha256: &str) -> Result<AdmittedVerifierFi
         ));
     }
     Ok(AdmittedVerifierFixture { sealed_file })
+}
+
+#[cfg(target_os = "linux")]
+fn admit_source_metadata(metadata: &Metadata, identity: SourceIdentity) -> Result<(), String> {
+    if !metadata.file_type().is_file()
+        || identity.size == 0
+        || identity.size > MAX_EXECUTABLE_BYTES
+        || identity.links == 0
+        || identity.uid != rustix::process::geteuid().as_raw()
+        || identity.mode & 0o111 == 0
+    {
+        return Err(refusal(
+            "inherited fixture descriptor must be caller-owned, bounded, linked, regular, and executable",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -294,7 +351,8 @@ fn is_lower_hex(value: &str, length: usize) -> bool {
 mod tests {
     use super::*;
     use std::fs::{self, hard_link};
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixStream;
     use std::path::Path;
     use std::process::Command;
 
@@ -310,61 +368,106 @@ mod tests {
         sha256_and_count(&mut file).expect("hash fixture").0
     }
 
+    fn admit_file(file: &File, digest: &str) -> Result<AdmittedVerifierFixture, String> {
+        admit_inherited_fd(file.as_raw_fd(), digest)
+    }
+
     #[test]
     fn missing_malformed_and_release_subjects_refuse() {
         let unavailable = configured_for_build(false, None, None).unwrap_err();
         assert!(unavailable.contains("ADMISSION_REFUSED"));
-        let missing_path =
+        let missing_fd =
             configured_for_build(true, None, Some(OsString::from("0".repeat(64)))).unwrap_err();
-        assert!(missing_path.contains(PATH_ENV));
+        assert!(missing_fd.contains(FD_ENV));
         let missing_digest =
-            configured_for_build(true, Some(OsString::from("/bin/false")), None).unwrap_err();
+            configured_for_build(true, Some(OsString::from("3")), None).unwrap_err();
         assert!(missing_digest.contains(DIGEST_ENV));
         let malformed = configured_for_build(
             true,
-            Some(OsString::from("/bin/false")),
+            Some(OsString::from("3")),
             Some(OsString::from("A".repeat(64))),
         )
         .unwrap_err();
         assert!(malformed.contains("64 lowercase hexadecimal"));
+        for invalid in ["/bin/false", "03", "-1", "2", "2147483648"] {
+            let error = configured_for_build(
+                true,
+                Some(OsString::from(invalid)),
+                Some(OsString::from("0".repeat(64))),
+            )
+            .unwrap_err();
+            assert!(error.contains("descriptor"), "{invalid}: {error}");
+        }
     }
 
     #[test]
-    fn relative_symlink_hardlink_and_wrong_digest_refuse() {
+    fn closed_directory_non_executable_oversize_and_wrong_digest_refuse() {
         let directory = tempfile::tempdir().expect("tempdir");
         let executable = executable_fixture(directory.path(), "fixture", "/bin/sh");
         let digest = sha256(&executable);
-        assert!(admit_path(PathBuf::from("fixture"), &digest).is_err());
+        let file = File::open(&executable).expect("open fixture");
+        assert!(admit_file(&file, &"0".repeat(64)).is_err());
 
-        let alias = directory.path().join("alias");
-        symlink(&executable, &alias).expect("symlink");
-        assert!(admit_path(alias, &digest).is_err());
+        let closed_fd = file.as_raw_fd();
+        drop(file);
+        assert!(admit_inherited_fd(closed_fd, &digest).is_err());
 
-        let linked = directory.path().join("linked");
-        hard_link(&executable, &linked).expect("hardlink");
-        assert!(admit_path(linked.clone(), &digest).is_err());
-        fs::remove_file(executable).expect("remove first link");
-        assert!(admit_path(linked, &"0".repeat(64)).is_err());
+        let directory_fd = File::open(directory.path()).expect("open directory");
+        assert!(admit_file(&directory_fd, &digest).is_err());
+        let (socket, _peer) = UnixStream::pair().expect("socket pair");
+        assert!(admit_inherited_fd(socket.as_raw_fd(), &digest).is_err());
+
+        let empty = directory.path().join("empty");
+        File::create(&empty).expect("create empty fixture");
+        fs::set_permissions(&empty, fs::Permissions::from_mode(0o700)).expect("chmod empty");
+        assert!(admit_file(&File::open(&empty).expect("open empty"), &digest).is_err());
+
+        let unlinked_path = executable_fixture(directory.path(), "unlinked", "/bin/sh");
+        let unlinked = File::open(&unlinked_path).expect("open unlinked fixture");
+        fs::remove_file(unlinked_path).expect("unlink retained fixture");
+        assert!(admit_file(&unlinked, &digest).is_err());
+
+        let non_native = directory.path().join("non-native");
+        fs::write(&non_native, b"not a native ELF executable").expect("write non-native fixture");
+        fs::set_permissions(&non_native, fs::Permissions::from_mode(0o700))
+            .expect("chmod non-native fixture");
+        let non_native_file = File::open(&non_native).expect("open non-native fixture");
+        assert!(admit_file(&non_native_file, &sha256(&non_native)).is_err());
+
+        let non_executable = executable_fixture(directory.path(), "non-exec", "/bin/sh");
+        fs::set_permissions(&non_executable, fs::Permissions::from_mode(0o600))
+            .expect("remove execute bit");
+        let non_executable_file = File::open(&non_executable).expect("open non-executable");
+        assert!(admit_file(&non_executable_file, &sha256(&non_executable)).is_err());
+
+        let oversized = directory.path().join("oversized");
+        let oversized_file = File::create(&oversized).expect("create oversized fixture");
+        oversized_file
+            .set_len(MAX_EXECUTABLE_BYTES + 1)
+            .expect("make sparse oversized fixture");
+        fs::set_permissions(&oversized, fs::Permissions::from_mode(0o700))
+            .expect("make oversized fixture executable");
+        assert!(admit_file(&oversized_file, &digest).is_err());
     }
 
     #[test]
-    fn noncanonical_parent_refuses() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let real = directory.path().join("real");
-        fs::create_dir(&real).expect("real directory");
-        let executable = executable_fixture(&real, "fixture", "/bin/sh");
-        let digest = sha256(&executable);
-        let parent_alias = directory.path().join("parent-alias");
-        symlink(&real, &parent_alias).expect("parent symlink");
-        assert!(admit_path(parent_alias.join("fixture"), &digest).is_err());
-    }
-
-    #[test]
-    fn sealed_image_survives_same_path_substitution() {
+    fn two_link_fixture_is_sealed_before_sibling_link_mutation() {
         let directory = tempfile::tempdir().expect("tempdir");
         let executable = executable_fixture(directory.path(), "fixture", "/bin/sh");
+        let linked = directory.path().join("cargo-linked-fixture");
+        hard_link(&executable, &linked).expect("hardlink fixture");
         let digest = sha256(&executable);
-        let admitted = admit_path(executable.clone(), &digest).expect("admit fixture");
+        let mut inherited = File::open(&linked).expect("open inherited fixture");
+        assert_eq!(inherited.metadata().expect("metadata").nlink(), 2);
+        inherited
+            .seek(SeekFrom::End(0))
+            .expect("advance inherited source offset");
+        let admitted = configured_for_build(
+            true,
+            Some(OsString::from(inherited.as_raw_fd().to_string())),
+            Some(OsString::from(digest)),
+        )
+        .expect("admit two-link fixture through canonical fd grammar");
         fs::copy("/bin/false", &executable).expect("substitute source path");
         let marker = directory.path().join("sealed-ran");
         let status = Command::new(admitted.spawn_path().expect("sealed procfd"))
@@ -374,5 +477,20 @@ mod tests {
             .expect("spawn sealed image");
         assert!(status.success());
         assert_eq!(fs::read_to_string(marker).expect("marker"), "sealed");
+    }
+
+    #[test]
+    fn sibling_link_mutation_after_identity_binding_refuses() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let executable = executable_fixture(directory.path(), "fixture", "/bin/sh");
+        let sibling = directory.path().join("sibling");
+        hard_link(&executable, &sibling).expect("hardlink fixture");
+        let digest = sha256(&executable);
+        let inherited = File::open(&executable).expect("open inherited fixture");
+        let error = admit_inherited_fd_with_hook(inherited.as_raw_fd(), &digest, || {
+            fs::copy("/bin/false", &sibling).expect("mutate sibling link");
+        })
+        .unwrap_err();
+        assert!(error.contains("changed while hashing"));
     }
 }

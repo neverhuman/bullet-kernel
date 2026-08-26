@@ -68,12 +68,12 @@ fn signed_transaction_component_roundtrip() {
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("impl Drop for FarmdGuard"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE
         .contains("const FARMD_BIN_ENV: &str = \"BULLET_FARMD_BIN\";"));
-    assert!(
-        VERIFIER_BINARY_SOURCE.contains("const PATH_ENV: &str = \"BULLET_VERIFIER_FIXTURE_BIN\";")
-    );
+    assert!(VERIFIER_BINARY_SOURCE.contains("const FD_ENV: &str = \"BULLET_VERIFIER_FIXTURE_FD\";"));
     assert!(VERIFIER_BINARY_SOURCE
         .contains("const DIGEST_ENV: &str = \"BULLET_VERIFIER_FIXTURE_SHA256\";"));
     assert!(VERIFIER_BINARY_SOURCE.contains("MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING"));
+    assert!(VERIFIER_BINARY_SOURCE.contains("SourceIdentity::from_metadata(&after) != before"));
+    assert!(!VERIFIER_BINARY_SOURCE.contains("BULLET_VERIFIER_FIXTURE_BIN"));
     assert!(VERIFIER_BINARY_SOURCE.contains("SealFlags::WRITE"));
     assert!(VERIFIER_BINARY_SOURCE.contains("/proc/self/fd/"));
     assert!(VERIFIER_BINARY_SOURCE.contains("#[cfg(target_os = \"linux\")]"));
