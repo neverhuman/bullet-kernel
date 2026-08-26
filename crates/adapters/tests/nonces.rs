@@ -8,7 +8,7 @@ use std::sync::mpsc::sync_channel;
 
 #[path = "cross_process/support.rs"]
 mod process_support;
-use process_support::{ChildSet, PROCESS_TIMEOUT, private_tempdir, wait_until};
+use process_support::{private_tempdir, wait_until, ChildSet, PROCESS_TIMEOUT};
 
 const CHILD_DB: &str = "BULLET_TEST_NONCE_CHILD_DB";
 const CHILD_OUT: &str = "BULLET_TEST_NONCE_CHILD_OUT";

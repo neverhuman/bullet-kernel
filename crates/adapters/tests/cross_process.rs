@@ -13,7 +13,7 @@
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::{
-    LeaseService, NonceLedger, NonceState, PlanInput, StoredGraph, materialize_plan,
+    materialize_plan, LeaseService, NonceLedger, NonceState, PlanInput, StoredGraph,
 };
 use bullet_domain::{AttemptState, TaskClass};
 use chrono::Utc;
@@ -24,7 +24,7 @@ use std::time::Duration;
 
 #[path = "cross_process/support.rs"]
 mod support;
-use support::{ChildSet, private_tempdir, wait_until};
+use support::{private_tempdir, wait_until, ChildSet};
 
 const CHILD_DB: &str = "BULLET_TEST_RACE_CHILD_DB";
 const CHILD_OUT: &str = "BULLET_TEST_RACE_CHILD_OUT";
