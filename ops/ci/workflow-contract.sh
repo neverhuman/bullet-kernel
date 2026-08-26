@@ -393,10 +393,76 @@ validate_required_workflow() {
     || { refuse HOSTED_REQUIRED_CONTEXT_DRIFT "$actual"; return 1; }
 }
 
+expected_scheduled_audit_lane_step() {
+  printf '%s\n' \
+    '      - id: lane' \
+    '        if: ${{ !cancelled() }}' \
+    '        run: |' \
+    '          set +e' \
+    '          bash scripts/ci-local.sh audit' \
+    '          code=$?' \
+    '          set -e' \
+    '          printf '\''exit_code=%s\n'\'' "$code" >>"$GITHUB_OUTPUT"' \
+    '          exit "$code"'
+}
+
+validate_scheduled_audit_lane() {
+  local workflow="$1" block actual expected anchor
+  block="$(workflow_job_block "$workflow" audit)"
+  [[ -n "$block" ]] || { refuse HOSTED_LANE_MISSING audit; return 1; }
+  [[ "$(rg -Fxc '    runs-on: ubuntu-24.04' <<<"$block")" -eq 1 ]] \
+    || { refuse HOSTED_RUNNER_DRIFT audit; return 1; }
+  [[ "$(rg -Fxc '    needs: source-admission' <<<"$block")" -eq 1 ]] \
+    || { refuse HOSTED_SOURCE_PREDECESSOR_DRIFT audit; return 1; }
+  anchor='      - id: lane'
+  [[ "$(rg -Fxc "$anchor" <<<"$block")" -eq 1 ]] \
+    || { refuse HOSTED_AUDIT_LANE_STEP_DRIFT audit; return 1; }
+  actual="$(workflow_step_block "$block" "$anchor")"
+  expected="$(expected_scheduled_audit_lane_step)"
+  [[ "$actual" == "$expected" ]] \
+    || { refuse HOSTED_AUDIT_LANE_STEP_DRIFT audit; return 1; }
+  anchor='        run: bash scripts/ci-observation.sh audit "$EXIT_CODE" '\''bash scripts/ci-local.sh audit'\'''
+  [[ "$(rg -Fxc "$anchor" <<<"$block")" -eq 1 ]] \
+    || { refuse HOSTED_AUDIT_OBSERVATION_DRIFT audit; return 1; }
+}
+
+# The hosted audit job is neutral only through the lane script's exact typed
+# refusal (78 AUDITOR_UNAVAILABLE_HOSTED); a script that exits green or untyped
+# without the auditor, or never invokes it, is drift.
+expected_audit_resolution() {
+  printf '%s\n' \
+    'if ! command -v jankurai >/dev/null 2>&1; then' \
+    '  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then' \
+    '    log "neutral (78): AUDITOR_UNAVAILABLE_HOSTED: jankurai 1.6.11 is a machine-local build with no checksum-pinned hosted artifact; the audit did not run"' \
+    '    exit 78' \
+    '  fi' \
+    '  refuse AUDITOR_MISSING "jankurai is not on PATH; the audit lane fails closed"' \
+    '  exit 1' \
+    'fi'
+}
+
+validate_audit_neutral_source() {
+  local script="$1" actual expected
+  [[ -f "$script" && ! -L "$script" ]] \
+    || { refuse HOSTED_AUDIT_NEUTRAL_DRIFT "$script"; return 1; }
+  actual="$(awk '
+    $0 == "if ! command -v jankurai >/dev/null 2>&1; then" { found=1 }
+    found { print }
+    found && $0 == "fi" { exit }
+  ' "$script")"
+  expected="$(expected_audit_resolution)"
+  [[ "$actual" == "$expected" ]] \
+    || { refuse HOSTED_AUDIT_NEUTRAL_DRIFT "$script"; return 1; }
+  [[ "$(rg -c '^jankurai audit \. ' "$script")" -eq 1 && "$(rg -Fxc '    exit 78' "$script")" -eq 1 ]] \
+    || { refuse HOSTED_AUDIT_NEUTRAL_DRIFT "$script"; return 1; }
+}
+
 validate_scheduled_uploads() {
-  local workflow="$1" actual
-  expect_global_action_count "$workflow" upload-artifact 6 || return 1
-  expect_job_inventory "$workflow" source-admission links advisories coverage history-secrets portable-refusal || return 1
+  local workflow="$1" audit_script="${2:-ops/ci/audit.sh}" actual
+  expect_global_action_count "$workflow" upload-artifact 7 || return 1
+  expect_job_inventory "$workflow" source-admission links advisories coverage history-secrets portable-refusal audit || return 1
+  validate_scheduled_audit_lane "$workflow" || return 1
+  validate_audit_neutral_source "$audit_script" || return 1
   expect_upload_paths "$workflow" source-admission '.ci-artifacts/observations/scheduled-preflight.json' || return 1
   expect_upload_paths "$workflow" links '.ci-artifacts/observations/links.json' || return 1
   expect_upload_paths "$workflow" advisories '.ci-artifacts/observations/scheduled-security.json' || return 1
@@ -405,8 +471,9 @@ validate_scheduled_uploads() {
   # GitHub expands this expression; the local policy compares the literal source.
   # shellcheck disable=SC2016
   expect_upload_paths "$workflow" portable-refusal '.ci-artifacts/observations/portable-${{ matrix.os }}.json' || return 1
+  expect_upload_paths "$workflow" audit '.ci-artifacts/observations/audit.json' || return 1
   actual="$(sha256sum "$workflow" | awk '{ print $1 }')"
-  [[ "$actual" == 0b0713f4c87cab636d26f58a637efbea2dfc5d1ecbb2572cd05f2594a7fd2e2a ]] \
+  [[ "$actual" == 844082771185883a16508ee80a8560b83187119d7f42a75a7b0bc00fe6683082 ]] \
     || { refuse HOSTED_SCHEDULED_CONTEXT_DRIFT "$actual"; return 1; }
 }
 

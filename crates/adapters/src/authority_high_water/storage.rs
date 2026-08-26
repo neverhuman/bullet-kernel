@@ -112,14 +112,10 @@ pub(super) fn advance(
     let locked = LockedParent::open(path)?;
     locked.revalidate_parent()?;
     if let Some(current) = read_record(&locked.record_path, locked.effective_uid)? {
-        if requested.authority_epoch < current.authority_epoch
-            || requested.freeze_generation < current.freeze_generation
-        {
+        if requested.values().regresses_from(current.values()) {
             return Err(AuthorityHighWaterError::Rollback {
-                current_epoch: current.authority_epoch,
-                current_generation: current.freeze_generation,
-                requested_epoch: requested.authority_epoch,
-                requested_generation: requested.freeze_generation,
+                current: current.values(),
+                requested: requested.values(),
             });
         }
         if requested == current {
@@ -217,7 +213,7 @@ fn publish_record(
         .as_file()
         .set_permissions(std::fs::Permissions::from_mode(0o600))
         .map_err(|error| operation("CHMOD_TEMP", error))?;
-    admit_file(staged.as_file(), locked.effective_uid, "temporary record")?;
+    admit_file(staged.as_file(), locked.effective_uid, "staged record")?;
     staged
         .write_all(&bytes)
         .and_then(|()| staged.as_file().sync_all())

@@ -1,7 +1,10 @@
 //! v1alpha1 policy loading: exact digest, conservatism refusals, key
 //! resolution, and the by-design live-admission refusal.
 
-use bullet_application::policy_snapshot::{load_policy, LoadedPolicy, LIVE_ADMISSION_FIELD};
+use bullet_application::policy_snapshot::{
+    load_policy, ActivationLedger, ActivationState, Component, ConfigurationGeneration,
+    GenerationContent, LoadedPolicy, LIVE_ADMISSION_FIELD,
+};
 use bullet_domain::schema_bundle::POLICY_SNAPSHOT_HASH;
 use bullet_harness_core::launch_grant::{canonical_json, LaunchGrantSigningKey};
 use serde_json::{json, Value};
@@ -305,4 +308,53 @@ fn policy_files_are_admitted_only_from_absolute_regular_paths() {
     let error = load_policy(&data_dir, Some(&unsafe_path)).unwrap_err();
     assert_eq!(error.reason_code(), "POLICY_INVALID");
     assert!(error.to_string().contains("UNSAFE_POLICY"));
+}
+
+#[test]
+fn the_hub_policy_digest_is_what_an_admitted_attempt_binds_through_its_generation() {
+    let loaded = LoadedPolicy::from_bytes(POLICY).unwrap();
+    let content = GenerationContent {
+        generation: 1,
+        policy_digest: loaded.digest().to_string(),
+        routing_digest: "0".repeat(64),
+        activation_subject: "operator:hub".to_string(),
+        created_at_unix_ms: NOW,
+        required_components: [Component::Kernel, Component::Runner].into_iter().collect(),
+    };
+    let generation = ConfigurationGeneration::seal(content).unwrap();
+    let mut ledger = ActivationLedger::default();
+    assert_eq!(
+        ledger.activate(generation.recorded(), NOW + 1).unwrap(),
+        ActivationState::Activating
+    );
+    assert_eq!(
+        ledger.generation_for_admission().unwrap_err().reason_code(),
+        "GENERATION_ACTIVATING"
+    );
+    ledger
+        .acknowledge(Component::Kernel, 1, generation.digest())
+        .unwrap();
+    ledger
+        .acknowledge(Component::Runner, 1, generation.digest())
+        .unwrap();
+    let binding = ledger.generation_for_admission().unwrap().binding();
+    assert_eq!(binding.policy_digest, POLICY_SNAPSHOT_HASH);
+    assert_eq!(
+        binding.policy_digest,
+        loaded.binding().policy_snapshot_digest
+    );
+
+    let mut relaxed = policy_value();
+    relaxed["activation_at_unix_ms"] = json!(NOW - 10_000);
+    let other = LoadedPolicy::from_bytes(&bytes(&relaxed)).unwrap();
+    assert_ne!(other.digest(), POLICY_SNAPSHOT_HASH);
+    let mut substituted = generation.recorded();
+    substituted.content.policy_digest = other.digest().to_string();
+    let error = ledger.activate(substituted, NOW + 2).unwrap_err();
+    assert_eq!(
+        error.reason_code(),
+        "GENERATION_DIGEST_MISMATCH",
+        "a substituted policy under the recorded address never activates"
+    );
+    assert_eq!(ledger.generation_for_admission().unwrap(), &generation);
 }

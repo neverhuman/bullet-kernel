@@ -1,5 +1,6 @@
 //! Application services: commands, materializer, leases, queue, demo.
 
+pub mod audit_batch;
 pub mod authority;
 pub mod authority_revision;
 pub mod commands;
@@ -24,6 +25,9 @@ pub mod records;
 pub mod simulators;
 pub mod store;
 
+pub use audit_batch::{
+    verify_batch, verify_chain, AuditBatchBuilder, AuditBatchError, AuditChainHead,
+};
 pub use authority::{check_active_lease_snapshot, ActiveLeaseSubject};
 pub use authority_revision::{AuthorityRevisionError, NormalizedAuthority};
 pub use commands::{CommandRecord, CommandRequest};

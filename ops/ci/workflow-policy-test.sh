@@ -169,3 +169,45 @@ expect_scheduled_failure HOSTED_ACTION_INVENTORY_DRIFT
 sed -i '0,/^    steps:$/{s|^    steps:$|&\n      - uses: "actions/upload-artifact\\u0040ea165f8d65b6e75b540449e92b4886f43607fa02"\n        with: { name: broad-upload, path: .ci-artifacts/** }|}' \
   "$workflow_test_root/scheduled.yml"
 expect_scheduled_failure HOSTED_SCHEDULED_CONTEXT_DRIFT
+# Hosted audit job: the lane must execute, observe, and be neutral only through
+# the lane script's exact typed refusal.
+sed -i '0,/^          bash scripts\/ci-local\.sh audit$/{s//          true # bash scripts\/ci-local.sh audit/}' \
+  "$workflow_test_root/scheduled.yml"
+expect_scheduled_failure HOSTED_AUDIT_LANE_STEP_DRIFT
+sed -i '/^  audit:$/,$ s/^        if: \${{ !cancelled() }}$/        if: \${{ false }}/' \
+  "$workflow_test_root/scheduled.yml"
+expect_scheduled_failure HOSTED_AUDIT_LANE_STEP_DRIFT
+sed -i 's|^        run: bash scripts/ci-observation\.sh audit |        run: true; bash scripts/ci-observation.sh audit |' \
+  "$workflow_test_root/scheduled.yml"
+expect_scheduled_failure HOSTED_AUDIT_OBSERVATION_DRIFT
+sed -i '/^  audit:$/,$d' "$workflow_test_root/scheduled.yml"
+expect_scheduled_failure HOSTED_ACTION_INVENTORY_DRIFT
+
+expect_audit_source_failure() {
+  local reason="$1" output code
+  set +e
+  output="$(validate_audit_neutral_source "$workflow_test_root/audit.sh" 2>&1)"
+  code=$?
+  set -e
+  [[ "$code" -ne 0 && "$output" == *"$reason"* ]] \
+    || { refuse AUDIT_SOURCE_HOSTILE_FAILED "$reason code=$code output=$output"; exit 1; }
+  rm -f -- "$workflow_test_root/audit.sh"
+  cp ops/ci/audit.sh "$workflow_test_root/audit.sh"
+}
+cp ops/ci/audit.sh "$workflow_test_root/audit.sh"
+validate_audit_neutral_source "$workflow_test_root/audit.sh" || exit 1
+sed -i '0,/^    exit 78$/{s//    exit 0/}' "$workflow_test_root/audit.sh"
+expect_audit_source_failure HOSTED_AUDIT_NEUTRAL_DRIFT
+sed -i '/^  refuse AUDITOR_MISSING /d' "$workflow_test_root/audit.sh"
+expect_audit_source_failure HOSTED_AUDIT_NEUTRAL_DRIFT
+sed -i '0,/^  exit 1$/{s//  exit 0/}' "$workflow_test_root/audit.sh"
+expect_audit_source_failure HOSTED_AUDIT_NEUTRAL_DRIFT
+# The hostile payload keeps the shell variable literal.
+# shellcheck disable=SC2016
+sed -i 's/^  if \[\[ "\${GITHUB_ACTIONS:-}" == true \]\]; then$/  if true; then/' "$workflow_test_root/audit.sh"
+expect_audit_source_failure HOSTED_AUDIT_NEUTRAL_DRIFT
+sed -i '/^jankurai audit \. /,/^  --json /d' "$workflow_test_root/audit.sh"
+expect_audit_source_failure HOSTED_AUDIT_NEUTRAL_DRIFT
+rm -- "$workflow_test_root/audit.sh"
+ln -s "$REPO_ROOT/ops/ci/audit.sh" "$workflow_test_root/audit.sh"
+expect_audit_source_failure HOSTED_AUDIT_NEUTRAL_DRIFT

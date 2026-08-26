@@ -1,24 +1,112 @@
 //! External durable high-water storage for mutation authority.
 //!
-//! This component deliberately does not perform restore admission or enter
-//! `RECOVERING`. It only persists the authority epoch and freeze generation
-//! outside the restorable SQLite database so later recovery wiring has a
-//! rollback-resistant local subject.
+//! This component persists the authority epoch, freeze generation, restore
+//! epoch, and recovery posture outside the restorable SQLite database so a
+//! snapshot rollback cannot erase them. It only records those values with
+//! rollback-resistant local storage; restore admission and the transition into
+//! or out of `RECOVERING` are decided by later recovery wiring, not here.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 #[cfg(target_os = "linux")]
 mod storage;
 
-/// Persisted record schema version.
-pub const AUTHORITY_HIGH_WATER_SCHEMA_VERSION: u32 = 1;
+/// Persisted record schema version. Version 1 carried only the authority
+/// epoch and freeze generation; version 2 adds the restore epoch and recovery
+/// posture. A version 1 record is refused as corrupt rather than defaulted.
+pub const AUTHORITY_HIGH_WATER_SCHEMA_VERSION: u32 = 2;
 const MAX_RECORD_BYTES: u64 = 4_096;
 const MAX_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
-const CHECKSUM_DOMAIN: &[u8] = b"bullet.kernel.authority-high-water.v1";
+const CHECKSUM_DOMAIN: &[u8] = b"bullet.kernel.authority-high-water.v2";
+
+/// Durable recovery posture recorded beside the counters.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RecoveryState {
+    /// Normal service: no applied restore awaits admission.
+    Serving,
+    /// A restore was applied and mutation authority awaits admission.
+    Recovering,
+}
+
+impl RecoveryState {
+    /// Stable persisted spelling.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Serving => "SERVING",
+            Self::Recovering => "RECOVERING",
+        }
+    }
+
+    const fn checksum_tag(self) -> u8 {
+        match self {
+            Self::Serving => 0,
+            Self::Recovering => 1,
+        }
+    }
+}
+
+/// The four durable values carried by one high-water record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthorityHighWaterValues {
+    /// Restore-invalidated Kernel authority epoch. Starts at one.
+    pub authority_epoch: u64,
+    /// Monotonic fleet-freeze generation. Zero means never frozen.
+    pub freeze_generation: u64,
+    /// Highest restore epoch acknowledged outside the database. Zero means
+    /// no restore was ever applied.
+    pub restore_epoch: u64,
+    /// Recovery posture. `Recovering` requires a nonzero restore epoch.
+    pub recovery: RecoveryState,
+}
+
+impl AuthorityHighWaterValues {
+    fn validate(self) -> Result<(), AuthorityHighWaterError> {
+        if self.authority_epoch == 0
+            || self.authority_epoch > MAX_SAFE_INTEGER
+            || self.freeze_generation > MAX_SAFE_INTEGER
+            || self.restore_epoch > MAX_SAFE_INTEGER
+        {
+            return Err(corrupt(
+                "authority epoch must be 1..=2^53-1; freeze generation and restore epoch 0..=2^53-1",
+            ));
+        }
+        if self.recovery == RecoveryState::Recovering && self.restore_epoch == 0 {
+            return Err(corrupt("RECOVERING requires a nonzero restore epoch"));
+        }
+        Ok(())
+    }
+
+    /// True when any counter would move behind `current`.
+    #[must_use]
+    pub const fn regresses_from(self, current: Self) -> bool {
+        self.authority_epoch < current.authority_epoch
+            || self.freeze_generation < current.freeze_generation
+            || self.restore_epoch < current.restore_epoch
+    }
+}
+
+impl fmt::Display for AuthorityHighWaterValues {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "(authority_epoch={},freeze_generation={},restore_epoch={},recovery={})",
+            self.authority_epoch,
+            self.freeze_generation,
+            self.restore_epoch,
+            self.recovery.code()
+        )
+    }
+}
 
 /// Exact external authority high-water record.
+///
+/// The type name is the crate's stable export; `schema_version` is the
+/// on-disk record version.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthorityHighWaterV1 {
@@ -28,21 +116,35 @@ pub struct AuthorityHighWaterV1 {
     pub authority_epoch: u64,
     /// Monotonic fleet-freeze generation. Zero means never frozen.
     pub freeze_generation: u64,
-    /// Domain-separated BLAKE3 over the version and both counters.
+    /// Highest restore epoch acknowledged outside the database.
+    pub restore_epoch: u64,
+    /// Recovery posture at the time of publication.
+    pub recovery: RecoveryState,
+    /// Domain-separated BLAKE3 over the version and every value above.
     pub checksum: String,
 }
 
 impl AuthorityHighWaterV1 {
-    fn from_values(
-        authority_epoch: u64,
-        freeze_generation: u64,
-    ) -> Result<Self, AuthorityHighWaterError> {
-        validate_counters(authority_epoch, freeze_generation)?;
+    /// The durable values without the version and checksum envelope.
+    #[must_use]
+    pub const fn values(&self) -> AuthorityHighWaterValues {
+        AuthorityHighWaterValues {
+            authority_epoch: self.authority_epoch,
+            freeze_generation: self.freeze_generation,
+            restore_epoch: self.restore_epoch,
+            recovery: self.recovery,
+        }
+    }
+
+    fn from_values(values: AuthorityHighWaterValues) -> Result<Self, AuthorityHighWaterError> {
+        values.validate()?;
         Ok(Self {
             schema_version: AUTHORITY_HIGH_WATER_SCHEMA_VERSION,
-            authority_epoch,
-            freeze_generation,
-            checksum: checksum(authority_epoch, freeze_generation),
+            authority_epoch: values.authority_epoch,
+            freeze_generation: values.freeze_generation,
+            restore_epoch: values.restore_epoch,
+            recovery: values.recovery,
+            checksum: checksum(values),
         })
     }
 
@@ -50,8 +152,9 @@ impl AuthorityHighWaterV1 {
         if self.schema_version != AUTHORITY_HIGH_WATER_SCHEMA_VERSION {
             return Err(corrupt("unsupported authority high-water schema version"));
         }
-        validate_counters(self.authority_epoch, self.freeze_generation)?;
-        if self.checksum != checksum(self.authority_epoch, self.freeze_generation) {
+        let values = self.values();
+        values.validate()?;
+        if self.checksum != checksum(values) {
             return Err(corrupt("authority high-water checksum mismatch"));
         }
         Ok(())
@@ -82,19 +185,13 @@ pub enum AuthorityHighWaterError {
         /// Non-secret refusal detail.
         detail: String,
     },
-    /// Either requested counter would move behind durable truth.
-    #[error(
-        "AUTHORITY_HIGH_WATER_ROLLBACK: current=({current_epoch},{current_generation}) requested=({requested_epoch},{requested_generation})"
-    )]
+    /// A requested counter would move behind durable truth.
+    #[error("AUTHORITY_HIGH_WATER_ROLLBACK: current={current} requested={requested}")]
     Rollback {
-        /// Durable authority epoch.
-        current_epoch: u64,
-        /// Durable freeze generation.
-        current_generation: u64,
-        /// Refused authority epoch.
-        requested_epoch: u64,
-        /// Refused freeze generation.
-        requested_generation: u64,
+        /// Durable values.
+        current: AuthorityHighWaterValues,
+        /// Refused values.
+        requested: AuthorityHighWaterValues,
     },
     /// A pre-publication filesystem phase failed with no admitted advance.
     #[error("AUTHORITY_HIGH_WATER_{phase}: {detail}")]
@@ -145,7 +242,7 @@ impl AuthorityHighWaterStore {
         Ok(Self { path })
     }
 
-    /// Read the current durable tuple under the cross-process lock.
+    /// Read the current durable record under the cross-process lock.
     ///
     /// # Errors
     /// Refuses unsafe filesystem subjects and malformed records.
@@ -153,29 +250,29 @@ impl AuthorityHighWaterStore {
         self.load_platform()
     }
 
-    /// Atomically initialize or monotonically advance both high-water values.
-    /// Exact retries are idempotent. If either requested value is lower than
+    /// Atomically initialize or monotonically advance the durable values.
+    /// Exact retries are idempotent. If any requested counter is lower than
     /// durable truth, the entire mixed update is refused without publication.
+    /// The recovery posture is recorded as requested; which transitions are
+    /// legal is the caller's policy, not this store's.
     ///
     /// # Errors
-    /// Refuses rollback, corrupt current state, unsafe filesystem subjects, or
-    /// any uncertain publication result.
+    /// Refuses rollback, invalid or corrupt state, unsafe filesystem subjects,
+    /// or any uncertain publication result.
     pub fn advance(
         &self,
-        authority_epoch: u64,
-        freeze_generation: u64,
+        values: AuthorityHighWaterValues,
     ) -> Result<AuthorityHighWaterV1, AuthorityHighWaterError> {
-        self.advance_platform(authority_epoch, freeze_generation, FaultPoint::None)
+        self.advance_platform(values, FaultPoint::None)
     }
 
     #[cfg(test)]
     fn advance_with_fault(
         &self,
-        authority_epoch: u64,
-        freeze_generation: u64,
+        values: AuthorityHighWaterValues,
         fault: FaultPoint,
     ) -> Result<AuthorityHighWaterV1, AuthorityHighWaterError> {
-        self.advance_platform(authority_epoch, freeze_generation, fault)
+        self.advance_platform(values, fault)
     }
 
     #[cfg(target_os = "linux")]
@@ -191,19 +288,17 @@ impl AuthorityHighWaterStore {
     #[cfg(target_os = "linux")]
     fn advance_platform(
         &self,
-        authority_epoch: u64,
-        freeze_generation: u64,
+        values: AuthorityHighWaterValues,
         fault: FaultPoint,
     ) -> Result<AuthorityHighWaterV1, AuthorityHighWaterError> {
-        let requested = AuthorityHighWaterV1::from_values(authority_epoch, freeze_generation)?;
+        let requested = AuthorityHighWaterV1::from_values(values)?;
         storage::advance(&self.path, requested, fault)
     }
 
     #[cfg(not(target_os = "linux"))]
     fn advance_platform(
         &self,
-        _authority_epoch: u64,
-        _freeze_generation: u64,
+        _values: AuthorityHighWaterValues,
         _fault: FaultPoint,
     ) -> Result<AuthorityHighWaterV1, AuthorityHighWaterError> {
         Err(AuthorityHighWaterError::UnsupportedPlatform)
@@ -245,28 +340,15 @@ fn validate_path(path: &Path) -> Result<(), AuthorityHighWaterError> {
     Ok(())
 }
 
-fn validate_counters(
-    authority_epoch: u64,
-    freeze_generation: u64,
-) -> Result<(), AuthorityHighWaterError> {
-    if authority_epoch == 0
-        || authority_epoch > MAX_SAFE_INTEGER
-        || freeze_generation > MAX_SAFE_INTEGER
-    {
-        return Err(corrupt(
-            "authority epoch must be 1..=2^53-1 and freeze generation 0..=2^53-1",
-        ));
-    }
-    Ok(())
-}
-
-fn checksum(authority_epoch: u64, freeze_generation: u64) -> String {
+fn checksum(values: AuthorityHighWaterValues) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&(CHECKSUM_DOMAIN.len() as u64).to_be_bytes());
     hasher.update(CHECKSUM_DOMAIN);
     hasher.update(&AUTHORITY_HIGH_WATER_SCHEMA_VERSION.to_be_bytes());
-    hasher.update(&authority_epoch.to_be_bytes());
-    hasher.update(&freeze_generation.to_be_bytes());
+    hasher.update(&values.authority_epoch.to_be_bytes());
+    hasher.update(&values.freeze_generation.to_be_bytes());
+    hasher.update(&values.restore_epoch.to_be_bytes());
+    hasher.update(&[values.recovery.checksum_tag()]);
     hasher.finalize().to_hex().to_string()
 }
 

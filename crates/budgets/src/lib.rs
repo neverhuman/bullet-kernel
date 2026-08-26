@@ -5,9 +5,24 @@
 //! separately and is never scheduled as headroom.
 //!
 //! This crate has no durable adapter and is not transaction or release proof.
+//!
+//! Two ledgers live here. [`BudgetLedger`] is the original single-dimension
+//! ledger. [`VectorLedger`] reserves every roadmap dimension atomically under a
+//! reserve class ([`classes`]) and settles with forecast-error records
+//! ([`dimensions`]). Neither knows time; `expires_at` belongs to the durable
+//! Wave 2 adapter that owns database time.
+
+pub mod classes;
+pub mod dimensions;
+
+pub use classes::{emergency_floor_units, floor_units, ReserveClass, EMERGENCY_FLOOR_PERCENT};
+pub use dimensions::{
+    Dimension, DimensionError, DimensionState, ForecastError, ForecastOutcome, ReservationVector,
+    SettlementRecord, Usage, UsageVector, VectorReservation, DIMENSION_COUNT,
+};
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 /// Fail-closed budget error.
@@ -204,5 +219,240 @@ impl BudgetLedger {
             return Err(BudgetError::UnknownIsNotHeadroom);
         }
         Ok(0)
+    }
+}
+
+/// In-memory ledger over every roadmap dimension. `reserve` is all-or-nothing:
+/// a refusal names the first failing dimension and changes nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VectorLedger {
+    pots: [DimensionState; DIMENSION_COUNT],
+    open: BTreeMap<String, VectorReservation>,
+    issued: BTreeSet<String>,
+}
+
+fn add(dimension: Dimension, left: u64, right: u64) -> Result<u64, DimensionError> {
+    left.checked_add(right)
+        .ok_or(DimensionError::ArithmeticOverflow(dimension))
+}
+
+fn sub(dimension: Dimension, left: u64, right: u64) -> Result<u64, DimensionError> {
+    left.checked_sub(right)
+        .ok_or(DimensionError::Conservation(dimension))
+}
+
+fn check(dimension: Dimension, pot: &DimensionState) -> Result<(), DimensionError> {
+    if pot.conserved() {
+        Ok(())
+    } else {
+        Err(DimensionError::Conservation(dimension))
+    }
+}
+
+impl VectorLedger {
+    /// Open a ledger with known capacity and pre-existing unknown liability
+    /// (recorded as overrun, outside every pot).
+    #[must_use]
+    pub fn new(opening: ReservationVector, unknown: ReservationVector) -> Self {
+        let mut pots = [DimensionState::default(); DIMENSION_COUNT];
+        for (dimension, units) in opening.iter() {
+            pots[dimension.index()] = DimensionState {
+                opening: units,
+                remaining: units,
+                overrun: unknown.get(dimension),
+                ..DimensionState::default()
+            };
+        }
+        Self {
+            pots,
+            ..Self::default()
+        }
+    }
+
+    /// Snapshot of one dimension.
+    #[must_use]
+    pub const fn state(&self, dimension: Dimension) -> DimensionState {
+        self.pots[dimension.index()]
+    }
+
+    /// Schedulable headroom per dimension: remaining only.
+    #[must_use]
+    pub fn headroom(&self) -> ReservationVector {
+        ReservationVector::from_fn(|dimension| self.state(dimension).remaining)
+    }
+
+    /// Conservation holds in every dimension.
+    #[must_use]
+    pub fn conserved(&self) -> bool {
+        self.pots.iter().all(DimensionState::conserved)
+    }
+
+    /// Open reservations in id order.
+    pub fn open(&self) -> impl Iterator<Item = &VectorReservation> {
+        self.open.values()
+    }
+
+    /// Refuse to schedule unknown liability as headroom.
+    ///
+    /// # Errors
+    ///
+    /// `BUDGET_UNKNOWN_NOT_HEADROOM` when retained, overrun, or unforecast
+    /// unknown events are nonzero.
+    pub fn unknown_as_headroom(&self, dimension: Dimension) -> Result<u64, DimensionError> {
+        let pot = self.state(dimension);
+        if pot.has_unknown_liability() {
+            return Err(DimensionError::UnknownIsNotHeadroom(dimension));
+        }
+        Ok(0)
+    }
+
+    /// Reserve `forecast` in every requested dimension at once under `class`.
+    ///
+    /// # Errors
+    ///
+    /// `BUDGET_DIMENSION_EXHAUSTED` naming the first dimension (canonical
+    /// order) that cannot cover its units; `BUDGET_CLASS_FLOOR` when the class
+    /// would cross its floor there; `BUDGET_RESERVATION_INVALID`,
+    /// `BUDGET_RESERVATION_DUPLICATE`. On any error nothing changes.
+    pub fn reserve(
+        &mut self,
+        id: impl Into<String>,
+        class: ReserveClass,
+        forecast: ReservationVector,
+    ) -> Result<VectorReservation, DimensionError> {
+        let id = id.into();
+        if id.is_empty() || forecast.is_zero() {
+            return Err(DimensionError::Invalid(
+                "id must be non-empty and at least one dimension must be positive".into(),
+            ));
+        }
+        if self.issued.contains(&id) {
+            return Err(DimensionError::Duplicate(id));
+        }
+        let mut next = self.pots;
+        for (dimension, requested) in forecast.nonzero() {
+            let pot = &mut next[dimension.index()];
+            let remaining = pot.remaining;
+            if requested > remaining {
+                return Err(DimensionError::Exhausted {
+                    dimension,
+                    requested,
+                    remaining,
+                });
+            }
+            let after = remaining - requested;
+            let floor = class.floor_units(pot.opening);
+            if after < floor {
+                return Err(DimensionError::BelowFloor {
+                    dimension,
+                    class,
+                    floor,
+                    remaining,
+                    requested,
+                });
+            }
+            pot.reserved = add(dimension, pot.reserved, requested)?;
+            pot.remaining = after;
+            check(dimension, pot)?;
+        }
+        let row = VectorReservation {
+            id,
+            class,
+            forecast,
+        };
+        self.pots = next;
+        self.issued.insert(row.id.clone());
+        self.open.insert(row.id.clone(), row.clone());
+        Ok(row)
+    }
+
+    /// Settle an open reservation against observed usage. Exact and under
+    /// return the residual to remaining; over adds overrun; unknown moves the
+    /// forecast to retained, where it is never headroom. Usage on a dimension
+    /// that was never forecast is `UnforecastOverrun` (sized, outside the pot)
+    /// or `UnforecastUnknown` (counted event); known zero there is no row.
+    ///
+    /// # Errors
+    ///
+    /// `BUDGET_RESERVATION_NOT_FOUND`; `BUDGET_ARITHMETIC_OVERFLOW` when
+    /// overrun cannot be recorded (nothing changes).
+    pub fn settle(
+        &mut self,
+        id: &str,
+        usage: &UsageVector,
+    ) -> Result<SettlementRecord, DimensionError> {
+        let row = self.open.get(id).ok_or(DimensionError::NotFound)?.clone();
+        let mut next = self.pots;
+        let mut errors = Vec::new();
+        for (dimension, forecast) in row.forecast.iter() {
+            let observed = usage.get(dimension);
+            let pot = &mut next[dimension.index()];
+            let outcome = match observed {
+                Usage::Known(0) if forecast == 0 => continue,
+                Usage::Unknown if forecast == 0 => {
+                    pot.unknown_events = add(dimension, pot.unknown_events, 1)?;
+                    ForecastOutcome::UnforecastUnknown
+                }
+                Usage::Known(actual) if forecast == 0 => {
+                    pot.overrun = add(dimension, pot.overrun, actual)?;
+                    ForecastOutcome::UnforecastOverrun { overrun: actual }
+                }
+                Usage::Unknown => {
+                    pot.retained = add(dimension, pot.retained, forecast)?;
+                    ForecastOutcome::Unknown { retained: forecast }
+                }
+                Usage::Known(actual) => {
+                    let used = actual.min(forecast);
+                    let (residual, overrun) = (forecast - used, actual - used);
+                    pot.settled = add(dimension, pot.settled, used)?;
+                    pot.remaining = add(dimension, pot.remaining, residual)?;
+                    pot.overrun = add(dimension, pot.overrun, overrun)?;
+                    if overrun > 0 {
+                        ForecastOutcome::Over { overrun }
+                    } else if residual > 0 {
+                        ForecastOutcome::Under { residual }
+                    } else {
+                        ForecastOutcome::Exact
+                    }
+                }
+            };
+            pot.reserved = sub(dimension, pot.reserved, forecast)?;
+            check(dimension, pot)?;
+            errors.push(ForecastError {
+                dimension,
+                forecast,
+                usage: observed,
+                outcome,
+            });
+        }
+        self.pots = next;
+        self.open.remove(id);
+        Ok(SettlementRecord {
+            id: row.id,
+            class: row.class,
+            forecast: row.forecast,
+            usage: *usage,
+            errors,
+        })
+    }
+
+    /// Release an open reservation unused: every forecast unit returns to
+    /// remaining. Produces no forecast-error record.
+    ///
+    /// # Errors
+    ///
+    /// `BUDGET_RESERVATION_NOT_FOUND`.
+    pub fn release(&mut self, id: &str) -> Result<ReservationVector, DimensionError> {
+        let row = self.open.get(id).ok_or(DimensionError::NotFound)?.clone();
+        let mut next = self.pots;
+        for (dimension, forecast) in row.forecast.nonzero() {
+            let pot = &mut next[dimension.index()];
+            pot.reserved = sub(dimension, pot.reserved, forecast)?;
+            pot.remaining = add(dimension, pot.remaining, forecast)?;
+            check(dimension, pot)?;
+        }
+        self.pots = next;
+        self.open.remove(id);
+        Ok(row.forecast)
     }
 }

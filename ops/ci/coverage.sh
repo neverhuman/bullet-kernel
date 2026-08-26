@@ -21,3 +21,4 @@ cargo llvm-cov nextest --locked --workspace --profile coverage -E "$STANDALONE_F
 jq -e '{schema_version: "bullet.coverage-summary.v1", totals: .data[0].totals}' "$raw" >"$output"
 rm -f "$raw"
 log "standalone coverage summary written to .ci-artifacts/coverage/summary.json"
+bash ops/ci/assert-coverage.sh

@@ -13,7 +13,15 @@
 //! `provider-runner` authority key (`live`). Every refusal is `POLICY_INVALID`
 //! whose reason starts with the bullet-wire code; the Kernel cannot import
 //! bullet-wire, so equivalence is proven by `tests/policy_v1alpha2.rs`.
+//!
+//! Configuration generations (spec §49.2) live in `generation`: a sealed
+//! `ConfigurationGeneration` binds a policy digest and routing digest, and
+//! `activation`'s `ActivationLedger` admits Attempts only against a
+//! generation every required component acknowledged, with abort as the only
+//! typed exit (`tests/config_generation.rs`).
 
+mod activation;
+mod generation;
 mod keys;
 mod live;
 mod load;
@@ -25,6 +33,11 @@ use bullet_harness_core::launch_grant::{
 };
 use bullet_harness_core::HarnessError;
 
+pub use activation::{AbortRecord, ActivationLedger, ActivationState};
+pub use generation::{
+    Component, ConfigurationGeneration, GenerationBinding, GenerationContent, GenerationError,
+    RecordedGeneration, CONFIGURATION_GENERATION_DOMAIN, MAX_ACTIVATION_SUBJECT_BYTES,
+};
 pub use live::{
     validate_policy_at, PolicySchemaVersion, LIVE_ADMISSION_MIN_GENERATION,
     POLICY_SCHEMA_VERSION_V1ALPHA2,
