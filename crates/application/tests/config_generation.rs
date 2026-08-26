@@ -23,11 +23,9 @@ const ACTIVATING: ActivationState = ActivationState::Activating;
 const ACTIVE: ActivationState = ActivationState::Active;
 
 type Outcome = Result<ActivationState, GenerationError>;
-
 fn required() -> BTreeSet<Component> {
-    [Kernel, Runner, Verifier].into_iter().collect()
+    Component::ALL.into_iter().collect()
 }
-
 fn content(generation: u64) -> GenerationContent {
     GenerationContent {
         generation,
@@ -38,15 +36,12 @@ fn content(generation: u64) -> GenerationContent {
         required_components: required(),
     }
 }
-
 fn sealed(generation: u64) -> ConfigurationGeneration {
     ConfigurationGeneration::seal(content(generation)).unwrap()
 }
-
 fn row(generation: u64) -> RecordedGeneration {
     sealed(generation).recorded()
 }
-
 fn activate(
     ledger: &mut ActivationLedger,
     generation: &ConfigurationGeneration,
@@ -54,7 +49,6 @@ fn activate(
 ) -> Outcome {
     ledger.activate(generation.recorded(), at)
 }
-
 fn ack(
     ledger: &mut ActivationLedger,
     component: Component,
@@ -66,7 +60,8 @@ fn ack(
 /// Activate `generation` and collect every required acknowledgement.
 fn fully_active(ledger: &mut ActivationLedger, generation: u64) -> ConfigurationGeneration {
     let sealed = sealed(generation);
-    assert_eq!(activate(ledger, &sealed, AT).unwrap(), ACTIVATING);
+    let at = ledger.activated_at_unix_ms().map_or(AT, |at| at + 1);
+    assert_eq!(activate(ledger, &sealed, at).unwrap(), ACTIVATING);
     for component in required() {
         ack(ledger, component, &sealed).unwrap();
     }
@@ -100,7 +95,7 @@ fn a_sealed_generation_is_content_addressed_and_immutable() {
     assert_eq!(binding.routing_digest, ROUTING_DIGEST);
 
     let reordered = GenerationContent {
-        required_components: [Verifier, Runner, Kernel].into_iter().collect(),
+        required_components: [Effects, Verifier, Runner, Kernel].into_iter().collect(),
         ..content(7)
     };
     assert_eq!(
@@ -127,7 +122,7 @@ fn a_sealed_generation_is_content_addressed_and_immutable() {
 #[test]
 fn invalid_content_is_refused_before_it_is_addressed() {
     type Break = fn(&mut GenerationContent);
-    let cases: [(&str, Break); 9] = [
+    let cases: [(&str, Break); 10] = [
         ("zero_generation", |c| c.generation = 0),
         ("unsafe_generation", |c| c.generation = MAX_SAFE_INTEGER + 1),
         ("short_policy_digest", |c| c.policy_digest.truncate(63)),
@@ -145,6 +140,9 @@ fn invalid_content_is_refused_before_it_is_addressed() {
             c.created_at_unix_ms = MAX_SAFE_INTEGER + 1
         }),
         ("no_components", |c| c.required_components.clear()),
+        ("missing_effects", |c| {
+            c.required_components.remove(&Effects);
+        }),
     ];
     for (name, damage) in cases {
         let mut broken = content(1);
@@ -170,7 +168,6 @@ fn a_row_whose_digest_disagrees_with_its_content_never_activates() {
     assert_eq!(ledger.state(), None);
     assert_eq!(ledger.highest_generation(), 0);
     refuses(admission(&ledger), "NO_ACTIVE_GENERATION");
-
     let mut forged_digest = row(1);
     forged_digest.digest = OTHER_DIGEST.to_string();
     refuses(
@@ -183,11 +180,10 @@ fn a_row_whose_digest_disagrees_with_its_content_never_activates() {
         ledger.activate(invalid_content, AT),
         "GENERATION_CONTENT_INVALID",
     );
-    assert_eq!(
-        ledger,
-        ActivationLedger::default(),
-        "refusals leave the ledger untouched"
-    );
+    for at in [CREATED_AT - 1, MAX_SAFE_INTEGER + 1] {
+        refuses(ledger.activate(row(1), at), "GENERATION_CONTENT_INVALID");
+    }
+    assert_eq!(ledger, ActivationLedger::default());
 }
 
 #[test]
@@ -202,7 +198,9 @@ fn partial_acknowledgement_never_admits_an_attempt() {
     let refused = refusal(admission(&ledger));
     assert_eq!(refused.reason_code(), "GENERATION_ACTIVATING");
     assert!(
-        refused.to_string().contains("kernel,runner,verifier"),
+        refused
+            .to_string()
+            .contains("kernel,runner,verifier,effects"),
         "{refused}"
     );
 
@@ -217,7 +215,8 @@ fn partial_acknowledgement_never_admits_an_attempt() {
     assert_eq!(ledger.state(), Some(ACTIVATING));
     assert_eq!(ledger.last_known_good(), None);
 
-    assert_eq!(ack(&mut ledger, Verifier, &one).unwrap(), ACTIVE);
+    assert_eq!(ack(&mut ledger, Verifier, &one).unwrap(), ACTIVATING);
+    assert_eq!(ack(&mut ledger, Effects, &one).unwrap(), ACTIVE);
     let admitted = admission(&ledger).unwrap();
     assert_eq!(admitted, &one);
     assert_eq!(admitted.binding(), one.binding());
@@ -235,10 +234,7 @@ fn duplicate_unknown_stale_and_premature_acknowledgements_are_typed_refusals() {
     let duplicate = refusal(ack(&mut ledger, Kernel, &one));
     assert_eq!(duplicate.reason_code(), "DUPLICATE_ACKNOWLEDGEMENT");
     assert!(duplicate.to_string().contains("kernel"), "{duplicate}");
-
-    let unknown = refusal(ack(&mut ledger, Effects, &one));
-    assert_eq!(unknown.reason_code(), "UNKNOWN_COMPONENT");
-    assert!(unknown.to_string().contains("effects"), "{unknown}");
+    assert_eq!(ack(&mut ledger, Effects, &one).unwrap(), ACTIVATING);
 
     let wrong_number = ledger.acknowledge(Runner, 2, one.digest());
     refuses(wrong_number, "ACKNOWLEDGEMENT_TARGET_MISMATCH");
@@ -254,6 +250,7 @@ fn duplicate_unknown_stale_and_premature_acknowledgements_are_typed_refusals() {
 
     let mut expected = required();
     expected.remove(&Kernel);
+    expected.remove(&Effects);
     assert_eq!(
         ledger.missing_components(),
         expected,
@@ -267,7 +264,7 @@ fn an_active_generation_still_refuses_repeat_and_foreign_acknowledgements() {
     let mut ledger = ActivationLedger::default();
     let one = fully_active(&mut ledger, 1);
     refuses(ack(&mut ledger, Kernel, &one), "DUPLICATE_ACKNOWLEDGEMENT");
-    refuses(ack(&mut ledger, Effects, &one), "UNKNOWN_COMPONENT");
+    refuses(ack(&mut ledger, Effects, &one), "DUPLICATE_ACKNOWLEDGEMENT");
     assert_eq!(ledger.state(), Some(ACTIVE));
     assert_eq!(admission(&ledger).unwrap(), &one);
 }
@@ -310,6 +307,11 @@ fn activation_supersedes_the_active_generation_and_retains_last_known_good() {
     let mut ledger = ActivationLedger::default();
     let one = fully_active(&mut ledger, 1);
     let two = sealed(2);
+    refuses(
+        activate(&mut ledger, &two, AT - 1),
+        "GENERATION_CONTENT_INVALID",
+    );
+    assert_eq!(admission(&ledger).unwrap(), &one);
     assert_eq!(activate(&mut ledger, &two, AT + 10).unwrap(), ACTIVATING);
     assert_eq!(ledger.last_known_good(), Some(&one));
     assert_eq!(ledger.current(), Some(&two));
@@ -481,6 +483,7 @@ fn abort_is_refused_unless_a_generation_is_activating() {
     for (subject, at) in [
         ("", AT + 3),
         ("operator bob", AT + 3),
+        ("operator:bob", AT + 1),
         ("operator:bob", MAX_SAFE_INTEGER + 1),
     ] {
         assert_eq!(

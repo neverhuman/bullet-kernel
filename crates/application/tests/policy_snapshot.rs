@@ -319,7 +319,7 @@ fn the_hub_policy_digest_is_what_an_admitted_attempt_binds_through_its_generatio
         routing_digest: "0".repeat(64),
         activation_subject: "operator:hub".to_string(),
         created_at_unix_ms: NOW,
-        required_components: [Component::Kernel, Component::Runner].into_iter().collect(),
+        required_components: Component::ALL.into_iter().collect(),
     };
     let generation = ConfigurationGeneration::seal(content).unwrap();
     let mut ledger = ActivationLedger::default();
@@ -331,12 +331,11 @@ fn the_hub_policy_digest_is_what_an_admitted_attempt_binds_through_its_generatio
         ledger.generation_for_admission().unwrap_err().reason_code(),
         "GENERATION_ACTIVATING"
     );
-    ledger
-        .acknowledge(Component::Kernel, 1, generation.digest())
-        .unwrap();
-    ledger
-        .acknowledge(Component::Runner, 1, generation.digest())
-        .unwrap();
+    for component in Component::ALL {
+        ledger
+            .acknowledge(component, 1, generation.digest())
+            .unwrap();
+    }
     let binding = ledger.generation_for_admission().unwrap().binding();
     assert_eq!(binding.policy_digest, POLICY_SNAPSHOT_HASH);
     assert_eq!(

@@ -8,8 +8,8 @@
 //! follow. No clock, no store: instants are caller-supplied.
 
 use super::generation::{
-    validate_subject_and_instant, Component, ConfigurationGeneration, GenerationError,
-    RecordedGeneration,
+    validate_instant, validate_subject_and_instant, Component, ConfigurationGeneration,
+    GenerationError, RecordedGeneration,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -99,6 +99,21 @@ impl ActivationLedger {
         activated_at_unix_ms: u64,
     ) -> Result<ActivationState, GenerationError> {
         let generation = ConfigurationGeneration::from_recorded(row)?;
+        validate_instant("activation", activated_at_unix_ms)?;
+        if activated_at_unix_ms < generation.content().created_at_unix_ms {
+            return Err(GenerationError::ContentInvalid(
+                "activation instant precedes generation creation".to_string(),
+            ));
+        }
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|current| activated_at_unix_ms < current.activated_at_unix_ms)
+        {
+            return Err(GenerationError::ContentInvalid(
+                "activation instant precedes the current activation".to_string(),
+            ));
+        }
         if let Some(pending) = self.pending() {
             return Err(GenerationError::ActivationInProgress {
                 pending: pending.generation.number(),
@@ -180,8 +195,11 @@ impl ActivationLedger {
         aborted_at_unix_ms: u64,
     ) -> Result<AbortRecord, GenerationError> {
         validate_subject_and_instant("abort", subject, aborted_at_unix_ms)?;
-        if self.pending().is_none() {
-            return Err(GenerationError::NoActivationPending);
+        let pending = self.pending().ok_or(GenerationError::NoActivationPending)?;
+        if aborted_at_unix_ms < pending.activated_at_unix_ms {
+            return Err(GenerationError::ContentInvalid(
+                "abort instant precedes the pending activation".to_string(),
+            ));
         }
         let Some(aborted) = self.current.take() else {
             return Err(GenerationError::NoActivationPending);

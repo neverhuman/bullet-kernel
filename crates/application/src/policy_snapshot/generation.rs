@@ -29,6 +29,9 @@ pub enum Component {
 }
 
 impl Component {
+    /// Every critical process that must acknowledge every generation.
+    pub const ALL: [Self; 4] = [Self::Kernel, Self::Runner, Self::Verifier, Self::Effects];
+
     /// Stable lowercase name.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -54,7 +57,7 @@ pub struct GenerationContent {
     pub activation_subject: String,
     /// Caller-supplied creation instant.
     pub created_at_unix_ms: u64,
-    /// Components whose acknowledgement is required before `Active`.
+    /// Exact closed critical set whose acknowledgement is required before `Active`.
     pub required_components: BTreeSet<Component>,
 }
 
@@ -96,7 +99,7 @@ impl ConfigurationGeneration {
     /// # Errors
     ///
     /// `GENERATION_CONTENT_INVALID` for a zero or unsafe number, malformed digests,
-    /// a bad subject or instant, no components, or unencodable content.
+    /// a bad subject or instant, a non-critical component set, or unencodable content.
     pub fn seal(content: GenerationContent) -> Result<Self, GenerationError> {
         validate_content(&content)?;
         let digest = hash_canonical(CONFIGURATION_GENERATION_DOMAIN, &content)
@@ -176,6 +179,10 @@ pub(super) fn validate_subject_and_instant(
             "{kind} subject must be 1..=256 printable ASCII bytes without spaces"
         )));
     }
+    validate_instant(kind, instant_unix_ms)
+}
+
+pub(super) fn validate_instant(kind: &str, instant_unix_ms: u64) -> Result<(), GenerationError> {
     if instant_unix_ms > MAX_SAFE_INTEGER {
         return Err(GenerationError::ContentInvalid(format!(
             "{kind} instant must not exceed MAX_SAFE_INTEGER"
@@ -199,8 +206,8 @@ fn validate_content(content: &GenerationContent) -> Result<(), GenerationError> 
             "routing digest must be 64 lowercase hex characters",
         ),
         (
-            content.required_components.is_empty(),
-            "a generation requires at least one acknowledging component",
+            content.required_components != Component::ALL.into_iter().collect(),
+            "a generation requires exactly kernel, runner, verifier, and effects",
         ),
     ];
     if let Some((_, reason)) = checks.iter().find(|(broken, _)| *broken) {
