@@ -9,6 +9,10 @@ cd "$REPO_ROOT"
 require_tool cargo-nextest || exit 1
 require_tool jq || exit 1
 require_tool rg || exit 1
+if [[ "${NEXTEST_FEATURES[*]}" != '--features bullet-verifier/fixture-executor' ]]; then
+  refuse VERIFIER_FIXTURE_FEATURE_INVALID "nextest must enumerate and run the explicit fixture executor"
+  exit 1
+fi
 
 test_root="$(mktemp -d)"
 cleanup() { rm -rf -- "$test_root"; }
@@ -19,9 +23,9 @@ list_matches() {
   local filter="${2:-}"
   local inventory="$test_root/inventory.json"
   if [[ -n "$filter" ]]; then
-    cargo nextest list --locked --workspace --run-ignored all --message-format json -E "$filter" >"$inventory"
+    cargo nextest list --locked --workspace "${NEXTEST_FEATURES[@]}" --run-ignored all --message-format json -E "$filter" >"$inventory"
   else
-    cargo nextest list --locked --workspace --run-ignored all --message-format json >"$inventory"
+    cargo nextest list --locked --workspace "${NEXTEST_FEATURES[@]}" --run-ignored all --message-format json >"$inventory"
   fi
   jq -r '."rust-suites" | to_entries[] | .key as $binary | .value.testcases | to_entries[] | select(.value["filter-match"].status == "matches") | "\($binary)::\(.key)"' \
     "$inventory" | sort -u >"$output"
@@ -32,9 +36,9 @@ list_ignored_matches() {
   local filter="${2:-}"
   local inventory="$test_root/ignored-inventory.json"
   if [[ -n "$filter" ]]; then
-    cargo nextest list --locked --workspace --run-ignored all --message-format json -E "$filter" >"$inventory"
+    cargo nextest list --locked --workspace "${NEXTEST_FEATURES[@]}" --run-ignored all --message-format json -E "$filter" >"$inventory"
   else
-    cargo nextest list --locked --workspace --run-ignored all --message-format json >"$inventory"
+    cargo nextest list --locked --workspace "${NEXTEST_FEATURES[@]}" --run-ignored all --message-format json >"$inventory"
   fi
   jq -r '."rust-suites" | to_entries[] | .key as $binary | .value.testcases | to_entries[] | select(.value["filter-match"].status == "matches" and .value.ignored == true) | "\($binary)::\(.key)"' \
     "$inventory" | sort -u >"$output"
@@ -169,9 +173,19 @@ done
 
 rg -Fxq 'selected="$(partition_count "$EGRESS_FILTER")"' ops/ci/egress.sh \
   || { refuse EGRESS_PARTITION_COUNT_GUARD_MISSING ops/ci/egress.sh; exit 1; }
-rg -Fxq 'cargo nextest run --locked --workspace --run-ignored all --no-tests fail -E "$EGRESS_FILTER"' \
+rg -Fxq 'cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --run-ignored all --no-tests fail -E "$EGRESS_FILTER"' \
   ops/ci/egress.sh \
   || { refuse EGRESS_EXECUTION_POLICY_MISSING ops/ci/egress.sh; exit 1; }
+rg -Fxq '  cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --profile "$profile" -E "$filter"' \
+  ops/ci/lib.sh \
+  || { refuse VERIFIER_FIXTURE_FEATURE_MISSING ops/ci/lib.sh; exit 1; }
+rg -Fq 'cargo nextest list --locked --workspace "${NEXTEST_FEATURES[@]}"' ops/ci/lib.sh \
+  || { refuse VERIFIER_FIXTURE_FEATURE_MISSING ops/ci/lib.sh; exit 1; }
+[[ "$(rg -c '^[[:space:]]+cargo nextest list .*NEXTEST_FEATURES' ops/ci/inventory-test.sh)" -eq 4 ]] \
+  || { refuse VERIFIER_FIXTURE_FEATURE_MISSING ops/ci/inventory-test.sh; exit 1; }
+rg -Fq 'cargo llvm-cov nextest --locked --workspace "${NEXTEST_FEATURES[@]}" --profile coverage' \
+  ops/ci/coverage.sh \
+  || { refuse VERIFIER_FIXTURE_FEATURE_MISSING ops/ci/coverage.sh; exit 1; }
 mapfile -t ignored_runners < <(
   rg -l --glob '*.sh' --glob '!inventory-test.sh' -- 'cargo nextest run .*--run-ignored' \
     ops/ci scripts | sort -u

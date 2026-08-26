@@ -4,17 +4,19 @@
 # change in coverage.
 # shellcheck disable=SC2034 # declarations are consumed by scripts that source this library
 
-readonly EXPECTED_TOTAL_TESTS=635
-readonly EXPECTED_STANDALONE_TESTS=589
+readonly EXPECTED_TOTAL_TESTS=641
+readonly EXPECTED_STANDALONE_TESTS=595
 readonly EXPECTED_EGRESS_TESTS=3
 readonly EXPECTED_CONTRACT_TESTS=34
 readonly EXPECTED_FAMILY_TESTS=9
 
-readonly EXPECTED_ALL_IDENTITIES_SHA256='3eddcff87313c445c0deb6168cc2afd8f665ae8dc584b472cfd697d21027734c'
-readonly EXPECTED_STANDALONE_IDENTITIES_SHA256='1c42ff201735b914096062801cc86d85fc59513d91f9e6dc1abd89368f4c8b09'
+readonly EXPECTED_ALL_IDENTITIES_SHA256='74154ec47e47417f8d3e16a3c5e2507b0284815a1ebbd3998d026c29ca9a9c06'
+readonly EXPECTED_STANDALONE_IDENTITIES_SHA256='e530a3480de2fa3d8c72a038395de3222b66bece443e985c364f329941d8a4c9'
 readonly EXPECTED_EGRESS_IDENTITIES_SHA256='c74ad2ec1d5c7efedb31ba03384e64032edd59ba7fe9c6fe3146ce1ed1565324'
 readonly EXPECTED_CONTRACT_IDENTITIES_SHA256='a0161cb946bf20d4ed5c993a367f06832d19353aa118497ab9c2e9e7b7a0b236'
 readonly EXPECTED_FAMILY_IDENTITIES_SHA256='09de88e55e74fbf5a611480912897480d5fb1f43a250de115c61557ba9b8d7d8'
+
+readonly NEXTEST_FEATURES=(--features 'bullet-verifier/fixture-executor')
 
 readonly CONTRACT_FILTER='binary_id(bullet-harness-claude::offline) | binary_id(bullet-harness-codex::offline) | binary_id(bullet-harness-cursor::offline) | binary_id(bullet-harness-antigravity::offline) | package(bullet-test-simulation)'
 readonly EGRESS_FILTER='binary_id(bullet-harness-egress::sandbox) & (test(=claude_strict_sandbox_proves_every_probe_and_blocks_real_commands) | test(=custom_policy_tunnels_only_to_the_allowlisted_host_and_port) | test(=teardown_kills_holder_uplink_proxy_and_group_children))'

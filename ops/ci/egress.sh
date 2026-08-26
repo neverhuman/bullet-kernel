@@ -34,5 +34,5 @@ if [[ "$selected" -ne "$EXPECTED_EGRESS_TESTS" || "$selected" -eq 0 ]]; then
   exit 1
 fi
 log "egress tests via nextest selected=$selected"
-cargo nextest run --locked --workspace --run-ignored all --no-tests fail -E "$EGRESS_FILTER"
+cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --run-ignored all --no-tests fail -E "$EGRESS_FILTER"
 log "egress lane passed"

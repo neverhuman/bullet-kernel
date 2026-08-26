@@ -28,7 +28,7 @@ Evidence classes follow
 | `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
 | `apps/bullet` | CLI: `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`; every flag is in [`docs/cli.md`](docs/cli.md) |
 | `apps/bullet-runner` | fail-closed attempt runner; returns `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, filesystem, provider, or gitd activity |
-| `apps/bullet-verifier` | verifier process boundary; refuses the writer identity, reads its job as `--stdin` JSON |
+| `apps/bullet-verifier` | product verifier boundary; always returns the typed `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE` refusal without reading a job. The default-off `bullet-verifier-fixture` accepts unsigned fixture JSON only with `fixture-executor`; every fixture outcome is component-only, unsigned, non-independent, and transaction-gate-ineligible |
 | `apps/bullet-effects` | no-argument component demo over `LocalBareForge`; `serve <durable-queue-dir>` processes one UNKNOWN job only to `QUARANTINED`, never fabricated forge success |
 
 ## farmd routes
@@ -122,12 +122,12 @@ or an authority recovery procedure.
 Every lane is one script under `ops/ci/`, reachable as `just <lane>` or
 `bash scripts/ci-local.sh <lane>`.
 
-The exact 583-test inventory is disjoint: 537 standalone, three host-dependent
+The exact 641-test inventory is disjoint: 595 standalone, three host-dependent
 egress, 34 contract, and nine family identities.
 
 | Lane | Command | Contents | Evidence class |
 | --- | --- | --- | --- |
-| fast | `just fast` | digest-bound 537-test standalone partition with all 537 executed and zero skipped; both Gitd binary variables are unset so product resolution fails closed | `COMPONENT_PROOF` |
+| fast | `just fast` | digest-bound 595-test standalone partition with all 595 executed and zero skipped, including explicitly feature-enabled verifier fixture tests; both Gitd binary variables are unset so product resolution fails closed | `COMPONENT_PROOF` |
 | lint | `just lint` | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, and inventory/workflow/observation/nightly meta-tests | hygiene gate; no evidence class |
 | contract | `just contract` | exactly 34 offline provider-protocol and simulation tests, executed once; no sibling daemon | `COMPONENT_PROOF` / `SYNTHETIC_PROOF` |
 | security | `just security` | gitleaks (no-git); `cargo deny fetch db` plus a lane-side freshness proof of the RustSec advisory database (refuses at 14 days); `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor --offline --no-ignores --strict-collection .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails | hygiene gate; no evidence class |

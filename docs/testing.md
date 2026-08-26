@@ -13,11 +13,11 @@ that aggregator fail.
 
 | Partition | Selected | Meaning |
 | --- | ---: | --- |
-| standalone | 537 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped |
+| standalone | 595 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
 | egress | 3 | the exact host-dependent namespace/nftables/CONNECT-proxy identities; only the capability-admitted `egress` lane executes them |
 | contract | 34 | four offline provider protocol binaries plus `bullet-test-simulation` |
 | family | 9 | five `transaction_demo` identities plus `heartbeat_stale`, `kill_retry`, `loop_sim`, and `synthetic_e2e` |
-| total | 583 | exact union of the four disjoint partitions above |
+| total | 641 | exact union of the four disjoint partitions above |
 
 `ops/ci/inventory-test.sh` independently lists all four partitions, requires
 every set to be nonzero, checks pairwise disjointness and exact union,
@@ -26,10 +26,16 @@ scans test sources for every `bullet-gitd` resolution site. A new, removed,
 renamed, ignored, or silently reclassified test makes `lint` fail until the
 inventory is reviewed.
 
+Every partition list and execution supplies
+`--features bullet-verifier/fixture-executor`. The feature exposes six
+component-only fixture process identities that otherwise disappear from Cargo's
+default workspace inventory; it does not change the default product verifier,
+which remains a constant fail-closed refusal.
+
 `bash scripts/ci-local.sh egress` performs host admission, then runs exactly:
 
 ```bash
-cargo nextest run --locked --workspace --run-ignored all --no-tests fail -E "$EGRESS_FILTER"
+cargo nextest run --locked --workspace --features bullet-verifier/fixture-executor --run-ignored all --no-tests fail -E "$EGRESS_FILTER"
 ```
 
 `EGRESS_FILTER` is the three-name expression digest-bound in
@@ -71,7 +77,7 @@ provider conformance.
 
 | Lane | Scope |
 | --- | --- |
-| `fast` | exactly 537 standalone nextest identities, all executed with zero skipped |
+| `fast` | exactly 595 standalone nextest identities, all executed with zero skipped |
 | `lint` | rustfmt, all-target Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow policy, inventory/observation/nightly meta-tests |
 | `contract` | exactly 34 offline provider-contract and simulation tests |
 | `security` | current-tree gitleaks 8.21.2; full cargo-deny 0.19.8 advisories/bans/licenses/sources with independently proved RustSec freshness; zizmor 1.25.2 |

@@ -3,6 +3,7 @@
 mod transaction_demo {
     pub(super) mod app;
     pub(super) mod support;
+    pub(super) mod verifier_binary;
 }
 
 fn main() -> std::process::ExitCode {

@@ -14,6 +14,7 @@ const TRANSACTION_DEMO_ROOT_SOURCE: &str = include_str!("../src/bin/transaction_
 const TRANSACTION_DEMO_SOURCE: &str = include_str!("../src/bin/transaction_demo/app.rs");
 const TRANSACTION_DEMO_SUPPORT_SOURCE: &str =
     include_str!("../src/bin/transaction_demo/support.rs");
+const VERIFIER_BINARY_SOURCE: &str = include_str!("../src/bin/transaction_demo/verifier_binary.rs");
 
 fn subject() -> TransactionComponentSubject {
     TransactionComponentSubject {
@@ -51,6 +52,7 @@ fn signed_transaction_component_roundtrip() {
     assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("mod transaction_demo"));
     assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("mod app;"));
     assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("mod support;"));
+    assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("mod verifier_binary;"));
     assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("app::main_entry()"));
     assert!(!TRANSACTION_DEMO_ROOT_SOURCE.contains("#[path"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains(".arg(\"127.0.0.1:0\")"));
@@ -66,8 +68,17 @@ fn signed_transaction_component_roundtrip() {
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("impl Drop for FarmdGuard"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE
         .contains("const FARMD_BIN_ENV: &str = \"BULLET_FARMD_BIN\";"));
-    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE
-        .contains("const VERIFIER_BIN_ENV: &str = \"BULLET_VERIFIER_BIN\";"));
+    assert!(
+        VERIFIER_BINARY_SOURCE.contains("const PATH_ENV: &str = \"BULLET_VERIFIER_FIXTURE_BIN\";")
+    );
+    assert!(VERIFIER_BINARY_SOURCE
+        .contains("const DIGEST_ENV: &str = \"BULLET_VERIFIER_FIXTURE_SHA256\";"));
+    assert!(VERIFIER_BINARY_SOURCE.contains("MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING"));
+    assert!(VERIFIER_BINARY_SOURCE.contains("SealFlags::WRITE"));
+    assert!(VERIFIER_BINARY_SOURCE.contains("/proc/self/fd/"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("verifier_fixture_binary()?"));
+    assert!(!TRANSACTION_DEMO_SUPPORT_SOURCE.contains("kernel_bin(\"bullet-verifier"));
+    assert!(!TRANSACTION_DEMO_SUPPORT_SOURCE.contains("BULLET_VERIFIER_BIN"));
     assert!(!TRANSACTION_DEMO_SUPPORT_SOURCE.contains("BULLET_BULLET_"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("impl Drop for ProcessGuard"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains(".process_group(0)"));

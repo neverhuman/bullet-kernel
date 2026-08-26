@@ -16,7 +16,7 @@ fi
 raw="$REPO_ROOT/target/coverage-summary.raw.json"
 output="$REPO_ROOT/.ci-artifacts/coverage/summary.json"
 mkdir -p "$(dirname "$output")"
-cargo llvm-cov nextest --locked --workspace --profile coverage -E "$STANDALONE_FILTER" \
+cargo llvm-cov nextest --locked --workspace "${NEXTEST_FEATURES[@]}" --profile coverage -E "$STANDALONE_FILTER" \
   --json --summary-only --output-path "$raw"
 jq -e '{schema_version: "bullet.coverage-summary.v1", totals: .data[0].totals}' "$raw" >"$output"
 rm -f "$raw"

@@ -160,5 +160,6 @@ lease, or nonce row.
 | --- | --- | --- |
 | `bullet-farmd` | `--data-dir` (default `./target/demo`), `--bind` (default `127.0.0.1:7420`; non-loopback refused), `--portal-origin <exact loopback origin>`, `--worker-token-file <protected file>`, `--reap-interval-ms <1..=500>`, reserved `--lease-transport-socket <abs>`; debug builds also expose `--fixture-lease-peer-registration <runner:epoch>` | routes in [`README.md`](../README.md#farmd-routes); the internal reconciler is inert without the worker token; the socket refuses without the debug-only exact peer registry |
 | `bullet-runner` | legacy arguments, including reserved `--lease-socket`, remain parseable | returns typed `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, filesystem, provider, or gitd activity; no product lease transport is admitted |
-| `bullet-verifier` | `--stdin` job JSON | refuses the writer identity |
+| `bullet-verifier` | arguments are ignored | always refuses before reading stdin with `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE`; emits no evidence |
+| `bullet-verifier-fixture` | non-default `fixture-executor` feature; `--stdin` fixture JSON | credential-free component-test executor; output is explicitly `COMPONENT_PROOF`, `UNSIGNED_FIXTURE`, and ineligible for independent Evidence |
 | `bullet-effects` | no arguments, or `serve <durable-queue-dir>` | no arguments run a component `LocalBareForge` loss/reconciliation demo; `serve` processes at most one UNKNOWN job to `QUARANTINED` and reports `live_forge_success:false` |

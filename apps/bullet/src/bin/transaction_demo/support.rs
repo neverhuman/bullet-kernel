@@ -11,6 +11,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::verifier_binary::verifier_fixture_binary;
+
 pub(super) const FIXTURE_KEY: [u8; 32] = [0x5a; 32];
 #[derive(Serialize)]
 pub(super) struct FixturePermitClaims {
@@ -51,12 +53,10 @@ pub(super) fn private_dir(path: &Path) -> Result<PathBuf, String> {
     fs::canonicalize(path).map_err(|err| fail(format!("canonicalize {}: {err}", path.display())))
 }
 const FARMD_BIN_ENV: &str = "BULLET_FARMD_BIN";
-const VERIFIER_BIN_ENV: &str = "BULLET_VERIFIER_BIN";
 
 fn kernel_bin(name: &str) -> PathBuf {
     let override_name = match name {
         "bullet-farmd" => Some(FARMD_BIN_ENV),
-        "bullet-verifier" => Some(VERIFIER_BIN_ENV),
         _ => None,
     };
     if let Some(path) = override_name.and_then(std::env::var_os) {
@@ -250,13 +250,8 @@ pub(super) fn run_verifier(
     overlap: bool,
 ) -> Result<(i32, Value), String> {
     enable_child_subreaper().map_err(|err| fail(format!("enable verifier subreaper: {err}")))?;
-    let bin = kernel_bin("bullet-verifier");
-    if !bin.is_file() {
-        return Err(fail(format!(
-            "bullet-verifier missing at {}",
-            bin.display()
-        )));
-    }
+    let admitted = verifier_fixture_binary()?;
+    let spawn_path = admitted.spawn_path()?;
     let request = json!({
         "workspace_repo_path": workspace.display().to_string(),
         "base_sha": base,
@@ -265,7 +260,7 @@ pub(super) fn run_verifier(
         "gate_id": REPOSITORY_GATE_ID,
         "author_attempt_id": attempt,
     });
-    let mut cmd = Command::new(bin);
+    let mut cmd = Command::new(spawn_path);
     cmd.arg("--stdin")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

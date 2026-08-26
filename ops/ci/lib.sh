@@ -110,7 +110,7 @@ partition_count() {
   local filter="$1"
   require_tool cargo-nextest || return 1
   require_tool jq || return 1
-  cargo nextest list --locked --workspace --run-ignored all --message-format json -E "$filter" \
+  cargo nextest list --locked --workspace "${NEXTEST_FEATURES[@]}" --run-ignored all --message-format json -E "$filter" \
     | jq -er '[
         ."rust-suites" | to_entries[] | .value.testcases | to_entries[] |
         select(.value["filter-match"].status == "matches")
@@ -144,7 +144,7 @@ run_partition_tests() {
     "$REPO_ROOT/.ci-artifacts/junit/$lane.xml"
   log "$lane tests via nextest profile=$profile selected=$selected"
   set +e
-  cargo nextest run --locked --workspace --profile "$profile" -E "$filter"
+  cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --profile "$profile" -E "$filter"
   local code=$?
   set -e
   sanitize_junit "$profile" "$lane" || return 1

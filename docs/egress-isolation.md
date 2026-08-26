@@ -219,7 +219,8 @@ just egress            # = bash scripts/ci-local.sh egress = bash ops/ci/egress.
 `ops/ci/egress.sh` exits 78 (neutral) when any of
 `unshare nsenter slirp4netns nft curl cat kill` is missing or
 `unshare --user --map-root-user --net true` fails; otherwise it runs
-`cargo nextest run --locked --workspace --run-ignored all --no-tests fail -E
+`cargo nextest run --locked --workspace --features
+bullet-verifier/fixture-executor --run-ignored all --no-tests fail -E
 "$EGRESS_FILTER"`, where the inventory binds the filter to exactly the three
 host-dependent proofs (`claude_strict_sandbox_proves_every_probe_and_blocks_real_commands`,
 `custom_policy_tunnels_only_to_the_allowlisted_host_and_port`,
