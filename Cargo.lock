@@ -239,6 +239,7 @@ dependencies = [
  "clap",
  "futures",
  "libc",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml",

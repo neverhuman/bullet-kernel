@@ -8,6 +8,7 @@ use bullet_harness_core::transaction_proof::{
 };
 use bullet_runner_core::{gitd_binary, GitdSession};
 use serde_json::json;
+use std::process::Command;
 
 const TRANSACTION_DEMO_ROOT_SOURCE: &str = include_str!("../src/bin/transaction_demo.rs");
 const TRANSACTION_DEMO_SOURCE: &str = include_str!("../src/bin/transaction_demo/app.rs");
@@ -63,7 +64,37 @@ fn signed_transaction_component_roundtrip() {
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("MissedTickBehavior::Delay"));
     assert!(TRANSACTION_DEMO_SOURCE.contains("heartbeat.stop().await?"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("impl Drop for FarmdGuard"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE
+        .contains("const FARMD_BIN_ENV: &str = \"BULLET_FARMD_BIN\";"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE
+        .contains("const VERIFIER_BIN_ENV: &str = \"BULLET_VERIFIER_BIN\";"));
+    assert!(!TRANSACTION_DEMO_SUPPORT_SOURCE.contains("BULLET_BULLET_"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("impl Drop for ProcessGuard"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains(".process_group(0)"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("kill_process_group_members"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("fn write_request"));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("verifier stdin pipe missing"));
+    let work = TRANSACTION_DEMO_SOURCE
+        .find("let gitd_work = async")
+        .unwrap();
+    let shutdown = TRANSACTION_DEMO_SOURCE.find("gitd.kill().await").unwrap();
+    let reconciliation = TRANSACTION_DEMO_SOURCE
+        .find("match (gitd_work, gitd_shutdown)")
+        .unwrap();
+    assert!(work < shutdown && shutdown < reconciliation);
+    assert_eq!(
+        TRANSACTION_DEMO_SOURCE.matches("gitd.kill().await").count(),
+        1
+    );
     assert!(TRANSACTION_DEMO_SOURCE.contains("farmd.stop()?"));
+
+    let missing = "/definitely/missing/bullet-farmd";
+    let refused = Command::new(env!("CARGO_BIN_EXE_transaction_demo"))
+        .env("BULLET_FARMD_BIN", missing)
+        .output()
+        .expect("run transaction demo with exact override");
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains(missing));
 }
 
 #[test]

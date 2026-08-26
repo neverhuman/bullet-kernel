@@ -151,16 +151,13 @@ async fn run() -> Result<(), String> {
         Ok(session) => session,
         Err(error) => return Err(fail(error.to_string())),
     };
-
+    let gitd_work = async {
     let workspace = match gitd
         .clone_workspace(&source, &base, &fixture_root, &["src".into()])
         .await
     {
         Ok(workspace) => workspace,
-        Err(error) => {
-            let _ = gitd.kill().await;
-            return Err(fail(error.to_string()));
-        }
+        Err(error) => return Err(fail(error.to_string())),
     };
 
     let proposal = PatchProposal {
@@ -186,10 +183,7 @@ async fn run() -> Result<(), String> {
     };
     let applied = match gitd.apply_proposal(&proposal).await {
         Ok(applied) => applied,
-        Err(error) => {
-            let _ = gitd.kill().await;
-            return Err(fail(error.to_string()));
-        }
+        Err(error) => return Err(fail(error.to_string())),
     };
 
     let prepare = match gitd
@@ -226,10 +220,7 @@ async fn run() -> Result<(), String> {
         .await
     {
         Ok(prepare) => prepare,
-        Err(error) => {
-            let _ = gitd.kill().await;
-            return Err(fail(format!("prepare_candidate: {error}")));
-        }
+        Err(error) => return Err(fail(format!("prepare_candidate: {error}"))),
     };
     let candidate_id = prepare
         .get("id")
@@ -337,7 +328,6 @@ async fn run() -> Result<(), String> {
     )
     .map_err(|err| fail(err.to_string()))?;
     if unknown != bullet_application::EffectState::OutcomeUnknown {
-        let _ = gitd.kill().await;
         return Err(fail(format!("lost response was {unknown:?}, not UNKNOWN")));
     }
     let adopted = reconcile(
@@ -350,7 +340,6 @@ async fn run() -> Result<(), String> {
     )
     .map_err(|err| fail(err.to_string()))?;
     if adopted != ReconcileOutcome::Adopted {
-        let _ = gitd.kill().await;
         return Err(fail(format!("expected Adopted, got {adopted:?}")));
     }
     let settled = effects
@@ -361,10 +350,28 @@ async fn run() -> Result<(), String> {
 
     let preserve_to = scratch.join("preserve");
     if let Err(error) = gitd.preserve(&preserve_to).await {
-        let _ = gitd.kill().await;
         return Err(fail(format!("preserve: {error}")));
     }
-    gitd.kill().await.map_err(|err| fail(err.to_string()))?;
+    Ok((
+        candidate_id,
+        verifier_outcome,
+        writer_proof_refused,
+        writer_body,
+        unknown,
+        settled,
+    ))
+    }
+    .await;
+    let gitd_shutdown = gitd.kill().await.map_err(|error| fail(error.to_string()));
+    let (candidate_id, verifier_outcome, writer_proof_refused, writer_body, unknown, settled) =
+        match (gitd_work, gitd_shutdown) {
+            (Ok(work), Ok(())) => work,
+            (Err(work), Ok(())) => return Err(work),
+            (Ok(_), Err(shutdown)) => return Err(shutdown),
+            (Err(work), Err(shutdown)) => {
+                return Err(fail(format!("{work}; gitd shutdown failed: {shutdown}")));
+            }
+        };
 
     heartbeat.stop().await?;
     if let Err(error) = client
