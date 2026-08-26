@@ -15,7 +15,7 @@ pub mod jeryu;
 pub mod local;
 pub mod lost;
 
-pub use attest::{attest, attestor_push, broker_attest, AttestorCredential};
+pub use attest::{attestor_push, broker_attest, validate_attestation_request, AttestorCredential};
 pub use broker::{authorize, dispatch, propose, reconcile, IntentInput, ReconcileOutcome};
 pub use bullet_application::{
     receipt_id, EffectIntentRecord, EffectReceiptRecord, EffectState, ReceiptVerdict, ZERO_OID,

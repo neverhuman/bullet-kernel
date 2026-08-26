@@ -9,6 +9,10 @@
       "command": "cargo test -p bullet-application",
       "purpose": "prove materializer, leases, and demo scenario"
     },
+    "crates/budgets/": {
+      "command": "cargo test -p bullet-budgets",
+      "purpose": "prove in-memory reservation conservation, lifetime identity, overflow refusal, and retained unknown liability"
+    },
     "crates/adapters/": {
       "command": "cargo test -p bullet-adapters",
       "purpose": "prove SQLite ledger and simulators"
@@ -160,6 +164,10 @@
     "Cargo.lock": {
       "command": "bash scripts/ci-local.sh fast",
       "purpose": "locked dependency graph"
+    },
+    "mutants.toml": {
+      "command": "bash scripts/ci-local.sh lint",
+      "purpose": "prove mutation configuration is structurally routed; this command does not run mutants or provide mutation-score evidence"
     },
     "db/": {
       "command": "bash scripts/ci-local.sh fast",

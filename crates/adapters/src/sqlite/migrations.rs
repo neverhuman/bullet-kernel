@@ -100,6 +100,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0015_normalized_authority.sql",
         sql: include_str!("../../../../db/migrations/0015_normalized_authority.sql"),
     },
+    Migration {
+        version: 16,
+        name: "0016_predecessor_constraints.sql",
+        sql: include_str!("../../../../db/migrations/0016_predecessor_constraints.sql"),
+    },
 ];
 
 #[derive(Debug, PartialEq, Eq)]

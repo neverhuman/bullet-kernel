@@ -4,7 +4,6 @@
 
 examine = [
   "crates/budgets",
-  "crates/application/src/mutation_permit.rs",
   "crates/application/src/nonce_ledger.rs",
   "crates/effects/src/attest.rs",
 ]

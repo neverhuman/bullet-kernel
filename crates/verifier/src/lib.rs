@@ -12,7 +12,9 @@ pub mod run;
 pub mod safe_git;
 pub mod workspace;
 
-pub use aggregate::{aggregate, any_pass, executable_digest, AggregatedGate, OracleClass};
+pub use aggregate::{
+    aggregate, catalog_argv_digest, AggregatedGate, AggregationError, OracleClass,
+};
 pub use bullet_domain::{EvidenceTier, GateId, GateOutcome, REASON_ZERO_TESTS};
 pub use error::VerifierError;
 pub use evidence::{

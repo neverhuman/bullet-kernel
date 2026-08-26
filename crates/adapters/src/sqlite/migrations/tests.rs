@@ -81,6 +81,146 @@ fn fresh_creation_records_exact_checksums_and_reopens() {
         assert_eq!(row.1, migration.name);
         assert_eq!(row.2, migration_checksum(migration));
     }
+
+    assert!(ledger
+        .conn
+        .execute(
+            "INSERT INTO budget_reservations (reservation_id, amount) VALUES ('zero', 0)",
+            [],
+        )
+        .is_err());
+    assert!(ledger
+        .conn
+        .execute_batch(
+            "INSERT INTO budget_reservations (reservation_id, amount)
+             VALUES ('too-large', 9223372036854775808);",
+        )
+        .is_err());
+    ledger
+        .conn
+        .execute(
+            "INSERT INTO budget_reservations (reservation_id, amount) VALUES ('valid', 1)",
+            [],
+        )
+        .expect("valid budget reservation");
+
+    let uppercase = "A".repeat(64);
+    assert!(ledger
+        .conn
+        .execute(
+            "INSERT INTO authority_revisions (
+               singleton, graph_revision, workspace_generation, scope_digest,
+               policy_generation, routing_generation, authority_epoch, freeze_generation
+             ) VALUES (1, 1, 1, ?1, 1, 1, 1, 0)",
+            [&uppercase],
+        )
+        .is_err());
+    let nul_suffix = format!("{}\0x", "a".repeat(64));
+    assert!(ledger
+        .conn
+        .execute(
+            "INSERT INTO authority_revisions (
+               singleton, graph_revision, workspace_generation, scope_digest,
+               policy_generation, routing_generation, authority_epoch, freeze_generation
+             ) VALUES (1, 1, 1, ?1, 1, 1, 1, 0)",
+            [&nul_suffix],
+        )
+        .is_err());
+    let embedded_nul = format!("{}\0{}", "a".repeat(32), "a".repeat(31));
+    assert_eq!(embedded_nul.len(), 64);
+    assert!(ledger
+        .conn
+        .execute(
+            "INSERT INTO authority_revisions (
+               singleton, graph_revision, workspace_generation, scope_digest,
+               policy_generation, routing_generation, authority_epoch, freeze_generation
+             ) VALUES (1, 1, 1, ?1, 1, 1, 1, 0)",
+            [&embedded_nul],
+        )
+        .is_err());
+    assert!(ledger
+        .conn
+        .execute_batch(
+            "INSERT INTO authority_revisions (
+               singleton, graph_revision, workspace_generation, scope_digest,
+               policy_generation, routing_generation, authority_epoch, freeze_generation
+             ) VALUES (
+               1, 9223372036854775808, 1,
+               'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+               1, 1, 1, 0
+             );",
+        )
+        .is_err());
+    ledger
+        .conn
+        .execute(
+            "INSERT INTO authority_revisions (
+               singleton, graph_revision, workspace_generation, scope_digest,
+               policy_generation, routing_generation, authority_epoch, freeze_generation
+             ) VALUES (1, 2, 1, ?1, 1, 1, 1, 0)",
+            ["a".repeat(64)],
+        )
+        .expect("valid normalized authority");
+    assert!(ledger
+        .conn
+        .execute(
+            "UPDATE authority_revisions SET graph_revision = 1 WHERE singleton = 1",
+            [],
+        )
+        .is_err());
+    assert!(ledger
+        .conn
+        .execute(
+            "UPDATE authority_revisions SET scope_digest = ?1 WHERE singleton = 1",
+            ["b".repeat(64)],
+        )
+        .is_err());
+    ledger
+        .conn
+        .execute(
+            "UPDATE authority_revisions SET graph_revision = 3 WHERE singleton = 1",
+            [],
+        )
+        .expect("monotonic advance");
+    ledger
+        .conn
+        .execute(
+            "UPDATE authority_revisions
+             SET scope_digest = ?1, authority_epoch = 2
+             WHERE singleton = 1",
+            ["b".repeat(64)],
+        )
+        .expect("scope change advances authority epoch");
+    assert!(ledger
+        .conn
+        .execute("DELETE FROM authority_revisions WHERE singleton = 1", [])
+        .is_err());
+    assert!(ledger
+        .conn
+        .execute(
+            "INSERT OR REPLACE INTO authority_revisions (
+               singleton, graph_revision, workspace_generation, scope_digest,
+               policy_generation, routing_generation, authority_epoch, freeze_generation
+             ) VALUES (1, 1, 1, ?1, 1, 1, 1, 0)",
+            ["a".repeat(64)],
+        )
+        .is_err());
+    let persisted = ledger
+        .conn
+        .query_row(
+            "SELECT graph_revision, scope_digest, authority_epoch
+             FROM authority_revisions WHERE singleton = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .expect("persisted authority");
+    assert_eq!(persisted, (3, "b".repeat(64), 2));
     drop(ledger);
 
     let reopened = SqliteLedger::open(&path).unwrap();

@@ -1,7 +1,10 @@
-//! Attestor negatives: no credential, SHA mismatch, cannot push, broker cannot attest.
+//! Attestor credential, request-validation, and separation-of-duty negatives.
+
+#![cfg(unix)]
 
 use bullet_effects_core::{
-    attest, attestor_push, broker_attest, AttestorCredential, CheckPublication,
+    attestor_push, broker_attest, validate_attestation_request, AttestorCredential,
+    CheckPublication,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -37,23 +40,41 @@ fn world_readable_credential_is_refused() {
     fs::set_permissions(&path, permissions).expect("mode");
     let error = AttestorCredential::load(&path).expect_err("open");
     assert_eq!(error.reason_code(), "FORGE_UNAUTHENTICATED");
+
+    let symlink = dir.path().join("linked.key");
+    std::os::unix::fs::symlink(&path, &symlink).expect("symlink");
+    assert_eq!(
+        AttestorCredential::load(&symlink)
+            .expect_err("symlink")
+            .reason_code(),
+        "FORGE_UNAUTHENTICATED"
+    );
 }
 
 #[test]
 fn exact_sha_mismatch_is_check_subject_mismatch() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cred = credential(dir.path());
-    let error = attest(&cred, &publication(), &"b".repeat(40)).expect_err("mismatch");
+    let error =
+        validate_attestation_request(&cred, &publication(), &"b".repeat(40)).expect_err("mismatch");
     assert_eq!(error.reason_code(), "CHECK_SUBJECT_MISMATCH");
+
+    let mut malformed = publication();
+    malformed.sha = "not-an-oid".into();
+    assert_eq!(
+        validate_attestation_request(&cred, &malformed, &sha())
+            .expect_err("malformed SHA")
+            .reason_code(),
+        "BAD_OID"
+    );
 }
 
 #[test]
-fn exact_sha_attests() {
+fn exact_sha_validation_is_not_attestation() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cred = credential(dir.path());
-    let receipt = attest(&cred, &publication(), &sha()).expect("attest");
-    assert_eq!(receipt.sha, sha());
-    assert_eq!(receipt.name, "gate.v1");
+    assert_eq!(cred.key_id(), "attestor-1");
+    validate_attestation_request(&cred, &publication(), &sha()).expect("validate exact subject");
 }
 
 #[test]

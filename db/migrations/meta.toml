@@ -68,3 +68,17 @@ note = "ALTER TABLE outbox ADD COLUMN command_id TEXT REFERENCES commands(id); a
 [[migration]]
 file = "0013_nonce_ledger.sql"
 note = "Adds a normalized generic one-use nonce table; launch-grant and lease-transport nonce tables retain their distinct subject and expiry semantics"
+
+[[migration]]
+file = "0014_reservations.sql"
+note = "Adds the normalized budget-reservation predecessor table during the first-open transaction; no durable application write port or release authority is claimed"
+
+[[migration]]
+file = "0015_normalized_authority.sql"
+note = "Adds the singleton normalized-authority predecessor table during the first-open transaction; it is component schema only and does not replace the production authority store"
+
+[[migration]]
+file = "0016_predecessor_constraints.sql"
+destructive = "copies budget_reservations and authority_revisions into constrained replacement tables, drops the originals, then renames the replacements"
+justification = "0014 and 0015 create both source tables immediately beforehand in the same BEGIN IMMEDIATE first-open transaction. Existing checksummed databases are verified but never incrementally upgraded. Each copy is checked by its stricter destination schema before the corresponding source DROP; the enclosing transaction rolls every prior DDL statement back if a later copy or constraint fails. The replacement also installs componentwise monotonic authority counters, requires an authority-epoch advance for every scope-digest change, and forbids singleton deletion or replacement; it creates no durable application write port."
+data_loss = "none on the supported fresh-initialize path; a pre-existing, partial, future, or checksum-drifted schema is refused rather than rebuilt"

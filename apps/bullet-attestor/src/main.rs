@@ -1,7 +1,10 @@
-//! Independent attestor process. Publishes one check for one exact SHA.
-//! The process cannot push and refuses to run without its own credential.
+//! Independent attestor process boundary. Production publication stays
+//! unavailable until an authenticated forge adapter, attestor signature, and
+//! exact read-back are wired.
 
-use bullet_effects_core::{attest, attestor_push, AttestorCredential, CheckPublication};
+use bullet_effects_core::{
+    attestor_push, validate_attestation_request, AttestorCredential, CheckPublication, EffectsError,
+};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -9,7 +12,7 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(
     name = "bullet-attestor",
-    about = "Publish one check for one exact SHA; cannot push"
+    about = "Attestor boundary; production forge transport is not yet admitted"
 )]
 struct Args {
     #[command(subcommand)]
@@ -18,7 +21,7 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Publish one check bound to one SHA and one proof root.
+    /// Validate a check subject, then refuse until forge transport is admitted.
     Attest {
         /// Path to the attestor credential file (mode 0600).
         #[arg(long)]
@@ -52,22 +55,13 @@ fn main() -> ExitCode {
                     name,
                     proof_root,
                 };
-                match attest(&credential, &publication, &sha) {
-                    Ok(receipt) => {
-                        println!(
-                            "{}",
-                            serde_json::to_string(&serde_json::json!({
-                                "sha": receipt.sha,
-                                "name": receipt.name,
-                                "proof_root": receipt.proof_root,
-                                "produced_by": "bullet-attestor",
-                            }))
-                            .expect("receipt encodes")
-                        );
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => refuse(error),
+                if let Err(error) = validate_attestation_request(&credential, &publication, &sha) {
+                    return refuse(error);
                 }
+                refuse(EffectsError::LiveAdmissionUnavailable(
+                    "no authenticated attestor forge adapter, signature, and exact read-back are configured"
+                        .into(),
+                ))
             }
             Err(error) => refuse(error),
         },
