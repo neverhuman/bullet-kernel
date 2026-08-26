@@ -6,6 +6,7 @@ mod contracts;
 mod demo_synthetic;
 mod maintenance;
 mod provider;
+mod transaction;
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
@@ -50,6 +51,12 @@ enum Commands {
     Provider {
         #[command(subcommand)]
         command: provider::ProviderCommands,
+    },
+    /// Five-plane transaction receipt. Currently ABSENT and ineligible.
+    Transaction {
+        /// Emit one JSON object on stdout.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -107,6 +114,7 @@ fn data_dir() -> PathBuf {
 fn run(command: Commands) -> Result<(), String> {
     match command {
         Commands::Provider { .. } => unreachable!("provider is handled in main"),
+        Commands::Transaction { .. } => unreachable!("transaction is handled in main"),
         Commands::Farm { command } => match command {
             FarmCommands::Init => {
                 let dir = data_dir();
@@ -176,6 +184,13 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Commands::Provider { command } => provider::run(command),
+        Commands::Transaction { json } => {
+            if !json {
+                eprintln!("bullet: TRANSACTION_PROOF_UNAVAILABLE: --json is required");
+                return ExitCode::from(2);
+            }
+            transaction::run_json()
+        }
         other => match run(other) {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => {

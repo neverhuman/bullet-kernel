@@ -109,12 +109,12 @@ or an authority recovery procedure.
 Every lane is one script under `ops/ci/`, reachable as `just <lane>` or
 `bash scripts/ci-local.sh <lane>`.
 
-The exact 549-test inventory is disjoint: 503 standalone, three host-dependent
+The exact 569-test inventory is disjoint: 523 standalone, three host-dependent
 egress, 34 contract, and nine family identities.
 
 | Lane | Command | Contents | Evidence class |
 | --- | --- | --- | --- |
-| fast | `just fast` | digest-bound 503-test standalone partition with all 503 executed and zero skipped; a checked nonexistent daemon sentinel prevents sibling fallback | `COMPONENT_PROOF` |
+| fast | `just fast` | digest-bound 523-test standalone partition with all 523 executed and zero skipped; a checked nonexistent daemon sentinel prevents sibling fallback | `COMPONENT_PROOF` |
 | lint | `just lint` | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, and inventory/workflow/observation/nightly meta-tests | hygiene gate; no evidence class |
 | contract | `just contract` | exactly 34 offline provider-protocol and simulation tests, executed once; no sibling daemon | `COMPONENT_PROOF` / `SYNTHETIC_PROOF` |
 | security | `just security` | gitleaks (no-git); `cargo deny fetch db` plus a lane-side freshness proof of the RustSec advisory database (refuses at 14 days); `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails | hygiene gate; no evidence class |

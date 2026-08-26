@@ -3,6 +3,7 @@
 //! rules under which writer evidence can never satisfy an independent
 //! requirement.
 
+pub mod aggregate;
 pub mod error;
 pub mod evidence;
 pub mod gate;
@@ -11,6 +12,7 @@ pub mod run;
 pub mod safe_git;
 pub mod workspace;
 
+pub use aggregate::{aggregate, any_pass, executable_digest, AggregatedGate, OracleClass};
 pub use bullet_domain::{EvidenceTier, GateId, GateOutcome, REASON_ZERO_TESTS};
 pub use error::VerifierError;
 pub use evidence::{

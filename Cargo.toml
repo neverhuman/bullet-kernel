@@ -16,6 +16,7 @@ members = [
   "crates/verifier",
   "crates/effects",
   "crates/behavior",
+  "crates/budgets",
   "crates/router",
   "crates/fusion",
   "crates/mcp-mock",
@@ -26,6 +27,7 @@ members = [
   "apps/bullet-runner",
   "apps/bullet-verifier",
   "apps/bullet-effects",
+  "apps/bullet-attestor",
   "apps/bullet-mcpd",
 ]
 
@@ -52,6 +54,7 @@ bullet-runner-core = { path = "crates/runner" }
 bullet-verifier-core = { path = "crates/verifier" }
 bullet-effects-core = { path = "crates/effects" }
 bullet-behavior = { path = "crates/behavior" }
+bullet-budgets = { path = "crates/budgets" }
 bullet-router = { path = "crates/router" }
 bullet-fusion = { path = "crates/fusion" }
 bullet-mcp-mock = { path = "crates/mcp-mock" }

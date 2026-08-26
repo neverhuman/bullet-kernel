@@ -6,7 +6,7 @@ the same file.
 
 | Lane | Script | Hosted (`.github/workflows/ci.yml`) | Exit contract |
 | --- | --- | --- | --- |
-| `fast` | `ops/ci/fast.sh` | yes, atomic | digest-bound 503-test standalone partition, all executed with zero skipped; nonexistent daemon sentinel prevents sibling fallback |
+| `fast` | `ops/ci/fast.sh` | yes, atomic | digest-bound 523-test standalone partition, all executed with zero skipped; nonexistent daemon sentinel prevents sibling fallback |
 | `lint` | `ops/ci/lint.sh` | yes, atomic | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow/inventory/observation/nightly meta-tests |
 | `contract` | `ops/ci/contract.sh` | yes, atomic | exact 34-test offline provider-contract/simulation partition; never resolves `bullet-gitd` |
 | `security` | `ops/ci/security.sh` | yes | gitleaks; `cargo deny fetch db` then a lane-side freshness proof of the RustSec database; `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails |

@@ -3,6 +3,7 @@
 //! response is `OUTCOME_UNKNOWN`, read-back verified receipts, and
 //! reconcile-before-retry by construction.
 
+pub mod attest;
 pub mod broker;
 pub mod error;
 pub mod forge;
@@ -14,6 +15,7 @@ pub mod jeryu;
 pub mod local;
 pub mod lost;
 
+pub use attest::{attest, attestor_push, broker_attest, AttestorCredential};
 pub use broker::{authorize, dispatch, propose, reconcile, IntentInput, ReconcileOutcome};
 pub use bullet_application::{
     receipt_id, EffectIntentRecord, EffectReceiptRecord, EffectState, ReceiptVerdict, ZERO_OID,

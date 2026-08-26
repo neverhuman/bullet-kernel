@@ -14,6 +14,7 @@ pub mod http;
 pub mod http_lease;
 pub mod journal;
 pub mod lease;
+pub mod saga;
 pub mod scope;
 #[cfg(feature = "test-seams")]
 pub mod signed_lease;
@@ -37,6 +38,7 @@ pub use lease::{
     AcquireGrant, AcquireRequest, DirectLeaseClient, HeartbeatCall, LeaseClient, ReadyView,
     ReleaseCall,
 };
+pub use saga::{require_saga_admission, stages, SagaStage};
 #[cfg(feature = "test-seams")]
 pub use signed_lease::SignedLeaseClient;
 pub use signed_lease_rpc::SignedLeaseRpcClient;

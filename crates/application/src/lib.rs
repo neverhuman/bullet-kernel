@@ -1,6 +1,7 @@
 //! Application services: commands, materializer, leases, queue, demo.
 
 pub mod authority;
+pub mod authority_revision;
 pub mod commands;
 pub mod conformance;
 pub mod conformance_effects;
@@ -15,6 +16,7 @@ pub mod leases;
 pub mod live_conformance;
 pub mod materializer;
 pub mod memory;
+pub mod mutation_permit;
 pub mod mutation_reservation;
 pub mod nonce_ledger;
 pub mod policy_snapshot;
@@ -24,6 +26,7 @@ pub mod simulators;
 pub mod store;
 
 pub use authority::{check_active_lease_snapshot, ActiveLeaseSubject};
+pub use authority_revision::{AuthorityRevisionError, NormalizedAuthority};
 pub use commands::{CommandRecord, CommandRequest};
 pub use context::{
     initial_context_capsules, validate_initial_context_set, ContextCapsule,
@@ -46,6 +49,7 @@ pub use live_conformance::{
 };
 pub use materializer::{materialize_plan, PlanInput};
 pub use memory::MemoryLedger;
+pub use mutation_permit::{consume_permit, mint_from_active_lease, MutationPermitError};
 pub use mutation_reservation::{
     LeaseGate, MutationReservationStore, MutationReserveRequest, OneUsePermit, ReservationError,
 };

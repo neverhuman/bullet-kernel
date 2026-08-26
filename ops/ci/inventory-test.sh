@@ -218,4 +218,4 @@ if ! cmp -s "$test_root/expected-family-sources" "$test_root/actual-family-sourc
   exit 1
 fi
 
-log "inventory passed: 549 total = 503 standalone + 3 egress + 34 contract + 9 family; fast has zero ignored tests"
+log "inventory passed: 569 total = 523 standalone + 3 egress + 34 contract + 9 family; fast has zero ignored tests"

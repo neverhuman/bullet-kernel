@@ -90,6 +90,16 @@ const MIGRATIONS: &[Migration] = &[
         name: "0013_nonce_ledger.sql",
         sql: include_str!("../../../../db/migrations/0013_nonce_ledger.sql"),
     },
+    Migration {
+        version: 14,
+        name: "0014_reservations.sql",
+        sql: include_str!("../../../../db/migrations/0014_reservations.sql"),
+    },
+    Migration {
+        version: 15,
+        name: "0015_normalized_authority.sql",
+        sql: include_str!("../../../../db/migrations/0015_normalized_authority.sql"),
+    },
 ];
 
 #[derive(Debug, PartialEq, Eq)]

@@ -278,12 +278,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bullet-attestor"
+version = "0.1.0"
+dependencies = [
+ "bullet-effects-core",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
 name = "bullet-behavior"
 version = "0.1.0"
 dependencies = [
  "bullet-domain",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "bullet-budgets"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
