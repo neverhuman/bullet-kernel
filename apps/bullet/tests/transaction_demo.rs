@@ -76,6 +76,10 @@ fn signed_transaction_component_roundtrip() {
     assert!(VERIFIER_BINARY_SOURCE.contains("MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING"));
     assert!(VERIFIER_BINARY_SOURCE.contains("SealFlags::WRITE"));
     assert!(VERIFIER_BINARY_SOURCE.contains("/proc/self/fd/"));
+    assert!(VERIFIER_BINARY_SOURCE.contains("#[cfg(target_os = \"linux\")]"));
+    assert!(VERIFIER_BINARY_SOURCE.contains("#[cfg(not(target_os = \"linux\"))]"));
+    assert!(VERIFIER_BINARY_SOURCE
+        .contains("verifier fixture execution requires Linux sealed-memfd admission"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("verifier_fixture_binary()?"));
     assert!(!TRANSACTION_DEMO_SUPPORT_SOURCE.contains("kernel_bin(\"bullet-verifier"));
     assert!(!TRANSACTION_DEMO_SUPPORT_SOURCE.contains("BULLET_VERIFIER_BIN"));

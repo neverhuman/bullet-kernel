@@ -1,32 +1,50 @@
 //! Exact executable admission for the component-only verifier fixture.
 
+#[cfg(target_os = "linux")]
 use sha2::{Digest as Sha2Digest, Sha256};
+#[cfg(target_os = "linux")]
 use std::ffi::OsString;
+#[cfg(target_os = "linux")]
 use std::fs::File;
+#[cfg(target_os = "linux")]
 use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
 const PATH_ENV: &str = "BULLET_VERIFIER_FIXTURE_BIN";
+#[cfg(target_os = "linux")]
 const DIGEST_ENV: &str = "BULLET_VERIFIER_FIXTURE_SHA256";
+#[cfg(target_os = "linux")]
 const MAX_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug)]
 pub(super) struct AdmittedVerifierFixture {
+    #[cfg(target_os = "linux")]
     sealed_file: File,
 }
 
 impl AdmittedVerifierFixture {
     pub(super) fn spawn_path(&self) -> Result<PathBuf, String> {
-        let path = PathBuf::from(format!("/proc/self/fd/{}", self.sealed_file.as_raw_fd()));
-        if !path.exists() {
-            return Err(refusal("Linux procfd is unavailable for exact-inode spawn"));
+        #[cfg(target_os = "linux")]
+        {
+            let path = PathBuf::from(format!("/proc/self/fd/{}", self.sealed_file.as_raw_fd()));
+            if !path.exists() {
+                return Err(refusal("Linux procfd is unavailable for exact-inode spawn"));
+            }
+            Ok(path)
         }
-        Ok(path)
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(non_linux_refusal())
+        }
     }
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn verifier_fixture_binary() -> Result<AdmittedVerifierFixture, String> {
     configured_for_build(
         cfg!(debug_assertions),
@@ -35,6 +53,17 @@ pub(super) fn verifier_fixture_binary() -> Result<AdmittedVerifierFixture, Strin
     )
 }
 
+#[cfg(not(target_os = "linux"))]
+pub(super) fn verifier_fixture_binary() -> Result<AdmittedVerifierFixture, String> {
+    Err(non_linux_refusal())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn non_linux_refusal() -> String {
+    refusal("verifier fixture execution requires Linux sealed-memfd admission")
+}
+
+#[cfg(target_os = "linux")]
 fn configured_for_build(
     fixture_enabled: bool,
     path_value: Option<OsString>,
@@ -61,6 +90,7 @@ fn configured_for_build(
     admit_path(PathBuf::from(path), &digest)
 }
 
+#[cfg(target_os = "linux")]
 fn unprovisioned(variable: &str) -> String {
     format!("VERIFIER_FIXTURE_BINARY_UNPROVISIONED: {variable} is required")
 }
@@ -72,6 +102,7 @@ fn refusal(reason: impl AsRef<str>) -> String {
     )
 }
 
+#[cfg(target_os = "linux")]
 fn admit_path(path: PathBuf, expected_sha256: &str) -> Result<AdmittedVerifierFixture, String> {
     if !path.is_absolute() {
         return Err(refusal("fixture executable path must be absolute"));
@@ -168,6 +199,7 @@ fn admit_path(path: PathBuf, expected_sha256: &str) -> Result<AdmittedVerifierFi
     Ok(AdmittedVerifierFixture { sealed_file })
 }
 
+#[cfg(target_os = "linux")]
 fn copy_native_elf_and_hash(
     source: &mut File,
     destination: &mut File,
@@ -208,6 +240,7 @@ fn copy_native_elf_and_hash(
     Ok((hex_digest(hasher.finalize().as_slice()), total))
 }
 
+#[cfg(target_os = "linux")]
 fn sha256_and_count(reader: &mut File) -> Result<(String, u64), String> {
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -230,10 +263,12 @@ fn sha256_and_count(reader: &mut File) -> Result<(String, u64), String> {
     Ok((hex_digest(hasher.finalize().as_slice()), total))
 }
 
+#[cfg(target_os = "linux")]
 fn hex_digest(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[cfg(target_os = "linux")]
 fn is_native_elf_header(header: &[u8; 20]) -> bool {
     if header[..4] != [0x7f, b'E', b'L', b'F'] || header[4] != 2 || header[5] != 1 {
         return false;
@@ -247,6 +282,7 @@ fn is_native_elf_header(header: &[u8; 20]) -> bool {
     false
 }
 
+#[cfg(target_os = "linux")]
 fn is_lower_hex(value: &str, length: usize) -> bool {
     value.len() == length
         && value
@@ -254,7 +290,7 @@ fn is_lower_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use std::fs::{self, hard_link};
