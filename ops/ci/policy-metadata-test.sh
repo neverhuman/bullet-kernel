@@ -16,8 +16,8 @@ trap cleanup EXIT
 readonly registry_digest=57cb9f69fef171eb5f826e4020161862d29f5ae17d3d7680ce5c2034575b21ce
 readonly policy_digest=3751585d43e598503679f0efa4a516a14698e2eb62778d0e8ec2922409c7ba68
 readonly security_digest=da1bbe63104393c60c3477f501e9a485194119b5bdd54c777e47a819f561bcf8
-readonly dispatcher_digest=629bf3487a18593c92f84932c6f00f8234ed6caf3faab17a1c29c12647d24ca2
-readonly doctor_digest=6df6bc5c3543ee16f483e98913525a531f8f0185271a8485aaa098077ba2b0c7
+readonly dispatcher_digest=af35d9cf83fc751293f95ce961d7ba724c341b03c7282d0c2c0fdcdd516c7882
+readonly doctor_digest=ec40895791b09d232e32776311947f336ceca48ebe432c76b3b1ffc9fdebc4e7
 
 declare -ar lane_names=(
   required fast lint contract security docs family preflight links coverage
@@ -272,7 +272,7 @@ insert_after_once ops/ci/security.sh "$exact_zizmor" "$exact_zizmor" "$test_root
 expect_failure security-zizmor-duplicate validate_security_shell "$test_root/security-duplicate-command.sh"
 remove_line_once ops/ci/security.sh "$exact_zizmor" "$test_root/security-missing-command.sh"
 expect_failure security-zizmor-missing validate_security_shell "$test_root/security-missing-command.sh"
-insert_before_once scripts/ci-local.sh '  fast)     bash ops/ci/fast.sh ;;' '  fast)     true ;;' "$test_root/dispatcher-shadow.sh"
+insert_before_once scripts/ci-local.sh '    fast)     bash ops/ci/fast.sh ;;' '    fast)     true ;;' "$test_root/dispatcher-shadow.sh"
 expect_failure dispatcher-shadow validate_dispatcher "$test_root/dispatcher-shadow.sh"
 
 log "policy metadata passed: exact-byte 18-lane/security/dispatcher subjects; hostile bypasses rejected"

@@ -34,6 +34,9 @@ case "$lane" in
     ;;
 esac
 
+# Proof custody runs before the selected lane and needs these on every path.
+tools+=(find id wc)
+
 missing=0
 for tool in "${tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
