@@ -14,6 +14,7 @@ mod lease_transport;
 mod leases;
 mod materialization;
 mod migrations;
+pub mod mutation_authority;
 mod nonces;
 mod open;
 mod outbox;

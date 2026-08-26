@@ -4,14 +4,13 @@ use super::store;
 use bullet_application::{LedgerError, NormalizedAuthority};
 use rusqlite::{params, Connection, OptionalExtension};
 
-pub(super) fn ensure_genesis(conn: &Connection) -> Result<(), LedgerError> {
+pub(super) fn seed_genesis(conn: &Connection) -> Result<(), LedgerError> {
     let genesis = NormalizedAuthority::genesis();
     conn.execute(
         "INSERT INTO authority_revisions (
             singleton, graph_revision, workspace_generation, scope_digest,
             policy_generation, routing_generation, authority_epoch, freeze_generation
-         ) SELECT 1, ?1, ?2, ?3, ?4, ?5, ?6, ?7
-         WHERE NOT EXISTS (SELECT 1 FROM authority_revisions WHERE singleton = 1)",
+         ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             i64::try_from(genesis.graph_revision()).map_err(store)?,
             i64::try_from(genesis.workspace_generation()).map_err(store)?,
@@ -27,7 +26,6 @@ pub(super) fn ensure_genesis(conn: &Connection) -> Result<(), LedgerError> {
 }
 
 pub(super) fn current(conn: &Connection) -> Result<NormalizedAuthority, LedgerError> {
-    ensure_genesis(conn)?;
     let row: Option<(i64, i64, String, i64, i64, i64, i64)> = conn
         .query_row(
             "SELECT graph_revision, workspace_generation, scope_digest,

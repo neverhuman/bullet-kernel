@@ -82,3 +82,7 @@ file = "0016_predecessor_constraints.sql"
 destructive = "copies budget_reservations and authority_revisions into constrained replacement tables, drops the originals, then renames the replacements"
 justification = "0014 and 0015 create both source tables immediately beforehand in the same BEGIN IMMEDIATE first-open transaction. Existing checksummed databases are verified but never incrementally upgraded. Each copy is checked by its stricter destination schema before the corresponding source DROP; the enclosing transaction rolls every prior DDL statement back if a later copy or constraint fails. The replacement also installs componentwise monotonic authority counters, requires an authority-epoch advance for every scope-digest change, and forbids singleton deletion or replacement; it creates no durable application write port."
 data_loss = "none on the supported fresh-initialize path; a pre-existing, partial, future, or checksum-drifted schema is refused rather than rebuilt"
+
+[[migration]]
+file = "0017_mutation_authority.sql"
+note = "Adds normalized one-use mutation authority with a closed durable disposition machine; authority/freeze or restore-epoch movement atomically invalidates RESERVED rows and converts in-flight CONSUMED rows to UNKNOWN"

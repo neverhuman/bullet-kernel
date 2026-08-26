@@ -7,7 +7,12 @@ use chrono::DateTime;
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, TransactionBehavior};
 
+mod catalog;
 mod identity;
+
+pub(super) use catalog::{
+    valid_digest, valid_mutation_contract, validate_mutation_row, Migration, MIGRATIONS,
+};
 
 const CHECKSUM_DOMAIN: &[u8] = b"bullet-kernel.sqlite-migration.v1";
 const CREATE_METADATA: &str = "CREATE TABLE schema_version (
@@ -16,96 +21,6 @@ const CREATE_METADATA: &str = "CREATE TABLE schema_version (
     checksum TEXT NOT NULL,
     applied_at TEXT NOT NULL
 );";
-
-#[derive(Clone, Copy)]
-struct Migration {
-    version: i64,
-    name: &'static str,
-    sql: &'static str,
-}
-
-const MIGRATIONS: &[Migration] = &[
-    Migration {
-        version: 1,
-        name: "0001_ledger.sql",
-        sql: include_str!("../../../../db/migrations/0001_ledger.sql"),
-    },
-    Migration {
-        version: 2,
-        name: "0002_authority.sql",
-        sql: include_str!("../../../../db/migrations/0002_authority.sql"),
-    },
-    Migration {
-        version: 3,
-        name: "0003_effects.sql",
-        sql: include_str!("../../../../db/migrations/0003_effects.sql"),
-    },
-    Migration {
-        version: 4,
-        name: "0004_event_time.sql",
-        sql: include_str!("../../../../db/migrations/0004_event_time.sql"),
-    },
-    Migration {
-        version: 5,
-        name: "0005_lease_ttl.sql",
-        sql: include_str!("../../../../db/migrations/0005_lease_ttl.sql"),
-    },
-    Migration {
-        version: 6,
-        name: "0006_command_correlation.sql",
-        sql: include_str!("../../../../db/migrations/0006_command_correlation.sql"),
-    },
-    Migration {
-        version: 7,
-        name: "0007_restore_epoch.sql",
-        sql: include_str!("../../../../db/migrations/0007_restore_epoch.sql"),
-    },
-    Migration {
-        version: 8,
-        name: "0008_identity_contract.sql",
-        sql: include_str!("../../../../db/migrations/0008_identity_contract.sql"),
-    },
-    Migration {
-        version: 9,
-        name: "0009_effect_receipt_identity.sql",
-        sql: include_str!("../../../../db/migrations/0009_effect_receipt_identity.sql"),
-    },
-    Migration {
-        version: 10,
-        name: "0010_launch_grants.sql",
-        sql: include_str!("../../../../db/migrations/0010_launch_grants.sql"),
-    },
-    Migration {
-        version: 11,
-        name: "0011_context_capsules.sql",
-        sql: include_str!("../../../../db/migrations/0011_context_capsules.sql"),
-    },
-    Migration {
-        version: 12,
-        name: "0012_lease_transport.sql",
-        sql: include_str!("../../../../db/migrations/0012_lease_transport.sql"),
-    },
-    Migration {
-        version: 13,
-        name: "0013_nonce_ledger.sql",
-        sql: include_str!("../../../../db/migrations/0013_nonce_ledger.sql"),
-    },
-    Migration {
-        version: 14,
-        name: "0014_reservations.sql",
-        sql: include_str!("../../../../db/migrations/0014_reservations.sql"),
-    },
-    Migration {
-        version: 15,
-        name: "0015_normalized_authority.sql",
-        sql: include_str!("../../../../db/migrations/0015_normalized_authority.sql"),
-    },
-    Migration {
-        version: 16,
-        name: "0016_predecessor_constraints.sql",
-        sql: include_str!("../../../../db/migrations/0016_predecessor_constraints.sql"),
-    },
-];
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct RestoreState {
@@ -179,6 +94,7 @@ pub(super) fn verify_existing(
     verify_product_schema(conn)?;
     verify_foreign_key_integrity(conn)?;
     identity::verify(conn)?;
+    super::authority::current(conn)?;
     let state = read_restore_state(conn)?;
     if state.pending_admission && !allow_pending_restore {
         return Err(store(
@@ -446,6 +362,7 @@ fn initialize_fresh(conn: &mut Connection) -> Result<(), LedgerError> {
         )
         .map_err(store)?;
     }
+    super::authority::seed_genesis(&tx)?;
     tx.commit().map_err(store)
 }
 
