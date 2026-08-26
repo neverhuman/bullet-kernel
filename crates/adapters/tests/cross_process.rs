@@ -13,14 +13,18 @@
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::{
-    materialize_plan, LeaseService, NonceLedger, NonceState, PlanInput, StoredGraph,
+    LeaseService, NonceLedger, NonceState, PlanInput, StoredGraph, materialize_plan,
 };
 use bullet_domain::{AttemptState, TaskClass};
 use chrono::Utc;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+#[path = "cross_process/support.rs"]
+mod support;
+use support::{ChildSet, private_tempdir, wait_until};
 
 const CHILD_DB: &str = "BULLET_TEST_RACE_CHILD_DB";
 const CHILD_OUT: &str = "BULLET_TEST_RACE_CHILD_OUT";
@@ -32,6 +36,20 @@ const CHILD_RELEASE_GO: &str = "BULLET_TEST_RACE_CHILD_RELEASE_GO";
 const CHILD_READY: &str = "BULLET_TEST_RACE_CHILD_READY";
 const CHILD_NONCE_KEY: &str = "BULLET_TEST_RACE_CHILD_NONCE_KEY";
 const CHILD_NONCE_DIGEST: &str = "BULLET_TEST_RACE_CHILD_NONCE_DIGEST";
+
+const WORKER_ENV: [&str; 11] = [
+    CHILD_DB,
+    CHILD_OUT,
+    CHILD_SEED,
+    CHILD_GO,
+    CHILD_RELEASE,
+    CHILD_TTL,
+    CHILD_RELEASE_GO,
+    CHILD_READY,
+    CHILD_NONCE_KEY,
+    CHILD_NONCE_DIGEST,
+    "RUST_BACKTRACE",
+];
 
 const GRAPH_SEED: &str = "cross-process-race";
 const PROCESSES: usize = 8;
@@ -50,28 +68,53 @@ fn materialize(ledger: &mut SqliteLedger) -> StoredGraph {
     .expect("materialize is idempotent by seed")
 }
 
-/// Worker mode. Passes trivially when not spawned by a parent.
+/// Worker mode. A normal harness invocation proves that no partial worker
+/// channel leaked in from the host environment.
 #[test]
 fn child_acquire_worker_process() {
-    let Ok(db) = std::env::var(CHILD_DB) else {
+    let worker_fields = WORKER_ENV[..10]
+        .iter()
+        .filter(|name| std::env::var_os(name).is_some())
+        .count();
+    if worker_fields == 0 {
+        assert!(
+            WORKER_ENV[..10]
+                .iter()
+                .all(|name| std::env::var_os(name).is_none()),
+            "standalone invocation must not inherit a partial worker channel"
+        );
         return;
+    }
+    assert!(
+        worker_fields == 8 || worker_fields == 10,
+        "worker channel must be complete, including both or neither nonce fields"
+    );
+    let db = std::env::var(CHILD_DB).expect("worker db");
+    let out = PathBuf::from(std::env::var(CHILD_OUT).expect("worker output"));
+    let seed = std::env::var(CHILD_SEED).expect("worker seed");
+    let go = PathBuf::from(std::env::var(CHILD_GO).expect("worker barrier"));
+    let release = match std::env::var(CHILD_RELEASE).as_deref() {
+        Ok("0") => false,
+        Ok("1") => true,
+        _ => panic!("worker release flag must be 0 or 1"),
     };
-    let out = PathBuf::from(std::env::var(CHILD_OUT).unwrap());
-    let seed = std::env::var(CHILD_SEED).unwrap();
-    let go = PathBuf::from(std::env::var(CHILD_GO).unwrap());
-    let release = std::env::var(CHILD_RELEASE).ok().as_deref() == Some("1");
     let ttl: i64 = std::env::var(CHILD_TTL)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(5);
+        .expect("worker ttl")
+        .parse()
+        .expect("worker ttl is an integer");
 
     let mut ledger = SqliteLedger::open(Path::new(&db)).expect("child opens the shared ledger");
     let graph = materialize(&mut ledger);
-    // A one-use nonce gates the protected mutation when the parent issued one:
-    // a replayed consume must be refused and must leave the lease untouched.
-    if let Ok(key) = std::env::var(CHILD_NONCE_KEY) {
-        let digest = std::env::var(CHILD_NONCE_DIGEST).unwrap();
-        if let Err(error) = ledger.consume(&key, &digest) {
+    let nonce = match (
+        std::env::var(CHILD_NONCE_KEY).ok(),
+        std::env::var(CHILD_NONCE_DIGEST).ok(),
+    ) {
+        (Some(key), Some(digest)) => Some((key, digest)),
+        (None, None) => None,
+        _ => panic!("worker nonce channel must contain both fields or neither"),
+    };
+    if let Some((key, digest)) = nonce.as_ref() {
+        if let Err(error) = ledger.consume(key, digest) {
             std::fs::write(&out, format!("ERR {}", error.reason_code()))
                 .expect("child records the nonce refusal");
             return;
@@ -80,11 +123,7 @@ fn child_acquire_worker_process() {
     // Announce readiness exactly once, then wait for the parent to open the gate.
     std::fs::write(PathBuf::from(std::env::var(CHILD_READY).unwrap()), b"ready")
         .expect("child announces readiness");
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !go.exists() {
-        assert!(Instant::now() < deadline, "barrier never opened");
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_until("parent acquisition barrier", || go.exists());
     let line = match LeaseService::acquire(&mut ledger, &graph, 0, &seed, ttl) {
         Ok((attempt, _token, grant)) => {
             let mut line = format!("OK {} {}", attempt.fence, attempt.id);
@@ -94,11 +133,7 @@ fn child_acquire_worker_process() {
                 // sibling legitimately acquire the next fence inside this wave.
                 std::fs::write(&out, &line).expect("child records its win");
                 let release_go = PathBuf::from(std::env::var(CHILD_RELEASE_GO).unwrap());
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !release_go.exists() {
-                    assert!(Instant::now() < deadline, "release barrier never opened");
-                    std::thread::sleep(Duration::from_millis(2));
-                }
+                wait_until("parent release barrier", || release_go.exists());
                 LeaseService::release(&mut ledger, &grant, AttemptState::Cancelled, true)
                     .expect("winner releases with requeue");
                 line.push_str(" RELEASED");
@@ -131,19 +166,20 @@ fn race_with(
     let go = dir.join(format!("go-{wave}"));
     let release_go = dir.join(format!("release-go-{wave}"));
     let exe = std::env::current_exe().expect("test executable");
-    let mut children = Vec::new();
+    let mut children = ChildSet::default();
     let mut outs = Vec::new();
     let mut readies = Vec::new();
     for index in 0..count {
         let out = dir.join(format!("out-{wave}-{index}"));
         let ready = dir.join(format!("ready-{wave}-{index}"));
         let mut command = Command::new(&exe);
+        command.env_clear().env("RUST_BACKTRACE", "0");
         if let Some((key, digest)) = nonce {
             command
                 .env(CHILD_NONCE_KEY, key)
                 .env(CHILD_NONCE_DIGEST, digest);
         }
-        let child = command
+        command
             .args(["child_acquire_worker_process", "--exact", "--quiet"])
             .env(CHILD_DB, db)
             .env(CHILD_OUT, &out)
@@ -152,42 +188,28 @@ fn race_with(
             .env(CHILD_RELEASE, if release { "1" } else { "0" })
             .env(CHILD_TTL, ttl.to_string())
             .env(CHILD_RELEASE_GO, &release_go)
-            .env(CHILD_READY, &ready)
-            .spawn()
-            .expect("spawn child process");
-        children.push(child);
+            .env(CHILD_READY, &ready);
+        children.spawn(&mut command);
         outs.push(out);
         readies.push(ready);
     }
     // Exact ready count: every child that will race has announced itself (a
     // child refused at the nonce records its outcome instead and never races).
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while readies
-        .iter()
-        .zip(&outs)
-        .any(|(r, o)| !r.exists() && !o.exists())
-    {
-        assert!(
-            Instant::now() < deadline,
-            "children never reached the barrier"
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_until("children to reach the acquisition barrier", || {
+        readies
+            .iter()
+            .zip(&outs)
+            .all(|(ready, out)| ready.exists() || out.exists())
+    });
     std::fs::write(&go, b"go").expect("open barrier");
     if release {
         // Every child has recorded an outcome before any winner may release.
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while outs.iter().any(|out| !out.exists()) {
-            assert!(
-                Instant::now() < deadline,
-                "children never recorded outcomes"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        wait_until("children to record acquisition outcomes", || {
+            outs.iter().all(|out| out.exists())
+        });
         std::fs::write(&release_go, b"go").expect("open release barrier");
     }
-    for mut child in children {
-        let status = child.wait().expect("child exits");
+    for status in children.wait_all() {
         assert!(status.success(), "child process failed: {status}");
     }
     let mut outcome = Outcome {
@@ -227,7 +249,7 @@ fn active_lease_rows(db: &Path) -> Vec<(String, u64)> {
 }
 
 fn setup() -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = private_tempdir();
     let db = dir.path().join("race.sqlite");
     let mut ledger = SqliteLedger::open(&db).expect("parent opens the ledger");
     let _graph = materialize(&mut ledger);
