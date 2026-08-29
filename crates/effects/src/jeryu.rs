@@ -5,7 +5,8 @@ use crate::error::EffectsError;
 use crate::forge::{require_candidate_ref, ForgeDescriptor, ForgeEffects, PushRequest};
 use crate::integration::{
     Capability, CheckPublication, CheckReceipt, ForgeIntegration, IntegrationDescriptor,
-    IntegrationSubject, IntegrationSubjectRequest, MergeGroupSubject, ProtectionState,
+    IntegrationReceipt, IntegrationSubject, IntegrationSubjectRequest, MergeGroupSubject,
+    ProtectedIntegrationRequest, ProtectionState,
 };
 
 /// Default Jeryu base URL from ADR 0002.
@@ -82,6 +83,13 @@ impl ForgeIntegration for JeryuForge {
         _req: &IntegrationSubjectRequest,
     ) -> Result<IntegrationSubject, EffectsError> {
         Err(self.refuse("ensure_integration_subject"))
+    }
+
+    fn integrate_protected(
+        &mut self,
+        _req: &ProtectedIntegrationRequest,
+    ) -> Result<IntegrationReceipt, EffectsError> {
+        Err(self.refuse("integrate_protected"))
     }
 
     fn merge_group_subject(

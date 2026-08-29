@@ -1,5 +1,7 @@
 //! HTTP surface tests against a real served socket and a temp database.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
 use bullet_domain::Digest;
@@ -60,7 +62,7 @@ async fn raw_request_with_headers(
 
 #[tokio::test]
 async fn cross_origin_requests_never_receive_wildcard_cors_authority() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let addr = start(&dir.path().join("ledger.sqlite")).await;
     let response = raw_request_with_headers(
         addr,
@@ -139,7 +141,7 @@ fn seed_demo(db: &Path) -> Value {
 
 #[tokio::test]
 async fn health_missions_and_demo_are_null_safe_on_empty_db() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let addr = start(&dir.path().join("ledger.sqlite")).await;
     let (status, body) = request(addr, "GET", "/health").await;
     assert_eq!(status, 200);
@@ -168,7 +170,7 @@ async fn health_missions_and_demo_are_null_safe_on_empty_db() {
 
 #[tokio::test]
 async fn demo_projection_uses_durable_rows_and_direct_mutation_is_gone() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     let receipt = seed_demo(&db);
     let addr = start(&db).await;
@@ -210,7 +212,7 @@ async fn demo_projection_uses_durable_rows_and_direct_mutation_is_gone() {
 
 #[tokio::test]
 async fn events_sse_streams_the_first_chunk_with_sequence_ids() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     seed_demo(&db);
     let addr = start(&db).await;
@@ -257,7 +259,7 @@ async fn events_sse_streams_the_first_chunk_with_sequence_ids() {
 
 #[tokio::test]
 async fn event_cursors_are_exclusive_and_last_event_id_resumes_after_the_cursor() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     seed_demo(&db);
     let addr = start(&db).await;
@@ -315,7 +317,7 @@ async fn event_cursors_are_exclusive_and_last_event_id_resumes_after_the_cursor(
 
 #[tokio::test]
 async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     let addr = start(&db).await;
 
@@ -368,7 +370,7 @@ async fn mission_and_outbox_snapshots_share_the_durable_event_watermark() {
 
 #[tokio::test]
 async fn missing_durable_stale_refusal_makes_demo_projection_unknown() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     seed_demo(&db);
     let addr = start(&db).await;
@@ -401,7 +403,7 @@ async fn unavailable_and_corrupt_replays_fail_before_sse_200() {
             500,
         ),
     ] {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = support::private_tempdir();
         let db = dir.path().join(format!("{name}.sqlite"));
         seed_demo(&db);
         let addr = start(&db).await;
@@ -421,7 +423,7 @@ async fn unavailable_and_corrupt_replays_fail_before_sse_200() {
         assert!(!response.contains("text/event-stream"));
     }
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let late_gap = dir.path().join("late-gap.sqlite");
     insert_events(&late_gap, 100);
     Connection::open(&late_gap)
@@ -449,7 +451,7 @@ async fn unavailable_and_corrupt_replays_fail_before_sse_200() {
 
 #[tokio::test]
 async fn problem_details_cover_400_404_and_500() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     let addr = start(&db).await;
     let invalid = raw_request(addr, "GET", "/api/v1/missions/not-an-id").await;

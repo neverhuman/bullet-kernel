@@ -2,6 +2,8 @@
 //! daemon mounts no static route at all.
 #![cfg(feature = "embedded-portal")]
 
+mod support;
+
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -77,7 +79,7 @@ fn first_asset(index: &str) -> String {
 
 #[tokio::test]
 async fn the_entry_point_is_served_from_the_api_origin_without_a_session() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let addr = start(&directory.path().join("ledger.sqlite")).await;
     for path in ["/", "/index.html"] {
         let response = raw(addr, "GET", path, "").await;
@@ -100,7 +102,7 @@ async fn the_entry_point_is_served_from_the_api_origin_without_a_session() {
 
 #[tokio::test]
 async fn content_hashed_assets_are_immutable_and_carry_their_manifest_digest() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let addr = start(&directory.path().join("ledger.sqlite")).await;
     let index = raw(addr, "GET", "/", "").await;
     let asset = first_asset(body(&index));
@@ -126,7 +128,7 @@ async fn content_hashed_assets_are_immutable_and_carry_their_manifest_digest() {
 
 #[tokio::test]
 async fn an_unknown_static_path_still_answers_the_typed_api_refusal() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let addr = start(&directory.path().join("ledger.sqlite")).await;
     for path in ["/assets/absent.js", "/assets/", "/not-a-route"] {
         let response = raw(addr, "GET", path, "").await;
@@ -137,7 +139,7 @@ async fn an_unknown_static_path_still_answers_the_typed_api_refusal() {
 
 #[tokio::test]
 async fn health_names_the_embedded_bundle_subject() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let addr = start(&directory.path().join("ledger.sqlite")).await;
     let response = raw(addr, "GET", "/health", "").await;
     let health = json(&response);
@@ -149,7 +151,7 @@ async fn health_names_the_embedded_bundle_subject() {
 
 #[tokio::test]
 async fn same_origin_serving_does_not_weaken_bootstrap_origin_or_session_rules() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let db = directory.path().join("ledger.sqlite");
     let origin = "http://127.0.0.1:7420";
     let router = bullet_farmd::api::router_with_bootstrap(&db, BOOTSTRAP, origin.to_string())

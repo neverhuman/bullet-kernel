@@ -1,10 +1,13 @@
 //! Durable one-use repository mutation authority.
 
-use super::{authority, lease_time, leases, migrations, store, SqliteLedger};
+use super::{lease_time, leases, migrations, mutation_authority_presentation, store, SqliteLedger};
 use bullet_application::{ActiveLeaseSubject, LedgerError, MutationReserveRequest, OneUsePermit};
-use bullet_domain::{Digest, DomainError};
+use bullet_domain::Digest;
+use mutation_authority_presentation::{mutation_write, to_i64};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use thiserror::Error;
+
+pub use mutation_authority_presentation::MutationPermitPresentationRecord;
 
 /// Durable state of one exact mutation authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,7 +25,7 @@ pub enum MutationDisposition {
 }
 
 impl MutationDisposition {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Reserved => "RESERVED",
             Self::Consumed => "CONSUMED",
@@ -51,15 +54,21 @@ pub enum MutationCompletion {
     Settled { result_digest: String },
     /// Authoritative read-back could not determine whether mutation occurred.
     Unknown { observation_digest: String },
+    /// The wire has an aborted outcome, but durable rollback semantics are not
+    /// yet agreed. It is always refused without changing durable state.
+    Aborted { observation_digest: String },
 }
 
 impl MutationCompletion {
-    fn parts(&self) -> (MutationDisposition, &str) {
+    fn parts(&self) -> Result<(MutationDisposition, &str), MutationAuthorityError> {
         match self {
-            Self::Settled { result_digest } => (MutationDisposition::Settled, result_digest),
+            Self::Settled { result_digest } => Ok((MutationDisposition::Settled, result_digest)),
             Self::Unknown { observation_digest } => {
-                (MutationDisposition::Unknown, observation_digest)
+                Ok((MutationDisposition::Unknown, observation_digest))
             }
+            Self::Aborted { .. } => Err(MutationAuthorityError::UnsupportedOutcome(
+                "aborted mutation settlement has no admitted durable semantics".into(),
+            )),
         }
     }
 }
@@ -73,12 +82,24 @@ pub struct MutationAuthorityRecord {
     pub disposition: MutationDisposition,
     /// Result or ambiguity observation digest for a terminal I/O state.
     pub completion_digest: Option<String>,
+    /// Graph revision bound when reserved.
+    pub graph_revision: u64,
+    /// Workspace generation bound when reserved.
+    pub workspace_generation: u64,
+    /// Exact scope digest bound when reserved.
+    pub scope_digest: String,
+    /// Policy generation bound when reserved.
+    pub policy_generation: u64,
+    /// Routing generation bound when reserved.
+    pub routing_generation: u64,
     /// Authority epoch bound when reserved.
     pub authority_epoch: u64,
     /// Freeze generation bound when reserved.
     pub freeze_generation: u64,
     /// Restore epoch bound when reserved.
     pub restore_epoch: u64,
+    /// Exact immutable presentation, once the permit crossed the boundary.
+    pub presentation: Option<MutationPermitPresentationRecord>,
 }
 
 /// Fail-closed durable mutation authority error.
@@ -102,6 +123,9 @@ pub enum MutationAuthorityError {
     /// Request fields are empty, oversized, or not canonical digests.
     #[error("invalid mutation authority request: {0}")]
     InvalidRequest(String),
+    /// A generated wire outcome has no admitted durable mapping yet.
+    #[error("unsupported mutation outcome: {0}")]
+    UnsupportedOutcome(String),
 }
 
 impl MutationAuthorityError {
@@ -115,32 +139,33 @@ impl MutationAuthorityError {
             Self::IllegalState { .. } => "MUTATION_AUTHORITY_STATE_ILLEGAL",
             Self::Invalidated(_) => "MUTATION_AUTHORITY_INVALIDATED",
             Self::InvalidRequest(_) => "MUTATION_AUTHORITY_INVALID_REQUEST",
+            Self::UnsupportedOutcome(_) => "MUTATION_ABORTED_UNSUPPORTED",
         }
     }
 }
 
 #[derive(Clone, Debug)]
-struct Row {
-    record: MutationAuthorityRecord,
-    subject: Subject,
+pub(super) struct Row {
+    pub(super) record: MutationAuthorityRecord,
+    pub(super) subject: Subject,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Subject {
+pub(super) struct Subject {
     variant_id: String,
-    attempt_id: String,
+    pub(super) attempt_id: String,
     work_package_id: String,
-    fence: u64,
+    pub(super) fence: u64,
     runner_id: String,
     runner_epoch: u64,
-    workspace_id: String,
+    pub(super) workspace_id: String,
     workspace_nonce: Vec<u8>,
     scope_revision: u64,
     context_revision: u64,
 }
 
 impl Subject {
-    fn from_active(value: &ActiveLeaseSubject) -> Self {
+    pub(super) fn from_active(value: &ActiveLeaseSubject) -> Self {
         Self {
             variant_id: value.variant_id.to_string(),
             attempt_id: value.attempt_id.to_string(),
@@ -186,7 +211,7 @@ impl SqliteLedger {
             return Ok(row.record);
         }
         leases::check_active_lease_in(&tx, subject)?;
-        let (authority_epoch, freeze_generation, restore_epoch) = fingerprint(&tx)?;
+        let (authority, restore_epoch) = mutation_authority_presentation::fingerprint(&tx)?;
         let permit = OneUsePermit {
             reservation_id: format!(
                 "rsv_{}",
@@ -204,10 +229,11 @@ impl SqliteLedger {
                variant_id, attempt_id, work_package_id, fence, runner_id, runner_epoch,
                workspace_id, workspace_nonce, scope_revision, context_revision,
                authority_epoch, freeze_generation, restore_epoch, disposition,
-               completion_digest, created_at, updated_at
+               completion_digest, created_at, updated_at, graph_revision,
+               workspace_generation, scope_digest, policy_generation, routing_generation
              ) VALUES (
                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-               ?15, ?16, ?17, 'RESERVED', NULL, ?18, ?18
+               ?15, ?16, ?17, 'RESERVED', NULL, ?18, ?18, ?19, ?20, ?21, ?22, ?23
              )",
             params![
                 permit.reservation_id,
@@ -224,42 +250,21 @@ impl SqliteLedger {
                 bound.workspace_nonce,
                 to_i64(bound.scope_revision)?,
                 to_i64(bound.context_revision)?,
-                to_i64(authority_epoch)?,
-                to_i64(freeze_generation)?,
+                to_i64(authority.authority_epoch())?,
+                to_i64(authority.freeze_generation())?,
                 to_i64(restore_epoch)?,
                 now,
+                to_i64(authority.graph_revision())?,
+                to_i64(authority.workspace_generation())?,
+                authority.scope_digest(),
+                to_i64(authority.policy_generation())?,
+                to_i64(authority.routing_generation())?,
             ],
         )
         .map_err(mutation_write)?;
         let record = load(&tx, &request.mutation_id)?
             .ok_or_else(|| store("inserted mutation authority row is absent"))?
             .record;
-        tx.commit().map_err(store)?;
-        Ok(record)
-    }
-
-    /// Consume an exact reservation once, before repository I/O begins.
-    pub fn consume_mutation(
-        &mut self,
-        subject: &ActiveLeaseSubject,
-        permit: &OneUsePermit,
-    ) -> Result<MutationAuthorityRecord, MutationAuthorityError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(store)?;
-        let row = exact_permit(load_required(&tx, &permit.mutation_id)?, subject, permit)?;
-        if row.record.disposition == MutationDisposition::Invalidated {
-            return Err(MutationAuthorityError::Invalidated(
-                permit.reservation_id.clone(),
-            ));
-        }
-        if row.record.disposition != MutationDisposition::Reserved {
-            return Err(illegal(row.record.disposition, "consume"));
-        }
-        leases::check_active_lease_in(&tx, subject)?;
-        transition(&tx, permit, MutationDisposition::Consumed, None)?;
-        let record = load_required(&tx, &permit.mutation_id)?.record;
         tx.commit().map_err(store)?;
         Ok(record)
     }
@@ -272,7 +277,7 @@ impl SqliteLedger {
         permit: &OneUsePermit,
         completion: &MutationCompletion,
     ) -> Result<MutationAuthorityRecord, MutationAuthorityError> {
-        let (next, digest) = completion.parts();
+        let (next, digest) = completion.parts()?;
         if !migrations::valid_digest(digest) {
             return Err(MutationAuthorityError::InvalidRequest(
                 "completion digest is not canonical".into(),
@@ -306,56 +311,73 @@ impl SqliteLedger {
     }
 }
 
-fn fingerprint(conn: &rusqlite::Connection) -> Result<(u64, u64, u64), LedgerError> {
-    let current = authority::current(conn)?;
-    let restore_epoch: i64 = conn
-        .query_row(
-            "SELECT restore_epoch FROM restore_state WHERE singleton = 1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(mutation_write)?;
-    Ok((
-        current.authority_epoch(),
-        current.freeze_generation(),
-        u64::try_from(restore_epoch).map_err(store)?,
-    ))
+struct RawRow {
+    reservation_id: String,
+    mutation_id: String,
+    operation: String,
+    request_digest: String,
+    disposition: String,
+    completion_digest: Option<String>,
+    graph_revision: i64,
+    workspace_generation: i64,
+    scope_digest: String,
+    policy_generation: i64,
+    routing_generation: i64,
+    authority_epoch: i64,
+    freeze_generation: i64,
+    restore_epoch: i64,
+    variant_id: String,
+    attempt_id: String,
+    work_package_id: String,
+    fence: i64,
+    runner_id: String,
+    runner_epoch: i64,
+    workspace_id: String,
+    workspace_nonce: Vec<u8>,
+    scope_revision: i64,
+    context_revision: i64,
 }
 
-fn load(
+pub(super) fn load(
     conn: &rusqlite::Connection,
     mutation_id: &str,
 ) -> Result<Option<Row>, MutationAuthorityError> {
     let raw = conn
         .query_row(
             "SELECT reservation_id, mutation_id, operation, request_digest, disposition,
-                    completion_digest, authority_epoch, freeze_generation, restore_epoch,
-                    variant_id, attempt_id, work_package_id, fence, runner_id, runner_epoch,
-                    workspace_id, workspace_nonce, scope_revision, context_revision
+                    completion_digest, graph_revision, workspace_generation, scope_digest,
+                    policy_generation, routing_generation, authority_epoch, freeze_generation,
+                    restore_epoch, variant_id, attempt_id, work_package_id, fence, runner_id,
+                    runner_epoch, workspace_id, workspace_nonce, scope_revision, context_revision
              FROM mutation_authority WHERE mutation_id = ?1",
             [mutation_id],
             |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, i64>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, String>(11)?,
-                    row.get::<_, i64>(12)?,
-                    row.get::<_, String>(13)?,
-                    row.get::<_, i64>(14)?,
-                    row.get::<_, String>(15)?,
-                    row.get::<_, Vec<u8>>(16)?,
-                    row.get::<_, i64>(17)?,
-                    row.get::<_, i64>(18)?,
-                ))
+                Ok(RawRow {
+                    reservation_id: row.get(0)?,
+                    mutation_id: row.get(1)?,
+                    operation: row.get(2)?,
+                    request_digest: row.get(3)?,
+                    disposition: row.get(4)?,
+                    completion_digest: row.get(5)?,
+                    graph_revision: row.get(6)?,
+                    workspace_generation: row.get(7)?,
+                    scope_digest: row.get(8)?,
+                    policy_generation: row.get(9)?,
+                    routing_generation: row.get(10)?,
+                    authority_epoch: row.get(11)?,
+                    freeze_generation: row.get(12)?,
+                    restore_epoch: row.get(13)?,
+                    variant_id: row.get(14)?,
+                    attempt_id: row.get(15)?,
+                    work_package_id: row.get(16)?,
+                    fence: row.get(17)?,
+                    runner_id: row.get(18)?,
+                    runner_epoch: row.get(19)?,
+                    workspace_id: row.get(20)?,
+                    workspace_nonce: row.get(21)?,
+                    scope_revision: row.get(22)?,
+                    context_revision: row.get(23)?,
+                })
             },
         )
         .optional()
@@ -364,35 +386,41 @@ fn load(
     let parsed = Row {
         record: MutationAuthorityRecord {
             permit: OneUsePermit {
-                reservation_id: raw.0,
-                mutation_id: raw.1,
-                operation: raw.2,
-                request_digest: raw.3,
+                reservation_id: raw.reservation_id,
+                mutation_id: raw.mutation_id,
+                operation: raw.operation,
+                request_digest: raw.request_digest,
             },
-            disposition: MutationDisposition::parse(&raw.4)?,
-            completion_digest: raw.5,
-            authority_epoch: u64::try_from(raw.6).map_err(store)?,
-            freeze_generation: u64::try_from(raw.7).map_err(store)?,
-            restore_epoch: u64::try_from(raw.8).map_err(store)?,
+            disposition: MutationDisposition::parse(&raw.disposition)?,
+            completion_digest: raw.completion_digest,
+            graph_revision: u64::try_from(raw.graph_revision).map_err(store)?,
+            workspace_generation: u64::try_from(raw.workspace_generation).map_err(store)?,
+            scope_digest: raw.scope_digest,
+            policy_generation: u64::try_from(raw.policy_generation).map_err(store)?,
+            routing_generation: u64::try_from(raw.routing_generation).map_err(store)?,
+            authority_epoch: u64::try_from(raw.authority_epoch).map_err(store)?,
+            freeze_generation: u64::try_from(raw.freeze_generation).map_err(store)?,
+            restore_epoch: u64::try_from(raw.restore_epoch).map_err(store)?,
+            presentation: mutation_authority_presentation::load(conn, mutation_id)?,
         },
         subject: Subject {
-            variant_id: raw.9,
-            attempt_id: raw.10,
-            work_package_id: raw.11,
-            fence: u64::try_from(raw.12).map_err(store)?,
-            runner_id: raw.13,
-            runner_epoch: u64::try_from(raw.14).map_err(store)?,
-            workspace_id: raw.15,
-            workspace_nonce: raw.16,
-            scope_revision: u64::try_from(raw.17).map_err(store)?,
-            context_revision: u64::try_from(raw.18).map_err(store)?,
+            variant_id: raw.variant_id,
+            attempt_id: raw.attempt_id,
+            work_package_id: raw.work_package_id,
+            fence: u64::try_from(raw.fence).map_err(store)?,
+            runner_id: raw.runner_id,
+            runner_epoch: u64::try_from(raw.runner_epoch).map_err(store)?,
+            workspace_id: raw.workspace_id,
+            workspace_nonce: raw.workspace_nonce,
+            scope_revision: u64::try_from(raw.scope_revision).map_err(store)?,
+            context_revision: u64::try_from(raw.context_revision).map_err(store)?,
         },
     };
     migrations::validate_mutation_row(conn, mutation_id)?;
     Ok(Some(parsed))
 }
 
-fn load_required(
+pub(super) fn load_required(
     conn: &rusqlite::Connection,
     mutation_id: &str,
 ) -> Result<Row, MutationAuthorityError> {
@@ -416,7 +444,7 @@ fn exact_request(
     Ok(())
 }
 
-fn exact_permit(
+pub(super) fn exact_permit(
     row: Row,
     subject: &ActiveLeaseSubject,
     permit: &OneUsePermit,
@@ -427,7 +455,7 @@ fn exact_permit(
     Ok(row)
 }
 
-fn transition(
+pub(super) fn transition(
     tx: &Transaction<'_>,
     permit: &OneUsePermit,
     next: MutationDisposition,
@@ -454,20 +482,7 @@ fn transition(
     Ok(())
 }
 
-fn mutation_write(error: rusqlite::Error) -> LedgerError {
-    let message = error.to_string();
-    if message.contains("stale mutation authority") {
-        DomainError::StaleAuthority(message).into()
-    } else {
-        store(error)
-    }
-}
-
-fn to_i64(value: u64) -> Result<i64, MutationAuthorityError> {
-    i64::try_from(value).map_err(|error| MutationAuthorityError::Ledger(store(error)))
-}
-
-fn illegal(state: MutationDisposition, operation: &str) -> MutationAuthorityError {
+pub(super) fn illegal(state: MutationDisposition, operation: &str) -> MutationAuthorityError {
     MutationAuthorityError::IllegalState {
         state: state.as_str().into(),
         operation: operation.into(),

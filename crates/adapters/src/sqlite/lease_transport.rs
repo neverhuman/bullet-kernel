@@ -1,16 +1,23 @@
 //! Immediate-transaction lease-transport nonce and grant index.
 
-use super::{from_json, graph, json, lease_time, leases, store};
-use bullet_application::store::{LeaseTransportTxn, NonceConsumption};
-use bullet_application::{HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerError, ReleaseRequest};
-use bullet_domain::{Attempt, AttemptId};
+use super::{authority, events, graph, lease_time, leases, store};
+use bullet_application::lease_transport::{LeaseGrantRecord, LeaseSettlementRecord};
+use bullet_application::store::{
+    incarnation_subject, CurrentPackage, LeaseTransportTxn, NonceConsumption,
+};
+use bullet_application::{
+    ActiveLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerError, NormalizedAuthority,
+    ReleaseRequest,
+};
+use bullet_domain::{Attempt, AttemptId, VariantId, WorkPackageId};
 use rusqlite::{params, OptionalExtension, Transaction};
 
-pub(super) struct TransportSession<'a> {
+pub(super) struct TransportSession<'a, 'failpoint> {
     pub(super) tx: Transaction<'a>,
+    pub(super) settlement_fail_after: &'failpoint mut Option<u8>,
 }
 
-impl LeaseTransportTxn for TransportSession<'_> {
+impl LeaseTransportTxn for TransportSession<'_, '_> {
     fn reserve_transport_nonce(
         &mut self,
         nonce: &str,
@@ -105,19 +112,70 @@ impl LeaseTransportTxn for TransportSession<'_> {
         graph::get_attempt(&self.tx, id)
     }
 
+    fn resolve_package(&self, package: &WorkPackageId) -> Result<CurrentPackage, LedgerError> {
+        for mission in graph::list_missions(&self.tx)? {
+            let stored = graph::get_graph(&self.tx, &mission.id)?.ok_or_else(|| {
+                LedgerError::Store(format!(
+                    "graph {} vanished inside the open transaction",
+                    mission.id
+                ))
+            })?;
+            if let Some(found) = CurrentPackage::from_graph(&stored, package)? {
+                return Ok(found);
+            }
+        }
+        Err(CurrentPackage::unknown(package))
+    }
+
+    fn resolve_variant(
+        &self,
+        package: &WorkPackageId,
+        variant: &VariantId,
+    ) -> Result<CurrentPackage, LedgerError> {
+        for mission in graph::list_missions(&self.tx)? {
+            let stored = graph::get_graph(&self.tx, &mission.id)?.ok_or_else(|| {
+                LedgerError::Store(format!(
+                    "graph {} vanished inside the open transaction",
+                    mission.id
+                ))
+            })?;
+            if let Some(found) = CurrentPackage::from_graph_variant(&stored, package, variant)? {
+                return Ok(found);
+            }
+        }
+        Err(CurrentPackage::unknown(package))
+    }
+
+    fn current_authority(&self) -> Result<NormalizedAuthority, LedgerError> {
+        authority::current(&self.tx)
+    }
+
+    fn get_lease(&self, attempt: &AttemptId) -> Result<Option<ActiveLease>, LedgerError> {
+        let Some(stored) = graph::get_attempt(&self.tx, attempt)? else {
+            return Ok(None);
+        };
+        Ok(leases::get_lease(&self.tx, &stored.variant_id)?
+            .filter(|lease| lease.attempt_id == *attempt))
+    }
+
+    fn check_active_lease(&self, attempt: &AttemptId, fence: u64) -> Result<(), LedgerError> {
+        let stored = graph::get_attempt(&self.tx, attempt)?;
+        leases::check_active_lease_in(&self.tx, &incarnation_subject(stored, attempt, fence)?)
+    }
+
     fn put_transport_grant(
         &mut self,
         idempotency_digest: &str,
-        grant: &LeaseGrant,
+        record: &LeaseGrantRecord,
     ) -> Result<(), LedgerError> {
         let recorded_at = lease_time::database_time(&self.tx)?;
-        let grant_json = json(grant)?;
+        let grant_json = record.encode().map_err(|_| LeaseGrantRecord::refused())?;
         if let Some(existing) = self.get_transport_grant(idempotency_digest)? {
-            if existing == *grant {
+            if existing == *record {
                 return Ok(());
             }
             return Err(LedgerError::Store(
-                "lease-transport grant digest already records a different grant".into(),
+                "lease-transport grant digest already records a different record".into(),
             ));
         }
         self.tx
@@ -133,7 +191,7 @@ impl LeaseTransportTxn for TransportSession<'_> {
     fn get_transport_grant(
         &self,
         idempotency_digest: &str,
-    ) -> Result<Option<LeaseGrant>, LedgerError> {
+    ) -> Result<Option<LeaseGrantRecord>, LedgerError> {
         let text: Option<String> = self
             .tx
             .query_row(
@@ -143,6 +201,89 @@ impl LeaseTransportTxn for TransportSession<'_> {
             )
             .optional()
             .map_err(store)?;
-        text.as_deref().map(from_json).transpose()
+        text.as_deref()
+            .map(|text| LeaseGrantRecord::decode(text).map_err(|_| LeaseGrantRecord::refused()))
+            .transpose()
+    }
+
+    fn put_transport_settlement(
+        &mut self,
+        record: &LeaseSettlementRecord,
+    ) -> Result<(), LedgerError> {
+        let encoded = record
+            .encode()
+            .map_err(|_| LeaseSettlementRecord::refused())?;
+        if let Some(existing) = self.get_transport_settlement(&record.settlement_id)? {
+            if existing == *record {
+                return Ok(());
+            }
+            return Err(LedgerError::Store(
+                "lease-transport settlement identity already records another outcome".into(),
+            ));
+        }
+        settlement_step(self.settlement_fail_after)?;
+        let recorded_at = lease_time::database_time(&self.tx)?;
+        self.tx
+            .execute(
+                "INSERT INTO lease_transport_settlements
+                 (settlement_id, request_digest, record_json, recorded_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    record.settlement_id,
+                    record.request_digest,
+                    encoded,
+                    recorded_at
+                ],
+            )
+            .map_err(store)?;
+        events::insert_event(
+            &self.tx,
+            "lease_transport_settled",
+            &record.settlement_id,
+            Some(&record.settlement_id),
+            Some(&record.request_digest),
+            None,
+        )
+    }
+
+    fn get_transport_settlement(
+        &self,
+        settlement_id: &str,
+    ) -> Result<Option<LeaseSettlementRecord>, LedgerError> {
+        let row: Option<(String, String)> = self
+            .tx
+            .query_row(
+                "SELECT request_digest, record_json
+                 FROM lease_transport_settlements WHERE settlement_id = ?1",
+                params![settlement_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(store)?;
+        let Some((request_digest, text)) = row else {
+            return Ok(None);
+        };
+        let record =
+            LeaseSettlementRecord::decode(&text).map_err(|_| LeaseSettlementRecord::refused())?;
+        if record.settlement_id != settlement_id || record.request_digest != request_digest {
+            return Err(LeaseSettlementRecord::refused());
+        }
+        Ok(Some(record))
+    }
+}
+
+fn settlement_step(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {
+    match fail_after {
+        Some(0) => {
+            *fail_after = None;
+            Err(LedgerError::Store(
+                "injected lease-transport settlement failure".into(),
+            ))
+        }
+        Some(remaining) => {
+            *remaining -= 1;
+            Ok(())
+        }
+        None => Ok(()),
     }
 }

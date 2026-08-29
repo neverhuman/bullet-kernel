@@ -1,11 +1,9 @@
-use bullet_adapters::sqlite::mutation_authority::{MutationCompletion, MutationDisposition};
 use bullet_adapters::SqliteLedger;
 use bullet_application::{
-    materialize_plan, ActiveLeaseSubject, LeaseGrant, LeaseService, Ledger, MutationReserveRequest,
-    PlanInput, StoredGraph,
+    materialize_plan, LeaseGrant, LeaseService, Ledger, PlanInput, StoredGraph,
 };
-use bullet_domain::{CommandPhase, Digest, TaskClass, WorkPackageState};
-use rusqlite::Connection;
+use bullet_domain::{CommandPhase, TaskClass, WorkPackageState};
+use rusqlite::{params, Connection};
 use std::path::Path;
 
 #[path = "lease_command_atomicity/authority_restart.rs"]
@@ -34,7 +32,7 @@ fn setup(path: &Path, seed: &str) -> (StoredGraph, bullet_application::LeaseRequ
 #[test]
 fn every_lease_command_boundary_reopens_old_or_complete_and_replays_once() {
     for fail_after in 0..=9 {
-        let directory = tempfile::tempdir().expect("tempdir");
+        let directory = secure_tempdir();
         let path = directory.path().join("lease-command.sqlite3");
         let seed = format!("lease-command-{fail_after}");
         let (graph, request) = setup(&path, &seed);
@@ -110,7 +108,7 @@ fn every_lease_command_boundary_reopens_old_or_complete_and_replays_once() {
 
 #[test]
 fn sqlite_replay_binds_kind_and_corrupt_command_truth_fails_closed() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = secure_tempdir();
     let path = directory.path().join("command-integrity.sqlite3");
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let first =
@@ -143,304 +141,99 @@ fn sqlite_replay_binds_kind_and_corrupt_command_truth_fails_closed() {
         "STORE_FAILURE"
     );
 
-    durable_mutation_authority_replays_and_invalidates();
-    for movement in ["authority-epoch", "freeze-generation", "restore-epoch"] {
-        stale_lease_refuses_after(movement);
-    }
     for singleton in ["authority_revisions", "restore_state"] {
         authority_restart::missing_singleton_refuses_lease(singleton);
-    }
-    for corruption in [
-        "variant_id = 'var_short'",
-        "runner_id = 'run_0000000000000000000000000000000000000000000000000000000000000000'",
-        "runner_epoch = 9007199254740992",
-        "disposition = 'SETTLED', completion_digest = NULL",
-        "authority_epoch = authority_epoch + 1",
-    ] {
-        corrupted_mutation_refuses_replay(corruption);
-    }
-}
-
-fn durable_mutation_authority_replays_and_invalidates() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let path = directory.path().join("mutation-authority.sqlite3");
-    let (_graph, lease_request) = setup(&path, "mutation-authority");
-    let mut ledger = SqliteLedger::open(&path).expect("open");
-    let grant = ledger.acquire_lease(&lease_request).expect("active lease");
-    let subject = ActiveLeaseSubject::from_attempt(&grant.attempt);
-
-    for (mutation_id, operation) in [
-        ("mut_short".into(), "apply-patch".into()),
-        (format!("mut_{}", "A".repeat(64)), "apply-patch".into()),
-        (
-            format!("mut_{}", Digest::of(b"legacy-operation").to_hex()),
-            "apply_change".into(),
-        ),
-        (
-            format!("mut_{}", Digest::of(b"unknown-operation").to_hex()),
-            "unknown-operation".into(),
-        ),
-    ] {
-        let invalid = MutationReserveRequest {
-            mutation_id,
-            operation,
-            request_digest: Digest::of(b"invalid-request").to_hex(),
-        };
-        let refusal = ledger
-            .reserve_mutation(&subject, &invalid)
-            .expect_err("noncanonical durable request");
-        assert_eq!(refusal.reason_code(), "MUTATION_AUTHORITY_INVALID_REQUEST");
-        assert!(ledger
-            .mutation_disposition(&invalid.mutation_id)
-            .expect("invalid readback")
-            .is_none());
-    }
-
-    let request = mutation_request("reserved");
-    let reserved = ledger
-        .reserve_mutation(&subject, &request)
-        .expect("reserve");
-    assert_eq!(reserved.disposition, MutationDisposition::Reserved);
-    assert_eq!(
-        ledger.reserve_mutation(&subject, &request).expect("replay"),
-        reserved
-    );
-    let mut changed = request.clone();
-    changed.operation = "checkpoint".into();
-    assert_eq!(
-        ledger
-            .reserve_mutation(&subject, &changed)
-            .expect_err("changed replay")
-            .reason_code(),
-        "MUTATION_AUTHORITY_CONFLICT"
-    );
-    let mut stale = subject.clone();
-    stale.fence += 1;
-    let stale_request = mutation_request("stale");
-    assert_eq!(
-        ledger
-            .reserve_mutation(&stale, &stale_request)
-            .expect_err("stale lease")
-            .reason_code(),
-        "STALE_AUTHORITY"
-    );
-    assert!(ledger
-        .mutation_disposition(&stale_request.mutation_id)
-        .expect("no row")
-        .is_none());
-
-    let consumed = ledger
-        .consume_mutation(&subject, &reserved.permit)
-        .expect("consume");
-    assert_eq!(consumed.disposition, MutationDisposition::Consumed);
-    assert_eq!(
-        ledger
-            .consume_mutation(&subject, &reserved.permit)
-            .expect_err("second consume")
-            .reason_code(),
-        "MUTATION_AUTHORITY_STATE_ILLEGAL"
-    );
-    drop(ledger);
-
-    let mut ledger = SqliteLedger::open(&path).expect("reopen consumed");
-    assert_eq!(
-        ledger
-            .mutation_disposition(&request.mutation_id)
-            .expect("observe")
-            .expect("row")
-            .disposition,
-        MutationDisposition::Consumed
-    );
-    let settled_digest = Digest::of(b"authoritative-ref-readback").to_hex();
-    let completion = MutationCompletion::Settled {
-        result_digest: settled_digest.clone(),
-    };
-    let settled = ledger
-        .complete_mutation(&subject, &reserved.permit, &completion)
-        .expect("settle");
-    assert_eq!(settled.disposition, MutationDisposition::Settled);
-    assert_eq!(
-        settled.completion_digest.as_deref(),
-        Some(settled_digest.as_str())
-    );
-    assert_eq!(
-        ledger
-            .complete_mutation(&subject, &reserved.permit, &completion)
-            .expect("settlement replay"),
-        settled
-    );
-
-    let unknown_request = mutation_request("unknown");
-    let unknown_permit = ledger
-        .reserve_mutation(&subject, &unknown_request)
-        .expect("unknown reservation")
-        .permit;
-    ledger
-        .consume_mutation(&subject, &unknown_permit)
-        .expect("unknown consume");
-    let unknown_completion = MutationCompletion::Unknown {
-        observation_digest: Digest::of(b"readback-response-lost").to_hex(),
-    };
-    let explicit_unknown = ledger
-        .complete_mutation(&subject, &unknown_permit, &unknown_completion)
-        .expect("unknown completion");
-    assert_eq!(explicit_unknown.disposition, MutationDisposition::Unknown);
-    assert_eq!(
-        ledger
-            .complete_mutation(&subject, &unknown_permit, &unknown_completion)
-            .expect("unknown replay"),
-        explicit_unknown
-    );
-
-    drop(ledger);
-
-    let raw = Connection::open(&path).expect("raw terminal state");
-    assert!(raw
-        .execute(
-            "UPDATE mutation_authority SET disposition = 'CONSUMED', completion_digest = NULL
-             WHERE mutation_id = ?1",
-            [&request.mutation_id],
-        )
-        .is_err());
-    assert!(raw
-        .execute(
-            "DELETE FROM mutation_authority WHERE mutation_id = ?1",
-            [&request.mutation_id],
-        )
-        .is_err());
-}
-
-fn stale_lease_refuses_after(movement: &str) {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let path = directory.path().join(format!("stale-{movement}.sqlite3"));
-    let (_graph, lease_request) = setup(&path, movement);
-    let mut ledger = SqliteLedger::open(&path).expect("open");
-    let grant = ledger.acquire_lease(&lease_request).expect("active lease");
-    let subject = ActiveLeaseSubject::from_attempt(&grant.attempt);
-    let before = mutation_request(&format!("before-{movement}"));
-    let permit = ledger
-        .reserve_mutation(&subject, &before)
-        .expect("pre-movement reservation")
-        .permit;
-    drop(ledger);
-
-    let raw = Connection::open(&path).expect("raw authority movement");
-    match movement {
-        "authority-epoch" => raw
-            .execute(
-                "UPDATE authority_revisions SET authority_epoch = authority_epoch + 1
-                 WHERE singleton = 1",
-                [],
-            )
-            .expect("advance authority epoch"),
-        "freeze-generation" => raw
-            .execute(
-                "UPDATE authority_revisions SET freeze_generation = freeze_generation + 1
-                 WHERE singleton = 1",
-                [],
-            )
-            .expect("advance freeze generation"),
-        "restore-epoch" => raw
-            .execute(
-                "UPDATE restore_state
-                 SET restore_epoch = 1, source_snapshot_digest = ?1, restored_at = ?2
-                 WHERE singleton = 1",
-                (Digest::of(b"restored-snapshot").to_hex(), AT),
-            )
-            .expect("advance restore epoch"),
-        _ => panic!("unknown movement"),
-    };
-    drop(raw);
-
-    let mut ledger = SqliteLedger::open(&path).expect("reopen after movement");
-    assert_eq!(
-        ledger
-            .consume_mutation(&subject, &permit)
-            .expect_err("pre-movement permit")
-            .reason_code(),
-        "MUTATION_AUTHORITY_INVALIDATED"
-    );
-    let after = mutation_request(&format!("after-{movement}"));
-    let first = ledger
-        .reserve_mutation(&subject, &after)
-        .expect_err("stale issuance");
-    assert_eq!(first.reason_code(), "STALE_AUTHORITY");
-    assert!(ledger
-        .mutation_disposition(&after.mutation_id)
-        .expect("refused row readback")
-        .is_none());
-    let first_bytes = first.to_string();
-    drop(ledger);
-
-    let mut reopened = SqliteLedger::open(&path).expect("second reopen");
-    let replay = reopened
-        .reserve_mutation(&subject, &after)
-        .expect_err("stale issuance replay");
-    assert_eq!(replay.reason_code(), "STALE_AUTHORITY");
-    assert_eq!(replay.to_string(), first_bytes);
-    assert!(reopened
-        .mutation_disposition(&after.mutation_id)
-        .expect("replay refused row readback")
-        .is_none());
-}
-
-fn corrupted_mutation_refuses_replay(corruption: &str) {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let path = directory.path().join("corrupt-mutation.sqlite3");
-    let (_graph, request) = setup(&path, corruption);
-    let mut ledger = SqliteLedger::open(&path).expect("open");
-    let grant = ledger.acquire_lease(&request).expect("lease");
-    let subject = ActiveLeaseSubject::from_attempt(&grant.attempt);
-    let mutation = mutation_request(corruption);
-    ledger
-        .reserve_mutation(&subject, &mutation)
-        .expect("reserve");
-    drop(ledger);
-
-    let raw = Connection::open(&path).expect("raw mutation corruption");
-    let trigger: String = raw
-        .query_row(
-            "SELECT sql FROM sqlite_schema
-             WHERE type = 'trigger' AND name = 'mutation_authority_legal_update'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("mutation update trigger");
-    raw.execute_batch(
-        "DROP TRIGGER mutation_authority_legal_update; PRAGMA ignore_check_constraints = ON;",
-    )
-    .expect("disable fixture guards");
-    raw.execute(&format!("UPDATE mutation_authority SET {corruption}"), [])
-        .expect("corrupt persisted mutation");
-    raw.execute_batch(&format!(
-        "PRAGMA ignore_check_constraints = OFF; {trigger};"
-    ))
-    .expect("restore fixture guards");
-    drop(raw);
-
-    let mut first_bytes = None;
-    for _ in 0..2 {
-        let ledger = SqliteLedger::open(&path).expect("reopen corrupt row");
-        let error = ledger
-            .mutation_disposition(&mutation.mutation_id)
-            .expect_err("corrupt row readback");
-        assert_eq!(error.reason_code(), "STORE_FAILURE");
-        if let Some(expected) = &first_bytes {
-            assert_eq!(&error.to_string(), expected);
-        } else {
-            first_bytes = Some(error.to_string());
-        }
-    }
-}
-
-fn mutation_request(seed: &str) -> MutationReserveRequest {
-    MutationReserveRequest {
-        mutation_id: format!("mut_{}", Digest::of(seed.as_bytes()).to_hex()),
-        operation: "apply-patch".into(),
-        request_digest: Digest::of(format!("request-{seed}").as_bytes()).to_hex(),
     }
 }
 
 fn grant_bytes(grant: &LeaseGrant) -> Vec<u8> {
     serde_json::to_vec(grant).expect("grant json")
+}
+
+#[test]
+fn direct_nonempty_schema17_upgrade_rolls_back() {
+    let conn = Connection::open_in_memory().expect("memory database");
+    for sql in SCHEMA_THROUGH_17 {
+        conn.execute_batch(sql).expect("prior migration");
+    }
+    conn.execute_batch("DROP TRIGGER mutation_authority_fresh_lease_insert;")
+        .expect("fixture guard");
+    let id = |prefix: &str| format!("{prefix}_{}", "a".repeat(64));
+    conn.execute(
+        "INSERT INTO mutation_authority (
+           reservation_id, mutation_id, operation, request_digest, variant_id, attempt_id,
+           work_package_id, fence, runner_id, runner_epoch, workspace_id, workspace_nonce,
+           scope_revision, context_revision, authority_epoch, freeze_generation, restore_epoch,
+           disposition, completion_digest, created_at, updated_at
+         ) VALUES (?1, ?2, 'apply-patch', ?3, ?4, ?5, ?6, 1, ?7, 1, ?8, ?9,
+                   1, 1, 1, 0, 0, 'RESERVED', NULL, ?10, ?10)",
+        params![
+            id("rsv"),
+            id("mut"),
+            "a".repeat(64),
+            id("var"),
+            id("atm"),
+            id("wpk"),
+            id("run"),
+            id("wsp"),
+            vec![0_u8; 32],
+            "2026-08-26T00:00:00.000Z",
+        ],
+    )
+    .expect("prototype row");
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .expect("begin upgrade");
+    assert!(conn.execute_batch(MIGRATION_18).is_err());
+    conn.execute_batch("ROLLBACK").expect("rollback upgrade");
+    let new_columns: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('mutation_authority')
+             WHERE name = 'graph_revision'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("column count");
+    assert_eq!(new_columns, 0);
+    let presentation_table: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema
+             WHERE type = 'table' AND name = 'mutation_permit_presentations'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table count");
+    assert_eq!(presentation_table, 0);
+}
+
+const MIGRATION_18: &str =
+    include_str!("../../../db/migrations/0018_mutation_permit_presentation.sql");
+const SCHEMA_THROUGH_17: &[&str] = &[
+    include_str!("../../../db/migrations/0001_ledger.sql"),
+    include_str!("../../../db/migrations/0002_authority.sql"),
+    include_str!("../../../db/migrations/0003_effects.sql"),
+    include_str!("../../../db/migrations/0004_event_time.sql"),
+    include_str!("../../../db/migrations/0005_lease_ttl.sql"),
+    include_str!("../../../db/migrations/0006_command_correlation.sql"),
+    include_str!("../../../db/migrations/0007_restore_epoch.sql"),
+    include_str!("../../../db/migrations/0008_identity_contract.sql"),
+    include_str!("../../../db/migrations/0009_effect_receipt_identity.sql"),
+    include_str!("../../../db/migrations/0010_launch_grants.sql"),
+    include_str!("../../../db/migrations/0011_context_capsules.sql"),
+    include_str!("../../../db/migrations/0012_lease_transport.sql"),
+    include_str!("../../../db/migrations/0013_nonce_ledger.sql"),
+    include_str!("../../../db/migrations/0014_reservations.sql"),
+    include_str!("../../../db/migrations/0015_normalized_authority.sql"),
+    include_str!("../../../db/migrations/0016_predecessor_constraints.sql"),
+    include_str!("../../../db/migrations/0017_mutation_authority.sql"),
+];
+
+fn secure_tempdir() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().expect("tempdir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("secure tempdir mode");
+    }
+    directory
 }

@@ -86,3 +86,27 @@ data_loss = "none on the supported fresh-initialize path; a pre-existing, partia
 [[migration]]
 file = "0017_mutation_authority.sql"
 note = "Adds normalized one-use mutation authority with a closed durable disposition machine; authority/freeze or restore-epoch movement atomically invalidates RESERVED rows and converts in-flight CONSUMED rows to UNKNOWN"
+
+[[migration]]
+file = "0018_mutation_permit_presentation.sql"
+note = "Refuses nonempty direct schema-17 prototype upgrades, binds reservations to every normalized authority field, and adds immutable exact signed-permit presentation before the sole RESERVED-to-CONSUMED transition; signature verification remains the harness boundary"
+
+[[migration]]
+file = "0019_candidate_preparation.sql"
+note = "Adds append-only Candidate-preparation source, signed-grant, and one-use consumption tables for fresh schema initialization; schema-18 databases remain unsupported and no production source-registration transport is connected"
+
+[[migration]]
+file = "0020_authority_scope_admission.sql"
+note = "Adds the append-only idempotency, exact generated grant bytes, normalized scope digest, previous/new authority epoch, and correlated audit-event binding for the sole scope-admission port; schema-19 databases remain unsupported"
+
+[[migration]]
+file = "0021_command_dispatch_claims.sql"
+note = "Adds durable exact request/outbox ownership by one registered Runner incarnation, response-loss read-back, authority/freeze/restore invalidation, and a closed CLAIMED-to-UNKNOWN component settlement; schema-20 databases remain unsupported"
+
+[[migration]]
+file = "0022_lease_transport_settlements.sql"
+note = "Adds append-only lease-transport settlement receipts with a stale-token refusal and exact settlement/outbox/event correlation; schema-21 databases remain unsupported"
+
+[[migration]]
+file = "0023_effect_recovery_claims.sql"
+note = "Adds restart-safe local-bare create-only Candidate-ref recovery claims with one active owner per intent, stale-owner invalidation, full normalized authority/freeze/restore and current-lease binding, DB-owned outbox/claim ordering, deterministic recovery receipt identity, and append-only triggers; schema-22 databases remain unsupported"

@@ -4,31 +4,41 @@
 //! Each accepted session is bound to `SO_PEERCRED` and the listening socket's
 //! device/inode identity. Public `/v1/leases/*` stay absent.
 
+mod candidate;
+mod command_dispatch;
+mod deadline;
+mod operations;
 mod peer;
 
+pub use deadline::{
+    TransportBounds, TransportRefusal, LEASE_TRANSPORT_BOUNDS_INVALID,
+    LEASE_TRANSPORT_FRAME_TOO_LARGE, LEASE_TRANSPORT_OVERLOADED, LEASE_TRANSPORT_READ_DEADLINE,
+    LEASE_TRANSPORT_SESSION_DEADLINE,
+};
 pub use peer::{LeasePeerRegistry, RegisteredRunnerPeer};
 
 use crate::api::SharedState;
-use bullet_application::lease_transport::{
-    KernelLeaseTransport, SignedAcquireBody, SignedAdvanceBody, SignedHeartbeatBody,
-    SignedLeaseError, SignedReleaseBody,
-};
-use bullet_application::{LeaseGrant, LeaseService, Ledger, StoredGraph};
-use bullet_domain::{RunnerId, VariantId, WorkPackageId};
+use bullet_application::candidate_preparation::CandidatePreparationSigningKey;
+use bullet_application::lease_transport::KernelLeaseTransport;
+use bullet_domain::RunnerId;
 use serde::{Deserialize, Serialize};
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::net::unix::WriteHalf;
 
+use deadline::{
+    bounded_session, close_with_reason, read_frame, refuse_overloaded, session_halves, FrameReader,
+    SessionSlots,
+};
 use peer::{admit_peer, admit_runner, bind_admitted_socket, BoundSocketIdentity, PeerCred};
 
 const PROTO: &str = "bullet-farm.lease-transport.rpc.v1";
 const HELLO_MAX: usize = 4_096;
-const REQUEST_MAX: usize = 65_536;
 
-/// Bind an admitted socket and serve Kernel-minted lease operations.
+/// Bind an admitted socket and serve Kernel-minted lease operations under
+/// [`TransportBounds::defaults`].
 ///
 /// # Errors
 ///
@@ -39,9 +49,100 @@ pub async fn serve(
     transport: Arc<KernelLeaseTransport>,
     registry: Arc<LeasePeerRegistry>,
 ) -> Result<(), Error> {
+    serve_inner(
+        socket,
+        state,
+        transport,
+        registry,
+        None,
+        TransportBounds::defaults(),
+    )
+    .await
+}
+
+/// Serve lease operations plus durable Candidate preparation under the same
+/// authenticated workload session.
+///
+/// # Errors
+///
+/// Socket admission or accept failure.
+pub async fn serve_with_candidate(
+    socket: PathBuf,
+    state: SharedState,
+    transport: Arc<KernelLeaseTransport>,
+    registry: Arc<LeasePeerRegistry>,
+    candidate_key: Arc<CandidatePreparationSigningKey>,
+) -> Result<(), Error> {
+    serve_inner(
+        socket,
+        state,
+        transport,
+        registry,
+        Some(candidate_key),
+        TransportBounds::defaults(),
+    )
+    .await
+}
+
+/// [`serve`] under explicit [`TransportBounds`].
+///
+/// Every accepted session runs under `bounds`: one whole frame per
+/// `read_deadline`, the whole session under `session_deadline`, no frame past
+/// `max_line_bytes`, and at most `max_in_flight_sessions` sessions at once. A
+/// peer that trips a bound gets one typed refusal frame and is closed; a peer
+/// arriving when every slot is busy is refused at accept, never queued.
+///
+/// # Errors
+///
+/// `LEASE_TRANSPORT_BOUNDS_INVALID` for a zero bound (before binding), socket
+/// admission or accept failure.
+pub async fn serve_with_bounds(
+    socket: PathBuf,
+    state: SharedState,
+    transport: Arc<KernelLeaseTransport>,
+    registry: Arc<LeasePeerRegistry>,
+    bounds: TransportBounds,
+) -> Result<(), Error> {
+    serve_inner(socket, state, transport, registry, None, bounds).await
+}
+
+/// [`serve_with_candidate`] under explicit resource bounds.
+///
+/// # Errors
+///
+/// Invalid bounds, socket admission, or accept failure.
+pub async fn serve_with_candidate_and_bounds(
+    socket: PathBuf,
+    state: SharedState,
+    transport: Arc<KernelLeaseTransport>,
+    registry: Arc<LeasePeerRegistry>,
+    candidate_key: Arc<CandidatePreparationSigningKey>,
+    bounds: TransportBounds,
+) -> Result<(), Error> {
+    serve_inner(
+        socket,
+        state,
+        transport,
+        registry,
+        Some(candidate_key),
+        bounds,
+    )
+    .await
+}
+
+async fn serve_inner(
+    socket: PathBuf,
+    state: SharedState,
+    transport: Arc<KernelLeaseTransport>,
+    registry: Arc<LeasePeerRegistry>,
+    candidate_key: Option<Arc<CandidatePreparationSigningKey>>,
+    bounds: TransportBounds,
+) -> Result<(), Error> {
+    let bounds = bounds.admitted()?;
     let (listener, bound) = bind_admitted_socket(&socket, &registry)?;
+    let slots = SessionSlots::new(bounds);
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (mut stream, _) = listener.accept().await?;
         let peer = match admit_peer(&socket, &listener, &bound, &stream) {
             Ok(peer) => peer,
             Err(error) => {
@@ -49,41 +150,64 @@ pub async fn serve(
                 continue;
             }
         };
+        let permit = match slots.try_admit() {
+            Ok(permit) => permit,
+            Err(refusal) => {
+                refuse_overloaded(stream, &refusal);
+                continue;
+            }
+        };
         let state = Arc::clone(&state);
         let transport = Arc::clone(&transport);
         let registry = Arc::clone(&registry);
+        let candidate_key = candidate_key.as_ref().map(Arc::clone);
         tokio::spawn(async move {
-            if let Err(error) = handle(stream, state, transport, registry, bound, peer).await {
-                tracing::warn!("lease-transport session: {error}");
+            let _slot = permit;
+            let (mut reader, mut writer) = session_halves(&mut stream, bounds);
+            let session = handle(
+                &mut reader,
+                &mut writer,
+                &state,
+                &transport,
+                candidate_key.as_deref(),
+                &registry,
+                bound,
+                peer,
+                bounds,
+            );
+            if let Err(error) = bounded_session(bounds, session).await {
+                match close_with_reason(&mut writer, bounds, &error).await {
+                    Some(code) => tracing::warn!("lease-transport session closed: {code}: {error}"),
+                    None => tracing::warn!("lease-transport session: {error}"),
+                }
             }
         });
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle(
-    mut stream: UnixStream,
-    state: SharedState,
-    transport: Arc<KernelLeaseTransport>,
-    registry: Arc<LeasePeerRegistry>,
+    reader: &mut FrameReader<'_>,
+    stream: &mut WriteHalf<'_>,
+    state: &SharedState,
+    transport: &KernelLeaseTransport,
+    candidate_key: Option<&CandidatePreparationSigningKey>,
+    registry: &LeasePeerRegistry,
     bound: BoundSocketIdentity,
     peer: PeerCred,
+    bounds: TransportBounds,
 ) -> Result<(), Error> {
-    let hello: Hello = serde_json::from_slice(&read_line(&mut stream, HELLO_MAX).await?)
+    let hello_max = HELLO_MAX.min(bounds.max_line_bytes);
+    let hello: Hello = serde_json::from_slice(&read_frame(reader, bounds, hello_max).await?)
         .map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
     if hello.proto != PROTO {
-        return write_err(
-            &mut stream,
-            None,
-            "LEASE_TRANSPORT_INVALID",
-            "unsupported proto",
-        )
-        .await;
+        return write_err(stream, None, "LEASE_TRANSPORT_INVALID", "unsupported proto").await;
     }
     let runner_id = RunnerId::parse(&hello.runner_id)
         .map_err(|err| Error::new(ErrorKind::InvalidData, err.to_string()))?;
-    if admit_runner(&registry, &runner_id, hello.runner_epoch, &peer).is_err() {
+    if admit_runner(registry, &runner_id, hello.runner_epoch, &peer).is_err() {
         return write_err(
-            &mut stream,
+            stream,
             None,
             "LEASE_TRANSPORT_PEER_UNREGISTERED",
             "Runner ID/epoch is not registered for the connected peer UID",
@@ -91,7 +215,7 @@ async fn handle(
         .await;
     }
     write_json(
-        &mut stream,
+        stream,
         &HelloAck {
             ok: true,
             proto: PROTO,
@@ -106,7 +230,7 @@ async fn handle(
     )
     .await?;
     loop {
-        let bytes = match read_line(&mut stream, REQUEST_MAX).await {
+        let bytes = match read_frame(reader, bounds, bounds.max_line_bytes).await {
             Ok(bytes) => bytes,
             Err(err) if err.kind() == ErrorKind::UnexpectedEof => return Ok(()),
             Err(err) => return Err(err),
@@ -114,9 +238,10 @@ async fn handle(
         let request: RpcRequest = serde_json::from_slice(&bytes)
             .map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
         dispatch(
-            &mut stream,
-            &state,
-            &transport,
+            stream,
+            state,
+            transport,
+            candidate_key,
             &runner_id,
             hello.runner_epoch,
             request,
@@ -126,98 +251,24 @@ async fn handle(
 }
 
 async fn dispatch(
-    stream: &mut UnixStream,
+    stream: &mut WriteHalf<'_>,
     state: &SharedState,
     transport: &KernelLeaseTransport,
+    candidate_key: Option<&CandidatePreparationSigningKey>,
     hello_runner: &RunnerId,
     hello_epoch: u64,
     request: RpcRequest,
 ) -> Result<(), Error> {
-    let now = unix_ms();
-    let mut ledger = state.ledger.lock().await;
-    let result = match request.method.as_str() {
-        "acquire" => {
-            let body: SignedAcquireBody = parse_params(&request)?;
-            if body.runner_id != *hello_runner || body.runner_epoch != hello_epoch {
-                return write_err(
-                    stream,
-                    request.id,
-                    "LEASE_TRANSPORT_SUBJECT_MISMATCH",
-                    "hello",
-                )
-                .await;
-            }
-            map_grant(
-                transport.acquire(&mut *ledger, &body, now),
-                &*ledger,
-                &body.work_package_id,
-            )
-        }
-        "readback" => {
-            let body: SignedAcquireBody = parse_params(&request)?;
-            if body.runner_id != *hello_runner || body.runner_epoch != hello_epoch {
-                return write_err(
-                    stream,
-                    request.id,
-                    "LEASE_TRANSPORT_SUBJECT_MISMATCH",
-                    "hello",
-                )
-                .await;
-            }
-            map_grant(
-                transport.readback(&mut *ledger, &body, now),
-                &*ledger,
-                &body.work_package_id,
-            )
-        }
-        "heartbeat" => {
-            let body: SignedHeartbeatBody = parse_params(&request)?;
-            if body.call.runner_id != *hello_runner || body.call.runner_epoch != hello_epoch {
-                return write_err(
-                    stream,
-                    request.id,
-                    "LEASE_TRANSPORT_SUBJECT_MISMATCH",
-                    "hello",
-                )
-                .await;
-            }
-            map_unit(transport.heartbeat(&mut *ledger, &body, now))
-        }
-        "release" => {
-            let body: SignedReleaseBody = parse_params(&request)?;
-            if body.runner_id != *hello_runner || body.runner_epoch != hello_epoch {
-                return write_err(
-                    stream,
-                    request.id,
-                    "LEASE_TRANSPORT_SUBJECT_MISMATCH",
-                    "hello",
-                )
-                .await;
-            }
-            map_unit(transport.release(&mut *ledger, &body, now))
-        }
-        "advance" => {
-            let body: SignedAdvanceBody = parse_params(&request)?;
-            if body.runner_id != *hello_runner || body.runner_epoch != hello_epoch {
-                return write_err(
-                    stream,
-                    request.id,
-                    "LEASE_TRANSPORT_SUBJECT_MISMATCH",
-                    "hello",
-                )
-                .await;
-            }
-            map_json(transport.advance(&mut *ledger, &body, now))
-        }
-        "next_ready" => next_ready(&*ledger),
-        other => {
-            return write_err(
-                stream,
-                request.id,
-                "LEASE_TRANSPORT_INVALID",
-                &format!("unknown method {other}"),
-            )
-            .await;
+    let result = {
+        // The lock is released before the response is written so a peer that
+        // does not drain its socket cannot hold the ledger for other callers.
+        let mut ledger = state.ledger.lock().await;
+        if command_dispatch::is_method(&request.method) {
+            command_dispatch::call(&mut ledger, hello_runner, hello_epoch, &request)
+        } else if let Some(key) = candidate_key.filter(|_| candidate::is_method(&request.method)) {
+            candidate::call(&mut ledger, key, hello_runner, hello_epoch, &request)
+        } else {
+            operations::call(&mut *ledger, transport, hello_runner, hello_epoch, &request)?
         }
     };
     match result {
@@ -235,171 +286,45 @@ async fn dispatch(
     }
 }
 
-fn next_ready(ledger: &dyn Ledger) -> Result<serde_json::Value, (&'static str, String)> {
-    let Some(row) = ledger
-        .ready_rows()
-        .map_err(|err| (err.reason_code(), err.to_string()))?
-        .into_iter()
-        .next()
-    else {
-        return Ok(serde_json::Value::Null);
-    };
-    let mut found = None;
-    for mission in ledger
-        .list_missions()
-        .map_err(|err| (err.reason_code(), err.to_string()))?
-    {
-        let Some(graph) = ledger
-            .get_graph(&mission.id)
-            .map_err(|err| (err.reason_code(), err.to_string()))?
-        else {
-            continue;
-        };
-        if let Some(variant) = graph
-            .variants
-            .iter()
-            .find(|variant| variant.work_package_id == row.work_package_id)
-        {
-            let title = graph
-                .packages
-                .iter()
-                .find(|package| package.id == row.work_package_id)
-                .map(|package| package.title.clone())
-                .unwrap_or_default();
-            found = Some(serde_json::json!({
-                "work_package_id": row.work_package_id.to_string(),
-                "mission_id": graph.mission.id.to_string(),
-                "variant_id": variant.id.to_string(),
-                "title": title,
-                "enqueued_at": row.enqueued_at,
-            }));
-            break;
-        }
-    }
-    Ok(found.unwrap_or(serde_json::Value::Null))
-}
+type CallResult = Result<serde_json::Value, (&'static str, String)>;
 
-fn parse_params<T: for<'de> Deserialize<'de>>(request: &RpcRequest) -> Result<T, Error> {
-    serde_json::from_value(request.params.clone())
-        .map_err(|err| Error::new(ErrorKind::InvalidData, err))
-}
-
-fn map_grant(
-    result: Result<LeaseGrant, SignedLeaseError>,
-    ledger: &dyn Ledger,
-    package: &WorkPackageId,
-) -> Result<serde_json::Value, (&'static str, String)> {
-    let grant = result.map_err(|error| (error.reason_code(), error.to_string()))?;
-    let (graph, _) = graph_for_package(ledger, package)?.ok_or((
-        "NOT_FOUND",
-        format!("work package {package} not in any graph"),
-    ))?;
-    let token = LeaseService::token_for(&graph, &grant.attempt)
-        .map_err(|err| (err.reason_code(), err.to_string()))?;
-    serde_json::to_value(serde_json::json!({
-        "attempt": grant.attempt,
-        "authority_token": token,
-        "lease": grant.lease,
-    }))
-    .map_err(|err| ("ENCODING", err.to_string()))
-}
-
-fn graph_for_package(
-    ledger: &dyn Ledger,
-    package: &WorkPackageId,
-) -> Result<Option<(StoredGraph, VariantId)>, (&'static str, String)> {
-    for mission in ledger
-        .list_missions()
-        .map_err(|err| (err.reason_code(), err.to_string()))?
-    {
-        let Some(graph) = ledger
-            .get_graph(&mission.id)
-            .map_err(|err| (err.reason_code(), err.to_string()))?
-        else {
-            continue;
-        };
-        if let Some(variant_id) = graph
-            .variants
-            .iter()
-            .find(|variant| variant.work_package_id == *package)
-            .map(|variant| variant.id.clone())
-        {
-            return Ok(Some((graph, variant_id)));
-        }
-    }
-    Ok(None)
-}
-
-fn map_json<T: Serialize>(
-    result: Result<T, SignedLeaseError>,
-) -> Result<serde_json::Value, (&'static str, String)> {
-    match result {
-        Ok(value) => serde_json::to_value(value).map_err(|err| ("ENCODING", err.to_string())),
-        Err(error) => Err((error.reason_code(), error.to_string())),
-    }
-}
-
-fn map_unit(
-    result: Result<(), SignedLeaseError>,
-) -> Result<serde_json::Value, (&'static str, String)> {
-    match result {
-        Ok(()) => Ok(serde_json::json!({"ok": true})),
-        Err(error) => Err((error.reason_code(), error.to_string())),
-    }
-}
-
-async fn read_line(stream: &mut UnixStream, max: usize) -> Result<Vec<u8>, Error> {
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        if buf.len() >= max {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "lease-transport line too long",
-            ));
-        }
-        let n = stream.read(&mut byte).await?;
-        if n == 0 {
-            return Err(Error::new(ErrorKind::UnexpectedEof, "lease-transport eof"));
-        }
-        if byte[0] == b'\n' {
-            return Ok(buf);
-        }
-        buf.push(byte[0]);
-    }
-}
-
-async fn write_json<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<(), Error> {
-    let mut bytes =
-        serde_json::to_vec(value).map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
-    bytes.push(b'\n');
+async fn write_json<W: AsyncWrite + Unpin, T: Serialize>(
+    stream: &mut W,
+    value: &T,
+) -> Result<(), Error> {
+    let bytes = encode_line(value)?;
     stream.write_all(&bytes).await
 }
 
-async fn write_err(
-    stream: &mut UnixStream,
+fn encode_line<T: Serialize>(value: &T) -> Result<Vec<u8>, Error> {
+    let mut bytes =
+        serde_json::to_vec(value).map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn encode_err(id: Option<u64>, code: &str, message: &str) -> Result<Vec<u8>, Error> {
+    encode_line(&RpcErr {
+        id,
+        error: RpcErrorBody {
+            code: code.to_string(),
+            message: message.to_string(),
+        },
+    })
+}
+
+async fn write_err<W: AsyncWrite + Unpin>(
+    stream: &mut W,
     id: Option<u64>,
     code: &str,
     message: &str,
 ) -> Result<(), Error> {
-    write_json(
-        stream,
-        &RpcErr {
-            id,
-            error: RpcErrorBody {
-                code: code.to_string(),
-                message: message.to_string(),
-            },
-        },
-    )
-    .await
-}
-
-fn unix_ms() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
+    let bytes = encode_err(id, code, message)?;
+    stream.write_all(&bytes).await
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Hello {
     proto: String,
     runner_id: String,
@@ -420,6 +345,7 @@ struct HelloAck {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RpcRequest {
     id: Option<u64>,
     method: String,

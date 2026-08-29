@@ -16,11 +16,21 @@ pub const LIVE_CONFORMANCE_SCHEMA_VERSION: &str = "bullet.live-conformance.v1";
 pub enum LiveStep {
     /// Policy load and the live-admission gate.
     Policy,
+    /// Operator enrollment record load and re-verification (facts, never evidence).
+    Enrollment,
     /// Operator signing-key custody load.
     OperatorKey,
     /// Durable active lease for the conformance Attempt.
     Lease,
-    /// Local provider admission (prepare + finalize) from the runtime probe.
+    /// Minting, registering, and verifying the single-use probe grant.
+    ProbeGrant,
+    /// Building and proving the egress-denied boundary the probe runs in.
+    ProbeContainment,
+    /// Exactly one granted, contained, proposal-free runtime probe.
+    ProbeExecution,
+    /// Matching probe facts to the enrollment and classifying the outcome.
+    RuntimeAdmission,
+    /// Local provider admission (prepare + finalize) from a genuine conformance observation.
     Admission,
     /// Launch-grant minting from the durable lease.
     Mint,
@@ -44,10 +54,15 @@ pub enum LiveStep {
 
 impl LiveStep {
     /// The complete ordered step list.
-    pub const ALL: [LiveStep; 13] = [
+    pub const ALL: [LiveStep; 18] = [
         Self::Policy,
+        Self::Enrollment,
         Self::OperatorKey,
         Self::Lease,
+        Self::ProbeGrant,
+        Self::ProbeContainment,
+        Self::ProbeExecution,
+        Self::RuntimeAdmission,
         Self::Admission,
         Self::Mint,
         Self::VerifyGrant,
@@ -93,7 +108,7 @@ pub struct LiveStepRecord {
 pub enum LiveOutcome {
     /// The provider replied `PONG`; every step passed.
     Pong,
-    /// A designed policy or runtime-observation refusal.
+    /// A designed policy, enrollment, or runtime-probe refusal.
     Refused,
     /// A step failed; the exact step and reason are recorded.
     Failed,
@@ -121,6 +136,14 @@ pub struct LiveConformanceReceipt {
     pub executable_path: Option<String>,
     /// Exact executable digest, once admission ran.
     pub executable_blake3: Option<String>,
+    /// BLAKE3 of the exact enrollment record bytes, once loaded and re-verified.
+    pub enrollment_blake3: Option<String>,
+    /// Domain-separated digest of the verified probe-grant claims, once verified.
+    pub probe_grant_digest: Option<String>,
+    /// Containment receipt digest of the boundary the probe ran in, once proven.
+    pub probe_containment_receipt_digest: Option<String>,
+    /// Domain-separated digest of the sealed runtime probe observation, once probed.
+    pub probe_observation_digest: Option<String>,
     /// Grant identifier, once minted and verified.
     pub grant_id: Option<String>,
     /// Framed digest of the exact grant token, once verified.

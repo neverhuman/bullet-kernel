@@ -10,6 +10,7 @@ pub mod gate;
 pub mod request;
 pub mod run;
 pub mod safe_git;
+pub mod signed_chain;
 pub mod workspace;
 
 pub use aggregate::{
@@ -25,4 +26,9 @@ pub use gate::GateRun;
 pub use request::VerifierRequest;
 pub use run::execute;
 pub use safe_git::HostileGit;
+pub use signed_chain::{
+    decode_and_verify_fixture_chain, FixtureVerifierSigningKey, FixtureVerifierVerificationKey,
+    SignedVerificationChainV1, SignedVerificationIntentV1, VerificationIntentInputV1,
+    VerificationIntentSigningKey, VerificationIntentVerificationKey,
+};
 pub use workspace::{cleanup_workspace, CleanWorkspace, PreservationReceipt};

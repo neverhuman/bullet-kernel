@@ -206,6 +206,41 @@ pub enum HarnessError {
         /// Replayed grant identifier.
         grant_id: String,
     },
+    /// A Candidate-preparation grant, carrier, key, or claim is malformed.
+    #[error("candidate preparation grant invalid: {reason}")]
+    CandidatePreparationInvalid {
+        /// Non-secret refusal detail.
+        reason: String,
+    },
+    /// No admitted key matches the Candidate-preparation carrier.
+    #[error("candidate preparation key unknown: {issuer}/{key_id}")]
+    CandidatePreparationKeyUnknown {
+        /// Issuer label from the carrier.
+        issuer: String,
+        /// Key label from the carrier.
+        key_id: String,
+    },
+    /// The authenticated grant differs from durable expected truth.
+    #[error("candidate preparation subject mismatch")]
+    CandidatePreparationSubjectMismatch,
+    /// Candidate-preparation verification precedes the validity window.
+    #[error("candidate preparation grant not valid before {not_before_unix_ms}")]
+    CandidatePreparationNotYetValid {
+        /// Inclusive validity start.
+        not_before_unix_ms: u64,
+    },
+    /// Candidate-preparation verification is at or after expiry.
+    #[error("candidate preparation grant expired at {expires_at_unix_ms}")]
+    CandidatePreparationExpired {
+        /// Exclusive expiry instant.
+        expires_at_unix_ms: u64,
+    },
+    /// The one-use Candidate-preparation nonce was already consumed.
+    #[error("candidate preparation grant {grant_id} replayed")]
+    CandidatePreparationReplayed {
+        /// Replayed grant identifier.
+        grant_id: String,
+    },
     /// No policy snapshot could be loaded.
     #[error("policy unavailable: {reason}")]
     PolicyUnavailable {
@@ -271,6 +306,12 @@ impl HarnessError {
             Self::LaunchGrantAudienceMismatch { .. } => "LAUNCH_GRANT_AUDIENCE_MISMATCH",
             Self::LaunchGrantSubjectMismatch { .. } => "LAUNCH_GRANT_SUBJECT_MISMATCH",
             Self::LaunchGrantReplayed { .. } => "LAUNCH_GRANT_REPLAYED",
+            Self::CandidatePreparationInvalid { .. } => "CANDIDATE_PREPARATION_GRANT_INVALID",
+            Self::CandidatePreparationKeyUnknown { .. } => "CANDIDATE_PREPARATION_KEY_UNKNOWN",
+            Self::CandidatePreparationSubjectMismatch => "CANDIDATE_PREPARATION_SUBJECT_MISMATCH",
+            Self::CandidatePreparationNotYetValid { .. } => "CANDIDATE_PREPARATION_NOT_YET_VALID",
+            Self::CandidatePreparationExpired { .. } => "CANDIDATE_PREPARATION_EXPIRED",
+            Self::CandidatePreparationReplayed { .. } => "CANDIDATE_PREPARATION_REPLAYED",
             Self::PolicyUnavailable { .. } => "POLICY_UNAVAILABLE",
             Self::PolicyInvalid { .. } => "POLICY_INVALID",
             Self::PolicyLiveAdmissionDisabled { .. } => "POLICY_LIVE_ADMISSION_DISABLED",

@@ -3,334 +3,21 @@
 //! This module is compiled only with `cfg(test)`. Its receipts are explicitly
 //! non-authoritative and cannot be selected by the production entrypoint.
 
+mod candidate;
 mod harness;
 mod orchestration;
+mod workspace;
 
 use super::*;
-use crate::gitd::{
-    ApplyProposalReceipt, CandidateBindings, CheckpointBinding, PrepareCandidateRequest,
-    PreservationReceipt,
-};
-use crate::{DirectLeaseClient, MemoryJournal, MonotonicClock, REPOSITORY_GATE_ID};
+use crate::{MemoryJournal, MonotonicClock, REPOSITORY_GATE_ID};
 use bullet_application::{materialize_plan, MemoryLedger, PlanInput};
 use bullet_domain::{Digest, RunnerId, TaskClass, WorkPackageId};
-use bullet_harness_core::{PatchMutation, PatchProposal, Preimage};
 use harness::ScriptedSim;
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-
-struct SimWorkspace {
-    attempt_id: AttemptId,
-    repo_dir: Option<PathBuf>,
-    runtime_dir: Option<PathBuf>,
-    base_sha: String,
-    checkpoint_id: String,
-    checkpoint_digest: String,
-    generation: u64,
-}
-
-impl SimWorkspace {
-    fn new(attempt_id: AttemptId) -> Self {
-        Self {
-            attempt_id,
-            repo_dir: None,
-            runtime_dir: None,
-            base_sha: String::new(),
-            checkpoint_id: String::new(),
-            checkpoint_digest: String::new(),
-            generation: 0,
-        }
-    }
-
-    fn repo(&self) -> Result<&Path, RunnerError> {
-        self.repo_dir
-            .as_deref()
-            .ok_or_else(|| RunnerError::Protocol("test simulator has no clone".into()))
-    }
-
-    fn git(&self, args: &[&str]) -> Result<Vec<u8>, RunnerError> {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(self.repo()?)
-            .args(args)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .output()
-            .map_err(|error| RunnerError::Io {
-                context: "test simulator git".into(),
-                reason: error.to_string(),
-            })?;
-        if !output.status.success() {
-            return Err(RunnerError::Io {
-                context: format!("test simulator git {args:?}"),
-                reason: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-        Ok(output.stdout)
-    }
-
-    async fn clone_workspace(
-        &mut self,
-        source_repo: &Path,
-        base_sha: &str,
-        root: &Path,
-        _allowed_prefixes: &[String],
-    ) -> Result<WorkspaceInfo, RunnerError> {
-        let workspace = root.join("work").join(self.attempt_id.as_str());
-        let repo = workspace.join("repo");
-        let runtime = root.join("runtime").join(self.attempt_id.as_str());
-        std::fs::create_dir_all(&workspace).map_err(|error| RunnerError::Io {
-            context: "test simulator workspace".into(),
-            reason: error.to_string(),
-        })?;
-        std::fs::create_dir_all(&runtime).map_err(|error| RunnerError::Io {
-            context: "test simulator runtime".into(),
-            reason: error.to_string(),
-        })?;
-        let output = Command::new("git")
-            .args(["clone", "-q", "--no-hardlinks"])
-            .arg(source_repo)
-            .arg(&repo)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .output()
-            .map_err(|error| RunnerError::Io {
-                context: "test simulator clone".into(),
-                reason: error.to_string(),
-            })?;
-        if !output.status.success() {
-            return Err(RunnerError::Io {
-                context: "test simulator clone".into(),
-                reason: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-        self.repo_dir = Some(repo.clone());
-        self.runtime_dir = Some(runtime.clone());
-        self.base_sha = base_sha.to_string();
-        self.checkpoint_digest = Digest::of(format!("TEST_ONLY:{base_sha}:0").as_bytes()).to_hex();
-        self.checkpoint_id = format!("ckp_{}", self.checkpoint_digest);
-        self.git(&["checkout", "-q", "--detach", base_sha])?;
-        Ok(WorkspaceInfo {
-            repo_dir: repo,
-            runtime_dir: runtime,
-            branch: "test-only/simulator".into(),
-            base_sha: base_sha.to_string(),
-            base_checkpoint_id: self.checkpoint_id.clone(),
-            base_checkpoint_digest: self.checkpoint_digest.clone(),
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl WorkspaceSession for SimWorkspace {
-    async fn apply_proposal(
-        &mut self,
-        proposal: &PatchProposal,
-    ) -> Result<ApplyProposalReceipt, RunnerError> {
-        if proposal.producing_attempt_id != self.attempt_id.as_str()
-            || proposal.base_checkpoint_id != self.checkpoint_id
-            || proposal.base_checkpoint_digest != self.checkpoint_digest
-        {
-            return Err(RunnerError::Gitd {
-                method: "apply_proposal".into(),
-                code: "STALE_CHECKPOINT".into(),
-                message: "TEST_ONLY simulator binding mismatch".into(),
-            });
-        }
-        let repo = self.repo()?.to_path_buf();
-        for operation in &proposal.operations {
-            let path = repo.join(&operation.path);
-            match &operation.preimage {
-                Preimage::Absent if path.exists() => {
-                    return Err(RunnerError::Gitd {
-                        method: "apply_proposal".into(),
-                        code: "PREIMAGE_MISMATCH".into(),
-                        message: format!("expected absent path: {}", operation.path),
-                    });
-                }
-                Preimage::Digest { digest } => {
-                    if !path.is_file() {
-                        return Err(RunnerError::Gitd {
-                            method: "apply_proposal".into(),
-                            code: "PATH_ABSENT".into(),
-                            message: format!("no regular file at: {}", operation.path),
-                        });
-                    }
-                    let bytes = std::fs::read(&path).map_err(|error| RunnerError::Io {
-                        context: "test simulator preimage".into(),
-                        reason: error.to_string(),
-                    })?;
-                    if Digest::of(&bytes).to_hex() != *digest {
-                        return Err(RunnerError::Gitd {
-                            method: "apply_proposal".into(),
-                            code: "PREIMAGE_MISMATCH".into(),
-                            message: format!("stale preimage: {}", operation.path),
-                        });
-                    }
-                }
-                Preimage::Absent => {}
-            }
-        }
-        for operation in &proposal.operations {
-            let path = repo.join(&operation.path);
-            if matches!(operation.mutation, PatchMutation::Delete) {
-                if !path.is_file() {
-                    return Err(RunnerError::Gitd {
-                        method: "apply_proposal".into(),
-                        code: "PATH_ABSENT".into(),
-                        message: format!("no regular file to delete at: {}", operation.path),
-                    });
-                }
-                std::fs::remove_file(&path).map_err(|error| RunnerError::Io {
-                    context: "test simulator delete".into(),
-                    reason: error.to_string(),
-                })?;
-                continue;
-            }
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| RunnerError::Io {
-                    context: "test simulator parent".into(),
-                    reason: error.to_string(),
-                })?;
-            }
-            let PatchMutation::Write { content_utf8 } = &operation.mutation else {
-                unreachable!("delete handled above")
-            };
-            std::fs::write(&path, content_utf8).map_err(|error| RunnerError::Io {
-                context: "test simulator write".into(),
-                reason: error.to_string(),
-            })?;
-        }
-        self.generation += 1;
-        self.checkpoint_digest = Digest::of(
-            format!(
-                "TEST_ONLY:{}:{}:{}",
-                self.base_sha, self.generation, proposal.proposal_id
-            )
-            .as_bytes(),
-        )
-        .to_hex();
-        self.checkpoint_id = format!("ckp_{}", self.checkpoint_digest);
-        Ok(ApplyProposalReceipt {
-            proposal_id: proposal.proposal_id.clone(),
-            applied: u64::try_from(proposal.operations.len())
-                .map_err(|error| RunnerError::Protocol(error.to_string()))?,
-            checkpoint: CheckpointBinding {
-                id: self.checkpoint_id.clone(),
-                digest: self.checkpoint_digest.clone(),
-            },
-        })
-    }
-
-    async fn checkpoint(&mut self) -> Result<CheckpointBinding, RunnerError> {
-        let receipt = serde_json::json!({
-            "classification": "TEST_ONLY_SIMULATOR",
-            "attempt_id": self.attempt_id.as_str(),
-            "id": self.checkpoint_id,
-            "digest": self.checkpoint_digest,
-        });
-        let runtime = self
-            .runtime_dir
-            .as_ref()
-            .ok_or_else(|| RunnerError::Protocol("test simulator has no runtime".into()))?;
-        std::fs::write(runtime.join("checkpoint.json"), receipt.to_string()).map_err(|error| {
-            RunnerError::Io {
-                context: "test simulator checkpoint".into(),
-                reason: error.to_string(),
-            }
-        })?;
-        Ok(CheckpointBinding {
-            id: self.checkpoint_id.clone(),
-            digest: self.checkpoint_digest.clone(),
-        })
-    }
-
-    async fn prepare_candidate(
-        &mut self,
-        request: &PrepareCandidateRequest,
-    ) -> Result<CandidateReceipt, RunnerError> {
-        let change_seed = request.provenance.producing_attempt_id.as_str();
-        self.git(&["add", "-A"])?;
-        self.git(&[
-            "-c",
-            "user.name=Bullet Test Simulator",
-            "-c",
-            "user.email=simulator@invalid",
-            "commit",
-            "-q",
-            "-m",
-            "test-only candidate",
-        ])?;
-        let head = String::from_utf8_lossy(&self.git(&["rev-parse", "HEAD"])?)
-            .trim()
-            .to_string();
-        let tree = String::from_utf8_lossy(&self.git(&["rev-parse", "HEAD^{tree}"])?)
-            .trim()
-            .to_string();
-        let patch = self.git(&["diff", "--binary", &format!("{}..HEAD", self.base_sha)])?;
-        let paths = String::from_utf8_lossy(&self.git(&[
-            "diff",
-            "--name-only",
-            &format!("{}..HEAD", self.base_sha),
-        ])?)
-        .lines()
-        .map(str::to_string)
-        .collect();
-        let digest = Digest::of(&patch).to_hex();
-        Ok(CandidateReceipt {
-            id: format!("can_{}", Digest::of(change_seed.as_bytes()).to_hex()),
-            content_id: format!("cnt_{}", Digest::of(change_seed.as_bytes()).to_hex()),
-            base_commit: self.base_sha.clone(),
-            head_commit: head,
-            tree_hash: tree,
-            patch_hash: digest,
-            actual_scope: paths,
-            prepared_at: "TEST_ONLY_SIMULATOR".into(),
-        })
-    }
-
-    async fn preserve(&mut self, destination: &Path) -> Result<PreservationReceipt, RunnerError> {
-        if destination.exists() {
-            return Err(RunnerError::Protocol(
-                "test simulator preserve destination exists".into(),
-            ));
-        }
-        std::fs::create_dir_all(destination).map_err(|error| RunnerError::Io {
-            context: "test simulator preserve".into(),
-            reason: error.to_string(),
-        })?;
-        let token = format!("TEST_ONLY_PRESERVE:{}", self.attempt_id);
-        let digest = Digest::of(token.as_bytes()).to_hex();
-        let artifact = Digest::of(destination.display().to_string().as_bytes()).to_hex();
-        std::fs::write(destination.join("preservation.json"), token.as_bytes()).map_err(
-            |error| RunnerError::Io {
-                context: "test simulator preserve receipt".into(),
-                reason: error.to_string(),
-            },
-        )?;
-        Ok(PreservationReceipt {
-            token,
-            digest,
-            artifact_digest: artifact,
-            destination: destination.to_path_buf(),
-        })
-    }
-}
-
-fn test_only_bindings(grant: &crate::AcquireGrant) -> CandidateBindings {
-    let hex = |label: &str| {
-        Digest::of(format!("TEST_ONLY:{label}:{}", grant.attempt.id).as_bytes()).to_hex()
-    };
-    CandidateBindings {
-        change_id: format!("chg_{}", hex("chg")),
-        graph_revision_id: format!("grf_{}", hex("grf")),
-        context_capsule_id: format!("cnt_{}", hex("ctx")),
-        environment_digest: hex("env"),
-        toolchain_digest: hex("tool"),
-        parent_candidate_ids: vec![],
-    }
-}
+use workspace::SimWorkspace;
 
 fn proposal(changes: Value) -> Value {
     proposal_with_gates(changes, serde_json::json!([REPOSITORY_GATE_ID]))
@@ -468,6 +155,22 @@ fn build_origin(root: &Path) -> (PathBuf, String) {
     (repo, base)
 }
 
+fn git_value(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .expect("retained fixture git");
+    assert!(output.status.success(), "{:?}", output.status);
+    String::from_utf8(output.stdout)
+        .expect("retained Git output")
+        .trim()
+        .to_owned()
+}
+
 async fn run_simulated(
     root: &Path,
     seed: &str,
@@ -477,7 +180,7 @@ async fn run_simulated(
 ) -> (AttemptOutcome, Arc<MemoryJournal>, PathBuf) {
     let (origin, base) = build_origin(root);
     let (ledger, package) = seeded_ledger(seed);
-    let client: Arc<dyn LeaseClient> = Arc::new(DirectLeaseClient::new(ledger));
+    let client = Arc::new(candidate::TestCandidateClient::new(ledger));
     let journal = Arc::new(MemoryJournal::new());
     let request = AcquireRequest {
         work_package_id: package,
@@ -486,19 +189,20 @@ async fn run_simulated(
         idempotency_key: format!("{seed}-1"),
         ttl_seconds: 15,
     };
-    let mut config = AttemptConfig::new(
+    let config = AttemptConfig::new(
         origin,
         base,
         root.join("farm"),
         "test-only objective".into(),
         scope,
         gate_ids,
-    );
+    )
+    .with_preservation_destination(root.join(format!("success-preserve-{seed}")));
+    let config = client.admit_config(config);
     let grant = client.acquire(&request).await.expect("test lease");
-    config.bindings = test_only_bindings(&grant);
     journal.record("lease_acquired", "TEST_ONLY_SIMULATOR");
-    let mut workspace = SimWorkspace::new(grant.attempt.id.clone());
-    let info = workspace
+    let mut workspace = SimWorkspace::new(grant.authority_token.clone());
+    let mut info = workspace
         .clone_workspace(
             &config.source_repo,
             &config.base_sha,
@@ -516,11 +220,28 @@ async fn run_simulated(
         &grant,
         &config,
         &mut workspace,
-        &info,
+        &mut info,
     )
     .await
     .expect("test-only loop");
-    (outcome, journal, info.repo_dir)
+    assert!(
+        !info.repo_dir.exists(),
+        "successful preservation must precede cleanup of the live workspace"
+    );
+    let retained = outcome
+        .preservation
+        .receipt
+        .destination
+        .join("generation/repo");
+    assert_eq!(
+        git_value(&retained, &["rev-parse", "HEAD"]),
+        outcome.candidate.head_commit
+    );
+    assert_eq!(
+        git_value(&retained, &["rev-parse", "HEAD^{tree}"]),
+        outcome.candidate.tree_hash
+    );
+    (outcome, journal, retained)
 }
 
 #[tokio::test]
@@ -549,6 +270,10 @@ async fn scope_refusal_repairs_only_in_test_simulator() {
     .await;
     assert_eq!(outcome.repair_rounds, 1, "{:?}", journal.stages());
     assert_eq!(outcome.candidate.prepared_at, "TEST_ONLY_SIMULATOR");
+    outcome
+        .preservation
+        .validate_against(&outcome.candidate, &outcome.attempt_id, outcome.fence)
+        .expect("Candidate preservation binding");
     assert!(!repo.join("secrets").exists());
     assert!(repo.join("PONG.txt").is_file());
     assert!(adapter.prompts()[1].contains("SCOPE_DENIED"));

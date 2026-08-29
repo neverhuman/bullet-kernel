@@ -1,18 +1,31 @@
 //! Offline Claude Code bidirectional stream-JSON contract adapter.
 //!
-//! This crate never executes `claude`. [`ClaudeStreamTranscript`] is a pure
-//! state machine for one frozen test-vector message subset. Runtime probe, session
-//! creation, dispatch, interruption, and termination remain blocked until
-//! signed admission and provider-only egress are implemented.
+//! This crate never executes `claude` on its own authority.
+//! [`ClaudeStreamTranscript`] is a pure state machine for one frozen
+//! test-vector message subset. The adapter's session creation, dispatch,
+//! interruption, and termination remain blocked until signed admission and
+//! provider-only egress are wired; [`probe::probe_claude`] runs one granted,
+//! contained `--version` probe from explicit inputs and never admits anything.
 
 pub mod dispatch;
 mod parse;
+pub mod probe;
 mod protocol;
+pub mod session;
 
+pub use probe::{
+    probe_claude, probe_deadline_ms, ProbeContainment, ProbeInput, ProbeRefusal,
+    MAX_PROBE_DEADLINE_MS, NO_PROMPT_FREE_HELLO, PROBE_ARGUMENT, REQUIRED_CONTAINMENT,
+};
 pub use protocol::{
-    ClaudeStreamOutcome, ClaudeStreamTranscript, MAX_ASSISTANT_CONTENT_ITEMS,
-    MAX_ASSISTANT_MESSAGES, MAX_STREAM_JSON_FRAMES, MAX_STREAM_JSON_FRAME_BYTES,
-    OBSERVED_CLAUDE_SCHEMA_VERSION,
+    ClaudeStreamOutcome, ClaudeStreamTranscript, TranscriptProfile, DOGFOOD_MAX_ASSISTANT_MESSAGES,
+    DOGFOOD_MAX_STREAM_JSON_FRAMES, MAX_ASSISTANT_CONTENT_ITEMS, MAX_ASSISTANT_MESSAGES,
+    MAX_STREAM_JSON_FRAMES, MAX_STREAM_JSON_FRAME_BYTES, OBSERVED_CLAUDE_SCHEMA_VERSION,
+    READ_ONLY_TOOL_ALLOWLIST,
+};
+pub use session::{
+    ClaudeSession, DispatchCleared, LaunchRecord, SessionConfig, SessionError, SessionPhase,
+    TurnRecord, TurnTicket,
 };
 
 use bullet_domain::Observation;
@@ -167,6 +180,20 @@ impl bullet_harness_core::LiveDispatcher for ClaudeAdapter {
 
     fn required_protocol(&self) -> bullet_harness_core::ProviderProtocol {
         bullet_harness_core::ProviderProtocol::ClaudeStreamJson
+    }
+
+    /// The port carries only the grant and cannot reach the enrollment
+    /// record, the prepared egress-denied boundary, canaries, or a clock, so
+    /// it refuses `RUNTIME_PROBE_UNAVAILABLE` without spawning. ADMIT-1 must
+    /// call [`probe::probe_claude`] with a full [`ProbeInput`] instead.
+    fn observe_runtime_probe(
+        &self,
+        grant: &bullet_harness_core::live::ProbeGrantEvidence,
+    ) -> Result<
+        bullet_harness_core::live::RuntimeProbeObservation,
+        bullet_harness_core::live::RuntimeProbeError,
+    > {
+        Err(probe::port_refusal(grant))
     }
 
     fn dispatch_live_turn(

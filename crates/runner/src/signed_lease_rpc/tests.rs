@@ -2,6 +2,18 @@ use super::*;
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use tokio::time::{timeout, Duration};
 
+#[path = "tests/reconciliation.rs"]
+mod reconciliation;
+#[path = "tests/recovery.rs"]
+mod recovery;
+#[path = "tests/settlement.rs"]
+mod settlement;
+#[path = "tests/settlement_completion.rs"]
+mod settlement_completion;
+#[cfg(all(feature = "test-seams", debug_assertions))]
+#[path = "tests/synthetic_selection.rs"]
+mod synthetic_selection;
+
 fn ids(path: &Path) -> ExpectedLeaseServer {
     let meta = std::fs::metadata(path).expect("metadata");
     ExpectedLeaseServer::new(meta.uid(), meta.gid())

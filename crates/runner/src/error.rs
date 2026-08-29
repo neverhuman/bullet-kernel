@@ -62,6 +62,24 @@ pub enum RunnerError {
         /// Server message.
         message: String,
     },
+    /// Acquire may have committed, but exact active readback could not prove it.
+    #[error("lease acquire outcome unknown: {message}")]
+    AcquireOutcomeUnknown {
+        /// Reconciliation failure without authority-sensitive payloads.
+        message: String,
+    },
+    /// Advance may have committed, but exact settlement readback could not prove it.
+    #[error("lease advance outcome unknown: {message}")]
+    AdvanceOutcomeUnknown {
+        /// Reconciliation failure without authority-sensitive payloads.
+        message: String,
+    },
+    /// Release may have committed, but exact settlement readback could not prove it.
+    #[error("lease release outcome unknown: {message}")]
+    ReleaseOutcomeUnknown {
+        /// Reconciliation failure without authority-sensitive payloads.
+        message: String,
+    },
     /// The gate command could not be executed at all.
     #[error("gate `{command}` failed to run: {reason}")]
     Gate {
@@ -112,6 +130,9 @@ impl RunnerError {
             Self::GitdBinaryAdmission { .. } => "GITD_BINARY_ADMISSION_REFUSED",
             Self::Harness(err) => err.reason_code(),
             Self::Lease { .. } => "LEASE_REFUSED",
+            Self::AcquireOutcomeUnknown { .. } => "ACQUIRE_OUTCOME_UNKNOWN",
+            Self::AdvanceOutcomeUnknown { .. } => "ADVANCE_OUTCOME_UNKNOWN",
+            Self::ReleaseOutcomeUnknown { .. } => "RELEASE_OUTCOME_UNKNOWN",
             Self::Gate { .. } => "GATE_FAILED",
             Self::GateSelection { .. } => "GATE_SELECTION_REFUSED",
             Self::CapsExhausted { .. } => "CAPS_EXHAUSTED",
@@ -187,6 +208,27 @@ mod tests {
         assert_eq!(
             RunnerError::GateSelection { reason: "x".into() }.reason_code(),
             "GATE_SELECTION_REFUSED"
+        );
+        assert_eq!(
+            RunnerError::AcquireOutcomeUnknown {
+                message: "readback unavailable".into(),
+            }
+            .reason_code(),
+            "ACQUIRE_OUTCOME_UNKNOWN"
+        );
+        assert_eq!(
+            RunnerError::AdvanceOutcomeUnknown {
+                message: "readback unavailable".into(),
+            }
+            .reason_code(),
+            "ADVANCE_OUTCOME_UNKNOWN"
+        );
+        assert_eq!(
+            RunnerError::ReleaseOutcomeUnknown {
+                message: "readback unavailable".into(),
+            }
+            .reason_code(),
+            "RELEASE_OUTCOME_UNKNOWN"
         );
     }
 

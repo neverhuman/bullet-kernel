@@ -27,6 +27,18 @@ docs:
 family:
     bash scripts/ci-local.sh family
 
+faults:
+    bash scripts/ci-local.sh faults
+
+proof-transaction-offline:
+    bash ops/ci/proof-transaction-offline.sh
+
+proof-transaction-offline-chaos:
+    bash ops/ci/proof-transaction-offline-chaos.sh
+
+proof-synthetic-dogfood:
+    bash ops/ci/proof-synthetic-dogfood.sh
+
 verify: check
 
 demo:

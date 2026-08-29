@@ -17,6 +17,7 @@ pub mod expectation;
 pub mod keyfile;
 pub mod keys;
 pub mod nonce;
+pub mod probe_grant;
 pub mod verify;
 
 pub use canonical::{
@@ -40,6 +41,12 @@ pub use keys::{
     LaunchGrantSigningKey, LaunchGrantVerificationKey, SIGNING_KEY_BYTES, VERIFICATION_KEY_BYTES,
 };
 pub use nonce::{LaunchGrantNonceLedger, MemoryNonceLedger, NonceConsumption};
+pub use probe_grant::{
+    mint_probe_grant, probe_grant_footer, verify_probe_grant, ProbeExpectation, ProbeGrantClaims,
+    ProbeGrantError, ProbePurpose, SignedProbeGrant, MAX_PROBE_GRANT_TTL_MS, MAX_PROBE_TOKEN_BYTES,
+    PROBE_GRANT_CLAIMS_DOMAIN, PROBE_GRANT_IMPLICIT_ASSERTION, PROBE_GRANT_KEY_PURPOSE,
+    PROBE_GRANT_NONCE_SCOPE, PROBE_GRANT_SCHEMA,
+};
 pub use verify::{verify_launch_grant, VerifiedLaunchGrant};
 
 /// Fill `bytes` from operating-system entropy.

@@ -1,6 +1,8 @@
 //! SQLite projection reads: parity with the memory ledger after one shared
 //! scenario, atomic watermark reads, and fail-closed corrupt rows.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::store::ProjectionReader;
 use bullet_application::{
@@ -49,7 +51,7 @@ fn scenario<L: Ledger + ProjectionReader>(ledger: &mut L) {
 
 #[test]
 fn sqlite_and_memory_project_identical_row_sets_after_one_scenario() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let mut sqlite = SqliteLedger::open(dir.path().join("proj.sqlite")).expect("open");
     let mut memory = MemoryLedger::new();
     scenario(&mut sqlite);
@@ -103,7 +105,7 @@ fn sqlite_and_memory_project_identical_row_sets_after_one_scenario() {
 
 #[test]
 fn sqlite_projection_reads_share_one_watermark_and_a_canonical_clock() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let mut sqlite = SqliteLedger::open(dir.path().join("atomic.sqlite")).expect("open");
     let (empty, zero) = sqlite
         .read_snapshot(|ledger| {
@@ -140,7 +142,7 @@ fn sqlite_projection_reads_share_one_watermark_and_a_canonical_clock() {
 
 #[test]
 fn sqlite_lists_the_live_lease_row_with_its_database_window() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let mut sqlite = SqliteLedger::open(dir.path().join("lease.sqlite")).expect("open");
     let graph = materialize_plan(
         &mut sqlite,
@@ -167,7 +169,7 @@ fn sqlite_lists_the_live_lease_row_with_its_database_window() {
 
 #[test]
 fn corrupt_persisted_rows_fail_closed_instead_of_shrinking_the_list() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("corrupt.sqlite");
     let sqlite = SqliteLedger::open(&path).expect("open");
     let raw = Connection::open(&path).expect("raw");

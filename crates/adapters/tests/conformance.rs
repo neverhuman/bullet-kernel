@@ -1,5 +1,7 @@
 //! Shared ledger conformance and the cross-connection lease race.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::conformance::check_all;
 use bullet_application::{materialize_plan, LeaseService, Ledger, PlanInput};
@@ -14,7 +16,7 @@ fn t(offset: i64) -> DateTime<Utc> {
 
 #[test]
 fn sqlite_ledger_passes_shared_conformance() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let mut n = 0u32;
     check_all(|| {
         n += 1;
@@ -25,7 +27,7 @@ fn sqlite_ledger_passes_shared_conformance() {
 
 #[test]
 fn two_connections_racing_one_variant_grant_exactly_once() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("race.sqlite");
     let graph = {
         let mut ledger = SqliteLedger::open(&path).expect("open");

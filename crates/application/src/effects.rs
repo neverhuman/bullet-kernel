@@ -7,12 +7,15 @@ use crate::effect_state::EffectState;
 use bullet_domain::{AttemptId, Digest, DomainError, EffectId, EffectReceiptId};
 use serde::{Deserialize, Serialize};
 
+const RECOVERY_RECEIPT_DOMAIN: &str = "bullet.effect-recovery-receipt.v1";
+
 /// The all-zeros git OID: as an expected precondition it means the target
 /// ref must not exist (create semantics).
 pub const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
 /// One durable effect intent row.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EffectIntentRecord {
     /// Identity.
     pub id: EffectId,
@@ -74,7 +77,12 @@ impl EffectIntentRecord {
     ///
     /// Returns `Encoding` when serialization fails.
     pub fn payload_digest(&self) -> Result<String, DomainError> {
-        Ok(Digest::of(self.stable_payload()?.as_bytes()).to_hex())
+        Ok(self.stable_payload_digest()?.to_hex())
+    }
+
+    /// Typed digest of [`Self::stable_payload`].
+    pub fn stable_payload_digest(&self) -> Result<Digest, DomainError> {
+        Ok(Digest::of(self.stable_payload()?.as_bytes()))
     }
 }
 
@@ -120,6 +128,7 @@ impl ReceiptVerdict {
 
 /// One durable effect receipt row (append-only).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EffectReceiptRecord {
     /// Frozen wire identity (`efr_` + 64 lowercase hex).
     pub id: EffectReceiptId,
@@ -143,6 +152,42 @@ pub struct EffectReceiptRecord {
 #[must_use]
 pub fn receipt_id(seed: &str) -> EffectReceiptId {
     EffectReceiptId::from_seed(seed)
+}
+
+/// Deterministic recovery receipt identity. Mutable intent state, retry count,
+/// database timestamps, and caller time are deliberately outside the subject.
+pub fn recovery_receipt_id(
+    intent: &EffectIntentRecord,
+    observed_remote_identity: &str,
+    observed_state_hash: Option<&str>,
+    verification_method: &str,
+    verification_result: ReceiptVerdict,
+) -> Result<EffectReceiptId, DomainError> {
+    #[derive(Serialize)]
+    struct Subject<'a> {
+        schema_version: &'static str,
+        effect_intent_id: &'a EffectId,
+        intent_payload_digest: Digest,
+        observed_remote_identity: &'a str,
+        observed_state_hash: Option<&'a str>,
+        verification_method: &'a str,
+        verification_result: ReceiptVerdict,
+    }
+
+    let subject = Subject {
+        schema_version: RECOVERY_RECEIPT_DOMAIN,
+        effect_intent_id: &intent.id,
+        intent_payload_digest: intent.stable_payload_digest()?,
+        observed_remote_identity,
+        observed_state_hash,
+        verification_method,
+        verification_result,
+    };
+    let digest = Digest::of_json(&subject)?;
+    Ok(EffectReceiptId::from_seed(&format!(
+        "{RECOVERY_RECEIPT_DOMAIN}:{}",
+        digest.to_hex()
+    )))
 }
 
 #[cfg(test)]

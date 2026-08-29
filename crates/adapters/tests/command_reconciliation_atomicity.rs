@@ -1,3 +1,5 @@
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::{CommandRequest, Ledger};
 use bullet_domain::CommandPhase;
@@ -8,7 +10,7 @@ const AT: &str = "2026-01-01T00:00:00.000Z";
 #[test]
 fn reconciliation_commits_command_outbox_and_event_or_nothing() {
     for boundary in 0..=3 {
-        let directory = tempfile::tempdir().expect("tempdir");
+        let directory = support::private_tempdir();
         let path = directory.path().join("worker-crash.sqlite3");
         let request = CommandRequest::new(
             format!("worker-crash-{boundary}"),
@@ -62,7 +64,7 @@ fn reconciliation_commits_command_outbox_and_event_or_nothing() {
 
 #[test]
 fn unsupported_is_failed_and_corrupt_ingress_never_mutates() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let path = directory.path().join("worker-refusal.sqlite3");
     let request = CommandRequest::new("worker-refusal", "not_admitted", &serde_json::json!({}))
         .expect("request");

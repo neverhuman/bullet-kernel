@@ -1,3 +1,5 @@
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::store::ProjectionReader;
 use bullet_application::{materialize_plan, LeaseService, Ledger, PlanInput};
@@ -19,7 +21,7 @@ fn plan(packages: usize) -> PlanInput {
 #[test]
 fn sqlite_context_revision_is_authority_before_fence_allocation() {
     for revision in [0, 2] {
-        let directory = tempfile::tempdir().expect("tempdir");
+        let directory = support::private_tempdir();
         let path = directory.path().join("context.sqlite3");
         let mut ledger = SqliteLedger::open(&path).expect("open");
         let seed = format!("revision-{revision}");
@@ -59,7 +61,7 @@ fn sqlite_context_revision_is_authority_before_fence_allocation() {
 #[test]
 fn missing_corrupt_and_cross_package_capsules_fail_closed_without_repair() {
     for mutation in ["missing", "digest", "cross-package"] {
-        let directory = tempfile::tempdir().expect("tempdir");
+        let directory = support::private_tempdir();
         let path = directory.path().join("hostile-context.sqlite3");
         let mut ledger = SqliteLedger::open(&path).expect("open");
         let graph = materialize_plan(&mut ledger, mutation, &plan(2), AT).expect("materialize");
@@ -123,7 +125,7 @@ fn missing_corrupt_and_cross_package_capsules_fail_closed_without_repair() {
 
 #[test]
 fn exact_lease_replay_rechecks_immutable_context_truth() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let path = directory.path().join("replay-context.sqlite3");
     let (graph, request) = {
         let mut ledger = SqliteLedger::open(&path).expect("open");
@@ -146,7 +148,7 @@ fn exact_lease_replay_rechecks_immutable_context_truth() {
 
 #[test]
 fn replay_refuses_a_valid_capsule_from_another_graph() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let path = directory.path().join("foreign-replay.sqlite3");
     let (first, second, request, mut grant, outbox_len) = {
         let mut ledger = SqliteLedger::open(&path).expect("open");

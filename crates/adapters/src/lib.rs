@@ -4,6 +4,9 @@ pub mod authority_high_water;
 pub mod simulators;
 pub mod sqlite;
 
+#[cfg(test)]
+mod test_support;
+
 pub use authority_high_water::{
     AuthorityHighWaterError, AuthorityHighWaterStore, AuthorityHighWaterV1,
     AUTHORITY_HIGH_WATER_SCHEMA_VERSION,

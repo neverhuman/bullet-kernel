@@ -11,8 +11,12 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+blake3.workspace = true
 bullet-application.workspace = true
 bullet-domain.workspace = true
+bullet-harness-core.workspace = true
+hex.workspace = true
+pasetors = { version = "=0.8.0", default-features = false, features = ["v4"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

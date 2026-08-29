@@ -17,6 +17,8 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
+mod support;
+
 const MATERIALIZED_AT: &str = "2026-01-01T00:00:00.000Z";
 const TTL_SECONDS: i64 = 5;
 
@@ -74,7 +76,7 @@ fn reclaim_outbox(ledger: &SqliteLedger) -> Vec<ExpiredLease> {
 
 #[test]
 fn two_concurrent_acquirers_reclaim_a_dead_lease_exactly_once() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("race.sqlite");
     let (graph, grant) = crashed_writer(&path, "race");
     let dead = grant.attempt.clone();
@@ -140,7 +142,7 @@ fn two_concurrent_acquirers_reclaim_a_dead_lease_exactly_once() {
 
 #[test]
 fn the_dead_attempt_reaches_its_terminal_state_and_the_event_is_persisted() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("terminal.sqlite");
     let (graph, grant) = crashed_writer(&path, "terminal");
     let dead = grant.attempt.clone();
@@ -177,7 +179,7 @@ fn the_dead_attempt_reaches_its_terminal_state_and_the_event_is_persisted() {
 
 #[test]
 fn an_unexpired_lease_is_never_reclaimed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("live.sqlite");
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let graph = materialize_plan(&mut ledger, "live", &plan(), MATERIALIZED_AT).expect("plan");
@@ -219,7 +221,7 @@ fn an_unexpired_lease_is_never_reclaimed() {
 
 #[test]
 fn expire_due_is_the_named_entry_point_and_is_idempotent() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("idempotent.sqlite");
     let (graph, grant) = crashed_writer(&path, "idem");
     let dead = grant.attempt.clone();

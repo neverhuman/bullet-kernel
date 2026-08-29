@@ -1,10 +1,11 @@
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::Ledger;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::process::Stdio;
 use std::time::Duration;
-use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -13,7 +14,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
 async fn stdio_lifecycle_reads_real_farmd_and_forbidden_tools_do_not_mutate() {
-    let temporary = TempDir::new().unwrap();
+    let temporary = support::private_tempdir();
     let database = temporary.path().join("ledger.sqlite");
     let app = bullet_farmd::api::router(&database).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

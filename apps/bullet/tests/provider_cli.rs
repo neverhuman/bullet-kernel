@@ -175,8 +175,11 @@ fn live_conformance_admits_a_ratified_v1alpha2_policy_and_reports_it() {
         let spawned = base.join("SPAWNED");
         write_marker(&marker, &spawned);
 
-        // No operator key is installed. Runtime observation must refuse even
-        // earlier, and all four product adapters inherit the same default.
+        // No enrollment record is written. Per the live_conformance module
+        // contract, a valid v1alpha2 policy without an enrollment refuses at
+        // ENROLLMENT_MISSING before key read, authority mutation, egress, or
+        // spawn -- Enrollment is step 2 of LiveStep::ALL, well before
+        // ProbeExecution and ADMISSION. All four adapters inherit this.
         let data = data_dir.to_string_lossy().into_owned();
         let executable = marker.to_string_lossy().into_owned();
         let output = bullet_with_policy(
@@ -198,7 +201,7 @@ fn live_conformance_admits_a_ratified_v1alpha2_policy_and_reports_it() {
         );
         assert!(
             stdout.contains(&format!(
-                "live-conformance {provider}: refused (RUNTIME_PROBE_UNAVAILABLE); neutral"
+                "live-conformance {provider}: refused (ENROLLMENT_MISSING); neutral"
             )),
             "{provider}: stdout: {stdout}"
         );
@@ -216,11 +219,11 @@ fn live_conformance_admits_a_ratified_v1alpha2_policy_and_reports_it() {
             "{provider}: {json}"
         );
         assert!(
-            json.contains("\"failed_step\": \"ADMISSION\""),
+            json.contains("\"failed_step\": \"ENROLLMENT\""),
             "{provider}: {json}"
         );
         assert!(
-            json.contains("\"refusal_reason\": \"RUNTIME_PROBE_UNAVAILABLE\""),
+            json.contains("\"refusal_reason\": \"ENROLLMENT_MISSING\""),
             "{provider}: {json}"
         );
         assert!(

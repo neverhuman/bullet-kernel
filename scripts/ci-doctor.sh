@@ -19,6 +19,7 @@ case "$lane" in
   security) tools=(bash cargo cargo-deny cat date dirname git gitleaks jq mktemp rm rustc xargs zizmor) ;;
   docs)     tools=(awk bash cargo dirname git grep ln mkdir mktemp realpath rg rm rustc sed seq sort) ;;
   family)   tools=(bash cargo cargo-nextest dirname git jq realpath rustc sha256sum) ;;
+  faults)   tools=(awk basename bash cargo cargo-nextest chmod cmp diff dirname git grep head jq mkdir mktemp mv rm rmdir rustc sha256sum sort stat sync) ;;
   preflight) tools=(awk bash cat dirname find git gitleaks mktemp rg rm sort xargs) ;;
   links)    tools=(bash dirname lychee rg sort) ;;
   coverage) tools=(bash cargo cargo-llvm-cov cargo-nextest dirname git jq mkdir rm rustc) ;;
@@ -29,7 +30,7 @@ case "$lane" in
   egress)   tools=(bash cargo cargo-nextest cat curl dirname git jq kill nft nsenter rustc slirp4netns unshare) ;;
   toolchain-msrv) tools=(awk b3sum bash cargo date dirname git grep jq rustup tee tr wc) ;;
   *)
-    echo "ci-doctor: expected required|fast|lint|contract|security|docs|family|preflight|links|coverage|history-secrets|portable-refusal|nightly|audit|egress|toolchain-msrv|gates|all" >&2
+    echo "ci-doctor: expected required|fast|lint|contract|security|docs|family|faults|preflight|links|coverage|history-secrets|portable-refusal|nightly|audit|egress|toolchain-msrv|gates|all" >&2
     exit 2
     ;;
 esac
@@ -56,7 +57,7 @@ fi
 # Version pins. These are the exact versions the lanes and rust-toolchain.toml
 # already depend on; a mismatch is reported here rather than as a confusing
 # failure three minutes into a build.
-if [[ "$lane" =~ ^(required|fast|lint|contract|security|docs|family|coverage|portable-refusal|nightly|egress|gates|all)$ ]]; then
+if [[ "$lane" =~ ^(required|fast|lint|contract|security|docs|family|faults|coverage|portable-refusal|nightly|egress|gates|all)$ ]]; then
   rust_version="$(rustc --version)"
   [[ "$rust_version" == "rustc 1.97.1 "* ]] || {
     printf 'ci-doctor: expected rustc 1.97.1 (rust-toolchain.toml), found %s\n' "$rust_version" >&2
@@ -75,7 +76,7 @@ if [[ "$lane" =~ ^(required|lint|gates|all)$ ]]; then
     exit 1
   }
 fi
-if [[ "$lane" =~ ^(required|fast|contract|family|coverage|egress|gates|all)$ ]]; then
+if [[ "$lane" =~ ^(required|fast|contract|family|faults|coverage|egress|gates|all)$ ]]; then
   nextest_version="$(cargo-nextest --version)"
   [[ "$nextest_version" == "cargo-nextest 0.9.137 "* ]] || {
     printf 'ci-doctor: expected cargo-nextest 0.9.137, found %s\n' "$nextest_version" >&2

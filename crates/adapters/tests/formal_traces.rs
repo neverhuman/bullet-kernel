@@ -14,6 +14,16 @@ use bullet_domain::{
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
+fn private_tempdir() -> tempfile::TempDir {
+    let mut builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir().expect("private tempdir")
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Trace {
@@ -224,7 +234,7 @@ impl LeaseReplay {
 fn lease_fence_trace_replays_against_sqlite_and_domain_guard() {
     let trace = trace("lease-fence-reclaim.json");
     assert_eq!(trace.model, "LeaseFence");
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_tempdir();
     let mut replay = LeaseReplay::new(&dir.path().join("lease.sqlite"));
     for step in &trace.steps {
         assert_eq!(replay.apply(step), step.expected, "action {}", step.action);
@@ -389,7 +399,7 @@ fn effect_check_traces_replay_against_sqlite_and_effect_machine() {
     for name in ["effect-check-ambiguity.json", "effect-third-party.json"] {
         let trace = trace(name);
         assert_eq!(trace.model, "EffectCheck");
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_tempdir();
         let mut replay = EffectReplay::new(dir.path().join("effect.sqlite"));
         for step in &trace.steps {
             assert_eq!(replay.apply(step), step.expected, "action {}", step.action);

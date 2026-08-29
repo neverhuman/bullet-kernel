@@ -38,6 +38,22 @@ impl<F: ForgeEffects> LostResponseForge<F> {
     pub fn inner(&self) -> &F {
         &self.inner
     }
+
+    /// Consume the injector after its armed response-loss fault has been
+    /// exercised. This is the handoff from settled delivery reconciliation to
+    /// later forge phases; an unconsumed fault refuses rather than disappearing.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DURABLE_QUEUE_INVALID` while a response loss remains armed.
+    pub fn into_inner(self) -> Result<F, EffectsError> {
+        if self.lose_next.is_some() {
+            return Err(EffectsError::DurableQueueInvalid(
+                "cannot discard an armed lost-response fault".into(),
+            ));
+        }
+        Ok(self.inner)
+    }
 }
 
 impl<F: ForgeEffects> ForgeEffects for LostResponseForge<F> {

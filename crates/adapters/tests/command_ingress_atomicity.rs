@@ -1,10 +1,12 @@
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::{CommandRequest, Ledger};
 
 #[test]
 fn public_command_and_dispatch_commit_or_rollback_together() {
     for boundary in 0..=2 {
-        let directory = tempfile::tempdir().expect("tempdir");
+        let directory = support::private_tempdir();
         let path = directory.path().join("command-ingress.sqlite3");
         let request = CommandRequest::new(
             format!("atomic-public-command-{boundary}"),
@@ -47,7 +49,7 @@ fn public_command_and_dispatch_commit_or_rollback_together() {
 
 #[test]
 fn exact_replay_refuses_missing_or_conflicting_dispatch_truth() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let path = directory.path().join("command-corruption.sqlite3");
     let request = CommandRequest::from_json("existing", "run_demo", "{}").expect("request");
     let mut ledger = SqliteLedger::open(&path).expect("open");

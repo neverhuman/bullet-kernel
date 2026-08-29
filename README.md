@@ -122,18 +122,19 @@ or an authority recovery procedure.
 Every lane is one script under `ops/ci/`, reachable as `just <lane>` or
 `bash scripts/ci-local.sh <lane>`.
 
-The exact 642-test inventory is disjoint: 596 standalone, three host-dependent
+The exact 793-test inventory is disjoint: 747 standalone, three host-dependent
 egress, 34 contract, and nine family identities.
 
 | Lane | Command | Contents | Evidence class |
 | --- | --- | --- | --- |
-| fast | `just fast` | digest-bound 596-test standalone partition with all 596 executed and zero skipped, including explicitly feature-enabled verifier fixture tests; both Gitd binary variables are unset so product resolution fails closed | `COMPONENT_PROOF` |
+| fast | `just fast` | digest-bound 747-test standalone partition with all 747 executed and zero skipped, including explicitly feature-enabled verifier fixture tests; both Gitd binary variables are unset so product resolution fails closed | `COMPONENT_PROOF` |
 | lint | `just lint` | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, and inventory/workflow/observation/nightly meta-tests | hygiene gate; no evidence class |
 | contract | `just contract` | exactly 34 offline provider-protocol and simulation tests, executed once; no sibling daemon | `COMPONENT_PROOF` / `SYNTHETIC_PROOF` |
 | security | `just security` | gitleaks (no-git); `cargo deny fetch db` plus a lane-side freshness proof of the RustSec advisory database (refuses at 14 days); `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor --offline --no-ignores --strict-collection .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails | hygiene gate; no evidence class |
 | docs | `just docs` | generated-contract drift, workspace rustdoc, and repository-relative Markdown links | hygiene gate; no evidence class |
 | required | `just check` | fast, lint, contract, security, and docs sequentially, exactly once | unsigned component observation only |
 | family | `BULLET_GITD_BIN=/canonical/absolute/bullet-gitd BULLET_GITD_SHA256=<lowercase-sha256> just family` | exactly nine connected family tests: five transaction-demo identities, three runner identities, and `synthetic_e2e`; missing, relative, non-canonical, non-executable, or digest-mismatched daemon subjects fail | family observation only; not registered until immutable family provisioning exists |
+| offline transaction component | `BULLET_GITD_BIN=/canonical/absolute/bullet-gitd BULLET_GITD_SHA256=<lowercase-sha256> just proof-transaction-offline` | builds locked Kernel subjects offline, runs durable scope and Candidate authority through product Runner/production Gitd, fixture verification, exact Candidate delivery/read-back, stale-fence refusal, and `OUTCOME_UNKNOWN` reconciliation, then retains strict JSON | unsigned `COMPONENT_PROOF`; fixture verifier; explicitly ineligible for transaction/release admission |
 | audit | `just audit` | Jankurai audit against the committed ratchet floor (`AUDIT_FLOOR=57`, may only rise); artifacts under `.jankurai/`; a missing auditor fails | hygiene gate; no evidence class |
 | egress | `just egress` | exactly three host-dependent live proofs, kept outside standalone by the inventory ratchet, cover namespace, uplink, nftables, CONNECT proxy, receipt, and teardown; exits 78 (neutral) when any of `unshare nsenter slirp4netns nft curl cat kill` or unprivileged user namespaces is missing; never green unless all three capability-admitted probes run | `COMPONENT_PROOF` on a Linux host |
 | nightly | `just nightly` | per selected provider: exact live-feature refusal test plus guarded live-conformance half. All PONG is 0; any typed policy or runtime-observation refusal without a hard failure is neutral 78; any test, execution, or spawn failure is 1. Default mode uses marker executables and the checked-in policy, never a real provider | default: `COMPONENT_PROOF` of refusal without spawn; not `LIVE_PROOF` |

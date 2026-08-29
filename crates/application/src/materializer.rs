@@ -10,6 +10,11 @@ use bullet_domain::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(test, feature = "test-seams"))]
+mod synthetic_selection;
+#[cfg(any(test, feature = "test-seams"))]
+pub use synthetic_selection::materialize_synthetic_selection;
+
 /// Input for one plan revision.
 #[derive(Clone, Debug)]
 pub struct PlanInput {

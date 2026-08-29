@@ -17,6 +17,7 @@
 pub mod allowlist;
 pub mod decisions;
 pub mod error;
+pub mod filesystem;
 pub mod namespace;
 pub mod probes;
 pub mod proxy;
@@ -30,6 +31,10 @@ pub mod tunnel;
 pub use allowlist::{AllowlistEntry, AllowlistMode, EgressPolicy, PROVIDERS};
 pub use decisions::{Decision, DecisionLog, DecisionRecord};
 pub use error::{EgressCode, EgressError};
+pub use filesystem::{
+    FilesystemCommandPlan, FilesystemFileV0, FilesystemRuntimeFileV0, FilesystemSandboxProfileV0,
+    PreparedFilesystemSandbox,
+};
 pub use namespace::GATEWAY;
 pub use probes::{Containment, ContainmentProbe, ProbeOutcome, ProbeRecord, JERYU_PORT};
 pub use proxy::{Proxy, ProxyLimits};

@@ -240,7 +240,7 @@ impl DurableQueue {
                     return Err(invalid(format!(
                         "source missing for {}",
                         expected_source.id
-                    )))
+                    )));
                 }
             },
         }

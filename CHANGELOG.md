@@ -42,4 +42,4 @@ heading may be added before the gates in `docs/release.md` hold with receipts.
   component has no run-forever agent loop, so the three-line stub was not a
   runbook and was removed rather than faked into one.
 
-[Unreleased]: https://github.com/bullet-farm/bullet-kernel
+[Unreleased]: https://github.com/neverhuman/bulletfarm

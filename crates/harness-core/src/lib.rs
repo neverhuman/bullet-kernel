@@ -6,6 +6,7 @@
 pub mod adapter;
 pub mod admission;
 pub mod argv;
+pub mod candidate_preparation;
 pub mod capability;
 pub mod conformance;
 pub mod error;
@@ -40,6 +41,14 @@ pub use admission::{
     MAX_MUTATION_PERMIT_TTL_MS, MUTATION_PERMIT_IMPLICIT_ASSERTION, MUTATION_PERMIT_SCHEMA_VERSION,
 };
 pub use argv::{filter_env, ArgvBuilder, InvocationBudget, PreparedInvocation};
+pub use candidate_preparation::{
+    authenticate_candidate_preparation_grant, candidate_preparation_scope_paths_digest,
+    decode_signed_candidate_preparation_grant, verify_candidate_preparation_grant,
+    CandidateNonceConsumption, CandidatePreparationExpectation, CandidatePreparationGrantV1,
+    CandidatePreparationNonceLedger, CandidatePreparationSigningKey,
+    CandidatePreparationVerificationKey, MemoryCandidatePreparationNonceLedger,
+    SignedCandidatePreparationGrantV1, VerifiedCandidatePreparationGrant,
+};
 pub use capability::{Capability, CapabilityMatrix, CapabilityState, PromotionStage};
 pub use error::HarnessError;
 pub use event::{

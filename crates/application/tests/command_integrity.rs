@@ -1,5 +1,5 @@
 use bullet_application::{
-    materialize_plan, CommandRequest, LeaseService, Ledger, MemoryLedger, PlanInput,
+    materialize_plan, CommandRecord, CommandRequest, LeaseService, Ledger, MemoryLedger, PlanInput,
 };
 use bullet_domain::{CommandPhase, DomainError, TaskClass};
 
@@ -157,6 +157,21 @@ fn malformed_or_incoherent_commands_are_inert() {
         .expect("record");
     assert_eq!(stored.phase, CommandPhase::Pending);
     assert!(stored.response.is_none());
+}
+
+#[test]
+fn command_request_and_record_wires_reject_unknown_fields() {
+    let request =
+        CommandRequest::new("closed-command", "run_demo", &serde_json::json!({})).expect("request");
+    let mut request_wire = serde_json::to_value(&request).expect("request JSON");
+    request_wire["unknown"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<CommandRequest>(request_wire).is_err());
+
+    let mut ledger = MemoryLedger::new();
+    let record = ledger.submit_command(&request).expect("record");
+    let mut record_wire = serde_json::to_value(record).expect("record JSON");
+    record_wire["unknown"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<CommandRecord>(record_wire).is_err());
 }
 
 #[test]

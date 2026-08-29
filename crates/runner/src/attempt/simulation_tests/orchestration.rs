@@ -1,9 +1,9 @@
 //! Test-only Runner orchestration after a simulated private clone.
 
 use super::harness::ScriptedSim;
-use super::{build_origin, proposal, seeded_ledger, SimWorkspace};
+use super::{build_origin, candidate::TestCandidateClient, proposal, seeded_ledger, SimWorkspace};
 use crate::journal::JournalSink;
-use crate::{DirectLeaseClient, HeartbeatConfig, LeaseClient, MemoryJournal, MonotonicClock};
+use crate::{HeartbeatConfig, LeaseClient, MemoryJournal, MonotonicClock};
 use bullet_application::{Ledger, MemoryLedger};
 use bullet_domain::{AttemptId, AttemptState, RunnerId, WorkPackageId};
 use std::path::PathBuf;
@@ -14,8 +14,7 @@ use std::time::Duration;
 use super::super::{run_cloned_attempt, AttemptConfig};
 
 type SharedLedger = Arc<Mutex<MemoryLedger>>;
-type TestClient = Arc<DirectLeaseClient<MemoryLedger>>;
-
+type TestClient = Arc<TestCandidateClient>;
 struct FailAdvanceClient {
     inner: TestClient,
     releases: AtomicUsize,
@@ -81,6 +80,7 @@ fn request(package: WorkPackageId, key: &str) -> crate::AcquireRequest {
 }
 
 fn config(origin: PathBuf, base_sha: String, farm_root: PathBuf) -> AttemptConfig {
+    let preservation = farm_root.join("retained");
     let mut config = AttemptConfig::new(
         origin,
         base_sha,
@@ -88,7 +88,8 @@ fn config(origin: PathBuf, base_sha: String, farm_root: PathBuf) -> AttemptConfi
         "test-only orchestration".into(),
         vec!["PONG.txt".into()],
         vec![crate::REPOSITORY_GATE_ID.into()],
-    );
+    )
+    .with_preservation_destination(preservation);
     config.heartbeat = HeartbeatConfig {
         interval: Duration::from_millis(10),
     };
@@ -126,7 +127,7 @@ async fn freeze_after_clone(seed: &str) -> FrozenFixture {
     let temp = tempfile::tempdir().expect("tempdir");
     let (origin, base_sha) = build_origin(temp.path());
     let (ledger, package) = seeded_ledger(seed);
-    let client = Arc::new(DirectLeaseClient::new(ledger.clone()));
+    let client = Arc::new(TestCandidateClient::new(ledger.clone()));
     let key = format!("{seed}-1");
     let grant = client
         .acquire(&request(package.clone(), &key))
@@ -135,11 +136,11 @@ async fn freeze_after_clone(seed: &str) -> FrozenFixture {
     assert_eq!(grant.attempt.fence, 1);
 
     let farm_root = temp.path().join("farm");
-    let config = config(origin.clone(), base_sha.clone(), farm_root.clone());
+    let config = client.admit_config(config(origin.clone(), base_sha.clone(), farm_root.clone()));
     let journal = Arc::new(MemoryJournal::new());
     journal.record("lease_acquired", "TEST_ONLY_SIMULATOR fence 1");
-    let mut workspace = SimWorkspace::new(grant.attempt.id.clone());
-    let info = workspace
+    let mut workspace = SimWorkspace::new(grant.authority_token.clone());
+    let mut info = workspace
         .clone_workspace(
             &config.source_repo,
             &config.base_sha,
@@ -175,7 +176,7 @@ async fn freeze_after_clone(seed: &str) -> FrozenFixture {
                 &grant,
                 &config,
                 &mut workspace,
-                &info,
+                &mut info,
             )
             .await
         })
@@ -219,13 +220,13 @@ async fn cloned_attempt(
     let temp = tempfile::tempdir().expect("tempdir");
     let (origin, base_sha) = build_origin(temp.path());
     let (ledger, package) = seeded_ledger(seed);
-    let client = Arc::new(DirectLeaseClient::new(ledger.clone()));
+    let client = Arc::new(TestCandidateClient::new(ledger.clone()));
     let grant = client
         .acquire(&request(package, &format!("{seed}-attempt")))
         .await
         .expect("test lease");
-    let config = config(origin, base_sha, temp.path().join("farm"));
-    let mut workspace = SimWorkspace::new(grant.attempt.id.clone());
+    let config = client.admit_config(config(origin, base_sha, temp.path().join("farm")));
+    let mut workspace = SimWorkspace::new(grant.authority_token.clone());
     let info = workspace
         .clone_workspace(
             &config.source_repo,
@@ -262,7 +263,7 @@ fn assert_failed_and_requeued(
 
 #[tokio::test]
 async fn provider_start_failure_aborts_heartbeat_and_releases_lease() {
-    let (_temp, ledger, client, grant, config, mut workspace, info, journal) =
+    let (_temp, ledger, client, grant, config, mut workspace, mut info, journal) =
         cloned_attempt("provider-start-failure").await;
     let adapter = Arc::new(ScriptedSim::new());
     adapter.fail_start("injected start refusal");
@@ -275,7 +276,7 @@ async fn provider_start_failure_aborts_heartbeat_and_releases_lease() {
         &grant,
         &config,
         &mut workspace,
-        &info,
+        &mut info,
     )
     .await
     .expect_err("start failure must fail the attempt");
@@ -290,7 +291,7 @@ async fn provider_start_failure_aborts_heartbeat_and_releases_lease() {
 
 #[tokio::test]
 async fn running_transition_failure_terminates_provider_and_releases_lease() {
-    let (_temp, ledger, client, grant, config, mut workspace, info, journal) =
+    let (_temp, ledger, client, grant, config, mut workspace, mut info, journal) =
         cloned_attempt("running-transition-failure").await;
     let adapter = Arc::new(ScriptedSim::new());
     let failing = Arc::new(FailAdvanceClient {
@@ -306,7 +307,7 @@ async fn running_transition_failure_terminates_provider_and_releases_lease() {
         &grant,
         &config,
         &mut workspace,
-        &info,
+        &mut info,
     )
     .await
     .expect_err("advance failure must fail the attempt");
@@ -314,6 +315,40 @@ async fn running_transition_failure_terminates_provider_and_releases_lease() {
     assert_eq!(error.reason_code(), "LEASE_REFUSED");
     assert!(adapter.was_terminated());
     assert_eq!(failing.releases.load(Ordering::SeqCst), 1);
+    assert_failed_and_requeued(&ledger, &grant.attempt.id, journal.as_ref());
+}
+
+#[tokio::test]
+async fn preservation_failure_requeues_and_never_succeeds() {
+    let (_temp, ledger, client, grant, config, mut workspace, mut info, journal) =
+        cloned_attempt("preservation-failure").await;
+    workspace.fail_preserve("injected preservation refusal");
+    let adapter = Arc::new(ScriptedSim::new());
+    adapter.override_proposal(
+        0,
+        proposal(serde_json::json!([
+            { "path": "PONG.txt", "op": "create", "contents": "PONG\n" }
+        ])),
+    );
+
+    let error = run_cloned_attempt(
+        client,
+        adapter,
+        journal.clone(),
+        Arc::new(MonotonicClock::new()),
+        &grant,
+        &config,
+        &mut workspace,
+        &mut info,
+    )
+    .await
+    .expect_err("preservation refusal must fail the Attempt");
+
+    assert_eq!(error.reason_code(), "IO_FAILED");
+    let stages = journal.stages();
+    assert!(stages.contains(&"candidate_prepared".to_string()));
+    assert!(!stages.contains(&"candidate_preserved".to_string()));
+    assert!(!stages.contains(&"workspace_cleaned".to_string()));
     assert_failed_and_requeued(&ledger, &grant.attempt.id, journal.as_ref());
 }
 
@@ -392,14 +427,13 @@ async fn successor_uses_fence_two_while_salvaged_workspace_stays_inert() {
         .await
         .expect("successor lease");
     assert_eq!(grant.attempt.fence, 2);
-    let mut config = config(
+    let config = fixture.client.admit_config(config(
         fixture.origin.clone(),
         fixture.base_sha.clone(),
         fixture.farm_root.clone(),
-    );
-    config.bindings = super::test_only_bindings(&grant);
-    let mut workspace = SimWorkspace::new(grant.attempt.id.clone());
-    let info = workspace
+    ));
+    let mut workspace = SimWorkspace::new(grant.authority_token.clone());
+    let mut info = workspace
         .clone_workspace(
             &config.source_repo,
             &config.base_sha,
@@ -425,17 +459,25 @@ async fn successor_uses_fence_two_while_salvaged_workspace_stays_inert() {
         &grant,
         &config,
         &mut workspace,
-        &info,
+        &mut info,
     )
     .await
     .expect("successor completes in test simulator");
     assert_eq!(outcome.fence, 2);
     assert_eq!(outcome.candidate.prepared_at, "TEST_ONLY_SIMULATOR");
-    assert!(info.repo_dir.join("PONG.txt").is_file());
+    assert!(!info.repo_dir.exists());
+    assert!(outcome
+        .preservation
+        .receipt
+        .destination
+        .join("generation/repo/PONG.txt")
+        .is_file());
     assert!(!fixture.repo_dir.join("PONG.txt").exists());
     assert!(fixture.runtime_dir.join("checkpoint.json").is_file());
     let successor_stages = successor_journal.stages();
     assert!(successor_stages.contains(&"candidate_prepared".to_string()));
+    assert!(successor_stages.contains(&"candidate_preserved".to_string()));
+    assert!(successor_stages.contains(&"workspace_cleaned".to_string()));
     assert!(successor_stages.contains(&"released".to_string()));
     assert_eq!(
         successor_stages.last().map(String::as_str),

@@ -8,9 +8,19 @@ use bullet_application::{
 };
 use bullet_domain::{AttemptId, EffectId};
 
+fn private_tempdir() -> tempfile::TempDir {
+    let mut builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir().expect("private tempdir")
+}
+
 #[test]
 fn sqlite_ledger_passes_effect_conformance() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = private_tempdir();
     let mut n = 0u32;
     check_effects(|| {
         n += 1;
@@ -21,7 +31,7 @@ fn sqlite_ledger_passes_effect_conformance() {
 
 #[test]
 fn effect_rows_survive_reopen_with_state_and_retries() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = private_tempdir();
     let path = dir.path().join("durable.sqlite");
     let intent = EffectIntentRecord {
         id: EffectId::from_seed("du-1"),

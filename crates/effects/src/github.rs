@@ -3,8 +3,9 @@
 use crate::error::EffectsError;
 use crate::forge::{require_candidate_ref, ForgeDescriptor, ForgeEffects, PushRequest};
 use crate::integration::{
-    CheckPublication, CheckReceipt, ForgeIntegration, IntegrationDescriptor, IntegrationSubject,
-    IntegrationSubjectRequest, MergeGroupSubject, ProtectionState,
+    CheckPublication, CheckReceipt, ForgeIntegration, IntegrationDescriptor, IntegrationReceipt,
+    IntegrationSubject, IntegrationSubjectRequest, MergeGroupSubject, ProtectedIntegrationRequest,
+    ProtectionState,
 };
 
 /// Provider label.
@@ -71,6 +72,13 @@ impl ForgeIntegration for GitHubForge {
         _req: &IntegrationSubjectRequest,
     ) -> Result<IntegrationSubject, EffectsError> {
         Err(self.refuse("ensure_integration_subject"))
+    }
+
+    fn integrate_protected(
+        &mut self,
+        _req: &ProtectedIntegrationRequest,
+    ) -> Result<IntegrationReceipt, EffectsError> {
+        Err(self.refuse("integrate_protected"))
     }
 
     fn merge_group_subject(

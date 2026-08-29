@@ -1,12 +1,17 @@
-//! Guarded live-conformance orchestration: policy load, runtime observation,
-//! operator key custody, a durable conformance lease, local provider admission,
-//! launch-grant mint/verify, egress isolation, and exactly one dispatched
-//! read-only turn — then a sealed, fsync'd receipt. The checked-in v1alpha1
-//! policy refuses at `POLICY_LIVE_ADMISSION_DISABLED`; a valid v1alpha2 policy
-//! reaches the production adapters' `RUNTIME_PROBE_UNAVAILABLE` refusal before
-//! key read, authority mutation, egress, or spawn. Only strict unit tests
-//! provide an observed fixture subject and reach the later mechanics.
+//! Guarded live-conformance orchestration: policy load, operator enrollment,
+//! operator key custody, a durable conformance lease, a granted and contained
+//! runtime probe, runtime admission, local provider admission, launch-grant
+//! mint/verify, egress isolation, and exactly one dispatched read-only turn —
+//! then a sealed, fsync'd receipt. The checked-in v1alpha1 policy refuses at
+//! `POLICY_LIVE_ADMISSION_DISABLED`; a valid v1alpha2 policy without an
+//! enrollment record refuses at `ENROLLMENT_MISSING` before key read,
+//! authority mutation, egress, or spawn; an enrolled executable is probed
+//! once under its own grant and containment and, absent a genuine conformance
+//! observation, refuses at `RUNTIME_PROBE_NOT_ADMISSIBLE` so `ADMISSION` is
+//! never reached on probe facts alone (see `probe_steps`).
 
+mod enrollment;
+mod probe_steps;
 mod steps;
 
 #[cfg(any(test, feature = "test-seams"))]
@@ -17,14 +22,29 @@ pub mod seam;
 #[cfg(test)]
 mod policy_tests;
 #[cfg(test)]
+mod probe_tests;
+#[cfg(test)]
 mod tests;
+
+pub use enrollment::{
+    enrollment_path, load_provider_enrollment, EnrolledProvider, EnrollmentError,
+    ProviderEnrollmentV1, MAX_BUDGET_MICRO_USD, MAX_ENROLLMENT_BYTES, MAX_ENROLLMENT_WINDOW_MS,
+    MAX_LABEL_BYTES, PROVIDER_ENROLLMENT_SCHEMA,
+};
+pub use probe_steps::{
+    ProbeNonceLedger, PROBE_CONTAINMENT_UNPROVEN, RUNTIME_ADMISSION_MISMATCH,
+    RUNTIME_PROBE_EXECUTABLE_DRIFT,
+};
+pub use steps::ENROLLMENT_SUBJECT_MISMATCH;
 
 use crate::launch_grant::LaunchGrantNonceStore;
 use crate::leases::LeaseService;
 use crate::policy_snapshot::LoadedPolicy;
 use crate::store::Ledger;
+use bullet_domain::AttemptId;
 use bullet_harness_core::launch_grant::{
-    LaunchGrantExpectation, LaunchGrantVerificationKey, SignedLaunchGrant,
+    LaunchGrantExpectation, LaunchGrantVerificationKey, ProbeExpectation, SignedLaunchGrant,
+    SignedProbeGrant,
 };
 use bullet_harness_core::live::artifact_digest;
 use bullet_harness_core::{
@@ -85,6 +105,22 @@ pub struct LiveConformanceRun {
     pub expectation: Option<LaunchGrantExpectation>,
     /// The policy-admitted verification key, on `PONG`.
     pub verification_key: Option<LaunchGrantVerificationKey>,
+    /// The verified single-use probe grant, once `PROBE_GRANT` passed, so a
+    /// caller can prove its nonce is spent (replay refusal).
+    pub probe_grant: Option<ProbeGrantRecord>,
+}
+
+/// The verified probe grant with the exact subject and conformance Attempt it
+/// was verified under; re-verifying it through [`ProbeNonceLedger`] on the
+/// same ledger must refuse `PROBE_GRANT_REPLAYED`.
+#[derive(Debug)]
+pub struct ProbeGrantRecord {
+    /// The signed single-use token.
+    pub token: SignedProbeGrant,
+    /// Provider, executable digest, and containment class it was verified for.
+    pub expectation: ProbeExpectation,
+    /// The conformance Attempt its nonce was registered under.
+    pub attempt_id: AttemptId,
 }
 
 /// A step failure carrying the sealed, already-written receipt.
@@ -122,10 +158,17 @@ impl LiveConformanceError {
     }
 }
 
+/// Receipt facts collected as the steps run, plus the probe-grant run evidence
+/// handed back to the caller (never sealed into the receipt).
 #[derive(Default)]
 pub(super) struct ReceiptFields {
     executable_path: Option<String>,
     executable_blake3: Option<String>,
+    enrollment_blake3: Option<String>,
+    probe_grant_digest: Option<String>,
+    probe_containment_receipt_digest: Option<String>,
+    probe_observation_digest: Option<String>,
+    probe_grant: Option<ProbeGrantRecord>,
     grant_id: Option<String>,
     grant_envelope_digest: Option<String>,
     egress_receipt_digest: Option<String>,
@@ -243,6 +286,7 @@ where
         &mut log,
         &mut fields,
     );
+    let probe_grant = fields.probe_grant.take();
 
     match result {
         Ok(success) if success.pong_match => {
@@ -262,6 +306,7 @@ where
                 grant: Some(success.grant),
                 expectation: Some(success.expectation),
                 verification_key: Some(success.verification_key),
+                probe_grant,
             })
         }
         Ok(_) => {
@@ -313,6 +358,7 @@ where
                     grant: None,
                     expectation: None,
                     verification_key: None,
+                    probe_grant,
                 })
             } else {
                 Err(Box::new(LiveConformanceError {
@@ -349,6 +395,10 @@ fn finalize(
         steps: log.into_records(),
         executable_path: fields.executable_path.clone(),
         executable_blake3: fields.executable_blake3.clone(),
+        enrollment_blake3: fields.enrollment_blake3.clone(),
+        probe_grant_digest: fields.probe_grant_digest.clone(),
+        probe_containment_receipt_digest: fields.probe_containment_receipt_digest.clone(),
+        probe_observation_digest: fields.probe_observation_digest.clone(),
         grant_id: fields.grant_id.clone(),
         grant_envelope_digest: fields.grant_envelope_digest.clone(),
         egress_receipt_digest: fields.egress_receipt_digest.clone(),

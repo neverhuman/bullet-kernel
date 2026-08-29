@@ -13,6 +13,7 @@ pub const COMMAND_RECONCILED_EVENT: &str = "command_reconciled";
 
 /// Inbound command.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommandRequest {
     /// Caller-supplied idempotency key.
     pub idempotency_key: String,
@@ -24,6 +25,7 @@ pub struct CommandRequest {
 
 /// Recorded command.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommandRecord {
     /// Durable id.
     pub id: CommandId,

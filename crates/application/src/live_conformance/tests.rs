@@ -1,39 +1,51 @@
 //! Full-path live-conformance tests. No real provider binary is spawned: a
-//! fake `claude` shell script emits a canned stream-JSON transcript. A strict
-//! `cfg(test)` dispatcher supplies the otherwise unavailable observed runtime
-//! subject; no production adapter can synthesize it. The
+//! fake `claude` shell script answers `--version` for the granted probe and
+//! emits a canned stream-JSON transcript for the turn; every spawn appends its
+//! argv to a marker. Enrollment records are written 0600 for the ENROLL-1
+//! loader. A strict `cfg(test)` dispatcher supplies the otherwise unavailable
+//! observed conformance subject; no production adapter can synthesize it. The
 //! v1alpha2 test policy is loaded through the production loader (no bypass);
 //! a no-op egress backend supplies well-formed containment evidence. The
-//! fake-binary harness is shared with `policy_tests`.
+//! fake-binary harness is shared with `policy_tests` and `probe_tests`, which
+//! also owns the strict dispatcher.
 
 use super::egress::NoopEgressBackend;
+use super::probe_tests::ObservedClaudeDispatcher;
 use super::seam::live_admission_policy;
-use super::{run_live_conformance, LiveConformanceOptions};
+use super::{
+    enrollment_path, run_live_conformance, LiveConformanceError, LiveConformanceOptions,
+    LiveConformanceRun, ProbeNonceLedger, PROVIDER_ENROLLMENT_SCHEMA,
+};
 use crate::launch_grant::StoreNonceLedger;
 use crate::memory::MemoryLedger;
 use crate::policy_snapshot::LoadedPolicy;
-use bullet_domain::Observation;
+use bullet_domain::ProfileId;
 use bullet_harness_claude::ClaudeAdapter;
-use bullet_harness_core::launch_grant::{verify_launch_grant, write_new_signing_key};
+use bullet_harness_core::launch_grant::{
+    verify_launch_grant, verify_probe_grant, write_new_signing_key, LaunchGrantSigningKey,
+};
 use bullet_harness_core::{
-    executable_digest, AgentEvent, AgentEventKind, CommandFactory, EgressBackend,
-    EgressIsolationEvidence, EgressProbe, EgressProbeOutcome, EventNormalizer, HarnessDescriptor,
-    HarnessError, LiveDispatcher, LiveOutcome, LiveStep, LiveTurnOutcome, LiveTurnRequest,
-    NativeMeta, PatchMutation, PatchOperation, PatchProposal, Preimage, PreparedEgress,
-    ProbeResult, ProfileIdentity, ProfileRef, ProviderProtocol, RuntimeConformanceObservation,
-    RuntimeProbeSnapshot,
+    executable_digest, EgressBackend, EgressIsolationEvidence, EgressProbe, EgressProbeOutcome,
+    HarnessError, LiveDispatcher, LiveOutcome, LiveStep, LiveStepRecord, PreparedEgress,
+    StepStatus,
 };
 use chrono::{DateTime, TimeZone, Utc};
-use serde_json::json;
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use serde_json::{json, Value};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
 const V1ALPHA1_POLICY: &[u8] = include_bytes!("../../tests/fixtures/policy-v1alpha1.json");
 pub(super) const HAPPY_CANARY: &str = "bullet-conformance-canary-happy-0001";
-const EXPOSED_CANARY: &str = "bullet-conformance-canary-exposed-e2e-0001";
+pub(super) const EXPOSED_CANARY: &str = "bullet-conformance-canary-exposed-e2e-0001";
+/// The enrolled version label; the fake prints it inside a longer line.
+pub(super) const FAKE_VERSION: &str = "2.1.243";
+const FAKE_VERSION_LINE: &str = "2.1.243 (Claude Code)";
+/// The deterministic run instant of these tests.
+pub(super) const NOW_MS: u64 = 1_000;
 
 const INIT_PREFIX: &str = r#"{"type":"system","subtype":"init","uuid":"00000000-0000-4000-8000-000000000002","session_id":"00000000-0000-4000-8000-000000000001","apiKeySource":"none","claude_code_version":"2.1.243","cwd":""#;
 const INIT_SUFFIX: &str = r#"","tools":["Read","Glob","Grep"],"mcp_servers":[],"model":"claude-offline-model","permissionMode":"plan","slash_commands":[],"output_style":"default","agents":[],"skills":[],"plugins":[],"analytics_disabled":true,"product_feedback_disabled":true}"#;
@@ -46,13 +58,17 @@ pub(super) enum FakeMode {
     Canary,
     NonzeroAfterPong,
     TimeoutAfterPong,
+    /// `--version` leaks the exposed canary.
+    ProbeCanary,
+    /// `--version` prints the version line but exits 3.
+    ProbeNonzero,
 }
 
 pub(super) struct Harness {
     _root: TempDir,
-    pub(super) data_dir: std::path::PathBuf,
-    pub(super) executable: std::path::PathBuf,
-    marker: std::path::PathBuf,
+    pub(super) data_dir: PathBuf,
+    pub(super) executable: PathBuf,
+    marker: PathBuf,
 }
 
 impl Harness {
@@ -63,6 +79,7 @@ impl Harness {
         fs::create_dir_all(&data_dir).unwrap();
         let bin_dir = base.join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
+        fs::set_permissions(&bin_dir, fs::Permissions::from_mode(0o700)).unwrap();
         let executable = bin_dir.join("claude");
         let marker = base.join("ran.marker");
         write_fake(&executable, &marker, mode);
@@ -75,179 +92,137 @@ impl Harness {
         }
     }
 
-    pub(super) fn marker_runs(&self) -> usize {
+    /// One `ran <argv>` line per spawn of the fake, in order.
+    pub(super) fn marker_lines(&self) -> Vec<String> {
         fs::read_to_string(&self.marker)
-            .map(|text| text.lines().count())
-            .unwrap_or(0)
+            .map(|text| text.lines().map(str::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn marker_runs(&self) -> usize {
+        self.marker_lines().len()
+    }
+
+    /// A valid enrollment of the fake for a window around `now_ms`.
+    pub(super) fn enrollment_record(&self, now_ms: u64) -> Value {
+        json!({
+            "schema": PROVIDER_ENROLLMENT_SCHEMA,
+            "provider": "claude",
+            "executable": self.executable,
+            "executable_blake3": executable_digest(&self.executable).unwrap(),
+            "protocol": "claude_stream_json",
+            "version": FAKE_VERSION,
+            "profile_id": ProfileId::from_seed("claude").as_str(),
+            "budget_micro_usd_max": 250_000,
+            "valid_from_unix_ms": now_ms.saturating_sub(60_000),
+            "valid_until_unix_ms": now_ms + 60_000,
+            "enrolled_by": "operator@conformance.test",
+        })
+    }
+
+    /// Write raw enrollment bytes with the 0600 custody the loader requires.
+    pub(super) fn write_enrollment_bytes(&self, bytes: &[u8]) -> PathBuf {
+        let path = enrollment_path(&self.data_dir, "claude");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let _ = fs::remove_file(&path);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        file.write_all(bytes).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
+    pub(super) fn write_enrollment(&self, value: &Value) -> PathBuf {
+        self.write_enrollment_bytes(&serde_json::to_vec(value).unwrap())
+    }
+
+    pub(super) fn enroll(&self, now_ms: u64) -> PathBuf {
+        self.write_enrollment(&self.enrollment_record(now_ms))
     }
 }
 
 fn write_fake(path: &Path, marker: &Path, mode: FakeMode) {
-    let mut script = String::from("#!/bin/bash\n");
-    script.push_str("echo ran >> '");
-    script.push_str(&marker.display().to_string());
-    script.push_str("'\n");
-    match mode {
-        FakeMode::Pong | FakeMode::NonzeroAfterPong | FakeMode::TimeoutAfterPong => {
-            script.push_str("printf '%s%s%s\\n' '");
-            script.push_str(INIT_PREFIX);
-            script.push_str("' \"$PWD\" '");
-            script.push_str(INIT_SUFFIX);
-            script.push_str("'\n");
-            script.push_str("printf '%s\\n' '");
-            script.push_str(ASSISTANT);
-            script.push_str("'\n");
-            script.push_str("printf '%s\\n' '");
-            script.push_str(RESULT);
-            script.push_str("'\n");
-            match mode {
-                FakeMode::NonzeroAfterPong => script.push_str("exit 7\n"),
-                FakeMode::TimeoutAfterPong => script.push_str("sleep 30\n"),
-                FakeMode::Pong | FakeMode::Canary => {}
-            }
+    let version = match mode {
+        FakeMode::ProbeCanary => format!("printf '%s\\n' '{EXPOSED_CANARY}'; exit 0"),
+        FakeMode::ProbeNonzero => format!("printf '%s\\n' '{FAKE_VERSION_LINE}'; exit 3"),
+        _ => format!("printf '%s\\n' '{FAKE_VERSION_LINE}'; exit 0"),
+    };
+    let turn = match mode {
+        FakeMode::Canary => format!("printf '%s\\n' '{EXPOSED_CANARY}'"),
+        _ => {
+            let tail = match mode {
+                FakeMode::NonzeroAfterPong => "exit 7",
+                FakeMode::TimeoutAfterPong => "sleep 30",
+                _ => "",
+            };
+            format!(
+                "printf '%s%s%s\\n' '{INIT_PREFIX}' \"$PWD\" '{INIT_SUFFIX}'\n\
+                 printf '%s\\n' '{ASSISTANT}'\nprintf '%s\\n' '{RESULT}'\n{tail}"
+            )
         }
-        FakeMode::Canary => {
-            script.push_str("printf '%s\\n' '");
-            script.push_str(EXPOSED_CANARY);
-            script.push_str("'\n");
-        }
-    }
+    };
+    let script = format!(
+        "#!/bin/bash\necho \"ran $*\" >> '{}'\nif [ \"$1\" = --version ]; then\n{version}\nfi\n{turn}\n",
+        marker.display()
+    );
     fs::write(path, script).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-fn now() -> DateTime<Utc> {
-    Utc.timestamp_millis_opt(1_000).single().unwrap()
+pub(super) fn now() -> DateTime<Utc> {
+    Utc.timestamp_millis_opt(NOW_MS as i64).single().unwrap()
 }
 
-/// Strict-test-only observed subject. Production adapters inherit
-/// `LiveDispatcher`'s typed default refusal and can never construct this
-/// positive path.
-pub(super) struct ObservedClaudeDispatcher {
-    inner: ClaudeAdapter,
+/// Operator key custody, a live policy at `generation`, and a fresh ledger.
+pub(super) struct Prepared {
+    pub key: LaunchGrantSigningKey,
+    pub policy: LoadedPolicy,
+    pub ledger: MemoryLedger,
 }
 
-impl ObservedClaudeDispatcher {
-    pub(super) const fn new() -> Self {
-        Self {
-            inner: ClaudeAdapter::new(),
-        }
-    }
-}
-
-impl LiveDispatcher for ObservedClaudeDispatcher {
-    fn provider(&self) -> &str {
-        <ClaudeAdapter as LiveDispatcher>::provider(&self.inner)
-    }
-
-    fn descriptor(&self) -> HarnessDescriptor {
-        <ClaudeAdapter as LiveDispatcher>::descriptor(&self.inner)
-    }
-
-    fn observed_runtime_version(&self) -> &str {
-        <ClaudeAdapter as LiveDispatcher>::observed_runtime_version(&self.inner)
-    }
-
-    fn required_protocol(&self) -> ProviderProtocol {
-        <ClaudeAdapter as LiveDispatcher>::required_protocol(&self.inner)
-    }
-
-    fn observe_runtime_conformance(
-        &self,
-        executable: &Path,
-        profile: &ProfileRef,
-        observed_at: DateTime<Utc>,
-    ) -> Result<RuntimeConformanceObservation, HarnessError> {
-        let mut descriptor = self.descriptor();
-        descriptor.binary = executable
-            .file_name()
-            .expect("fixture executable basename")
-            .to_string_lossy()
-            .into_owned();
-        descriptor.version = Observation::value(self.observed_runtime_version().to_string());
-        let probe = RuntimeProbeSnapshot {
-            descriptor,
-            executable: executable.to_path_buf(),
-            executable_blake3: executable_digest(executable)?,
-            protocol: self.required_protocol(),
-            identity: ProbeResult {
-                profile: Observation::value(ProfileIdentity {
-                    provider: self.provider().to_string(),
-                    email: profile.expected.email.clone(),
-                    account_id: None,
-                    subscription: None,
-                    auth_method: Some("strict-test-fixture".into()),
-                }),
-                version: self.observed_runtime_version().to_string(),
-            },
-            observed_at,
-        };
-        RuntimeConformanceObservation::new(
-            probe,
-            vec![],
-            vec![],
-            conformance_events(self.provider()),
-            conformance_proposal(),
-        )
-    }
-
-    fn dispatch_live_turn(
-        &self,
-        admission: &bullet_harness_core::EvaluatedAdmission,
-        factory: &CommandFactory<'_>,
-        request: &LiveTurnRequest,
-    ) -> Result<LiveTurnOutcome, HarnessError> {
-        <ClaudeAdapter as LiveDispatcher>::dispatch_live_turn(
-            &self.inner,
-            admission,
-            factory,
-            request,
-        )
+pub(super) fn prepare(harness: &Harness, generation: u64) -> Prepared {
+    let key =
+        write_new_signing_key(&harness.data_dir, "bullet-kernel", "launch-grant-alpha").unwrap();
+    let policy = live_admission_policy(&key, generation).unwrap();
+    Prepared {
+        key,
+        policy,
+        ledger: MemoryLedger::new(),
     }
 }
 
-fn conformance_events(provider: &str) -> Vec<AgentEvent> {
-    let mut normalizer = EventNormalizer::new(
-        bullet_harness_core::AgentSessionId::new("live-admission"),
-        provider,
-    );
-    vec![
-        normalizer.accept(AgentEventKind::TurnStarted, json!({}), &NativeMeta::none()),
-        normalizer.accept(
-            AgentEventKind::TurnCompleted,
-            json!({}),
-            &NativeMeta::none(),
-        ),
-    ]
+/// One run at the deterministic instant on the prepared ledger and policy.
+pub(super) fn run_once(
+    harness: &Harness,
+    prepared: &mut Prepared,
+    dispatcher: &dyn LiveDispatcher,
+    egress: &dyn EgressBackend,
+    options: &LiveConformanceOptions,
+) -> Result<LiveConformanceRun, Box<LiveConformanceError>> {
+    run_live_conformance(
+        &harness.data_dir,
+        &mut prepared.ledger,
+        &prepared.policy,
+        dispatcher,
+        egress,
+        options,
+        now(),
+    )
 }
 
-fn conformance_proposal() -> PatchProposal {
-    PatchProposal {
-        schema_version: 1,
-        proposal_id: format!("cnt_{}", "1".repeat(64)),
-        producing_attempt_id: format!("atm_{}", "2".repeat(64)),
-        base_checkpoint_id: format!("ckp_{}", "3".repeat(64)),
-        base_checkpoint_digest: "4".repeat(64),
-        intent_summary: "strict-test live conformance subject".into(),
-        operations: vec![PatchOperation {
-            path: "PONG.txt".into(),
-            preimage: Preimage::Absent,
-            mutation: PatchMutation::Write {
-                content_utf8: "PONG\n".into(),
-            },
-        }],
-        gate_ids: vec![super::steps::PROPOSAL_GATE_ID.to_string()],
-        claims: vec![],
-        uncertainties: vec![],
-        done: true,
-    }
+pub(super) fn step_status(records: &[LiveStepRecord], step: LiveStep) -> StepStatus {
+    records.iter().find(|r| r.step == step).unwrap().status
 }
 
 pub(super) fn options(harness: &Harness, canary: &str) -> LiveConformanceOptions {
     LiveConformanceOptions {
         provider: "claude".into(),
         executable: harness.executable.clone(),
-        version: "2.1.243".into(),
+        version: FAKE_VERSION.into(),
         profile_email: "claude@conformance.test".into(),
         adapter_label: "claude-stream-json-v1".into(),
         model: "claude-offline-model".into(),
@@ -262,204 +237,14 @@ pub(super) fn options(harness: &Harness, canary: &str) -> LiveConformanceOptions
     }
 }
 
-fn operator_key(data_dir: &Path) -> bullet_harness_core::launch_grant::LaunchGrantSigningKey {
-    write_new_signing_key(data_dir, "bullet-kernel", "launch-grant-alpha").unwrap()
+/// Egress backend whose evidence may report a reached destination and whose
+/// `prepare` may rewrite the executable (drift between grant and spawn).
+pub(super) struct HostileEgress {
+    pub reached: bool,
+    pub tamper: Option<PathBuf>,
 }
 
-#[test]
-fn v1alpha1_policy_refuses_before_key_probe_or_spawn() {
-    let harness = Harness::new(FakeMode::Pong);
-    // Deliberately no operator key is created: refusal must precede the key read.
-    let policy = LoadedPolicy::from_bytes(V1ALPHA1_POLICY).unwrap();
-    let mut ledger = MemoryLedger::new();
-    let egress = NoopEgressBackend::new();
-    let run = run_live_conformance(
-        &harness.data_dir,
-        &mut ledger,
-        &policy,
-        &ClaudeAdapter::new(),
-        &egress,
-        &options(&harness, HAPPY_CANARY),
-        now(),
-    )
-    .expect("policy refusal is a designed, neutral outcome");
-    assert_eq!(run.receipt.outcome, LiveOutcome::Refused);
-    assert_eq!(
-        run.receipt.refusal_reason.as_deref(),
-        Some("POLICY_LIVE_ADMISSION_DISABLED")
-    );
-    assert_eq!(run.receipt.failed_step, Some(LiveStep::Policy));
-    assert!(run.grant.is_none());
-    assert_eq!(
-        harness.marker_runs(),
-        0,
-        "the fake binary must never execute"
-    );
-    assert!(!harness.data_dir.join("authority/launch-grant.key").exists());
-    run.receipt.verify().unwrap();
-}
-
-#[test]
-fn v1alpha2_test_policy_dispatches_pong_and_consumes_the_nonce() {
-    let harness = Harness::new(FakeMode::Pong);
-    let key = operator_key(&harness.data_dir);
-    let policy = live_admission_policy(&key, 7).unwrap();
-    let mut ledger = MemoryLedger::new();
-    let egress = NoopEgressBackend::new();
-    let run = run_live_conformance(
-        &harness.data_dir,
-        &mut ledger,
-        &policy,
-        &ObservedClaudeDispatcher::new(),
-        &egress,
-        &options(&harness, HAPPY_CANARY),
-        now(),
-    )
-    .expect("PONG");
-    assert_eq!(run.receipt.outcome, LiveOutcome::Pong);
-    assert!(run.receipt.pong_match);
-    assert_eq!(run.receipt.response_text.as_deref(), Some("PONG"));
-    assert_eq!(run.receipt.policy_generation, Some(7));
-    assert_eq!(run.receipt.cost_micro_usd, Some(10_000));
-    assert!(run.receipt.grant_id.is_some());
-    assert!(run.receipt.egress_receipt_digest.is_some());
-    assert!(run.receipt_path.exists());
-    assert_eq!(harness.marker_runs(), 1, "exactly one provider spawn");
-    run.receipt.verify().unwrap();
-
-    // Second verification of the same grant replays the single-use nonce.
-    let grant = run.grant.unwrap();
-    let expectation = run.expectation.unwrap();
-    let key = run.verification_key.unwrap();
-    let replay = verify_launch_grant(
-        &grant,
-        &key,
-        &expectation,
-        &mut StoreNonceLedger(&mut ledger),
-    )
-    .unwrap_err();
-    assert_eq!(replay.reason_code(), "LAUNCH_GRANT_REPLAYED");
-
-    for (mode, reason_code) in [
-        (FakeMode::NonzeroAfterPong, "PROVIDER_FAILURE"),
-        (FakeMode::TimeoutAfterPong, "WALL_CLOCK_TIMEOUT"),
-    ] {
-        let hostile = Harness::new(mode);
-        let key = operator_key(&hostile.data_dir);
-        let policy = live_admission_policy(&key, 8).unwrap();
-        let mut ledger = MemoryLedger::new();
-        let mut hostile_options = options(&hostile, HAPPY_CANARY);
-        hostile_options.wall_timeout = std::time::Duration::from_secs(1);
-        let error = run_live_conformance(
-            &hostile.data_dir,
-            &mut ledger,
-            &policy,
-            &ObservedClaudeDispatcher::new(),
-            &NoopEgressBackend::new(),
-            &hostile_options,
-            now(),
-        )
-        .expect_err("a terminal PONG cannot override process failure");
-        assert_eq!(error.reason_code(), reason_code);
-        assert_eq!(error.step, LiveStep::Dispatch);
-        assert_eq!(error.receipt.outcome, LiveOutcome::Failed);
-        assert!(!error.receipt.pong_match);
-        error.receipt.verify().unwrap();
-    }
-}
-
-#[test]
-fn a_tampered_executable_never_verifies_and_never_dispatches() {
-    let harness = Harness::new(FakeMode::Pong);
-    let key = operator_key(&harness.data_dir);
-    let policy = live_admission_policy(&key, 3).unwrap();
-    let mut ledger = MemoryLedger::new();
-    let egress = NoopEgressBackend::new();
-    let run = run_live_conformance(
-        &harness.data_dir,
-        &mut ledger,
-        &policy,
-        &ObservedClaudeDispatcher::new(),
-        &egress,
-        &options(&harness, HAPPY_CANARY),
-        now(),
-    )
-    .expect("PONG");
-    assert_eq!(harness.marker_runs(), 1);
-
-    // Tamper the executable after minting; a fresh observation must not match
-    // the grant that was minted for the original bytes.
-    fs::write(&harness.executable, b"#!/bin/bash\necho tampered\n").unwrap();
-    fs::set_permissions(&harness.executable, fs::Permissions::from_mode(0o755)).unwrap();
-    let fresh = bullet_harness_core::executable_digest(&harness.executable).unwrap();
-    let mut expectation = run.expectation.unwrap();
-    expectation.provider.executable_digest = fresh;
-    let grant = run.grant.unwrap();
-    let vkey = run.verification_key.unwrap();
-    let error = verify_launch_grant(
-        &grant,
-        &vkey,
-        &expectation,
-        &mut StoreNonceLedger(&mut ledger),
-    )
-    .unwrap_err();
-    assert_eq!(error.reason_code(), "LAUNCH_GRANT_SUBJECT_MISMATCH");
-    assert_eq!(harness.marker_runs(), 1, "no additional provider spawn");
-}
-
-#[test]
-fn egress_evidence_that_reached_a_destination_blocks_dispatch() {
-    let harness = Harness::new(FakeMode::Pong);
-    let key = operator_key(&harness.data_dir);
-    let policy = live_admission_policy(&key, 5).unwrap();
-    let mut ledger = MemoryLedger::new();
-    let egress = ReachedEgressBackend;
-    let error = run_live_conformance(
-        &harness.data_dir,
-        &mut ledger,
-        &policy,
-        &ObservedClaudeDispatcher::new(),
-        &egress,
-        &options(&harness, HAPPY_CANARY),
-        now(),
-    )
-    .expect_err("reached egress must fail closed");
-    assert_eq!(error.reason_code(), "ADMISSION_REFUSED");
-    assert_eq!(error.step, LiveStep::AdmitEgress);
-    assert_eq!(error.receipt.outcome, LiveOutcome::Failed);
-    assert_eq!(harness.marker_runs(), 0, "no spawn once egress is unproven");
-    error.receipt.verify().unwrap();
-}
-
-#[test]
-fn a_canary_in_provider_output_fails_the_run() {
-    let harness = Harness::new(FakeMode::Canary);
-    let key = operator_key(&harness.data_dir);
-    let policy = live_admission_policy(&key, 9).unwrap();
-    let mut ledger = MemoryLedger::new();
-    let egress = NoopEgressBackend::new();
-    let error = run_live_conformance(
-        &harness.data_dir,
-        &mut ledger,
-        &policy,
-        &ObservedClaudeDispatcher::new(),
-        &egress,
-        &options(&harness, EXPOSED_CANARY),
-        now(),
-    )
-    .expect_err("canary exposure must fail the run");
-    assert_eq!(error.reason_code(), "SECRET_CANARY_EXPOSURE");
-    assert_eq!(error.step, LiveStep::CanaryScan);
-    assert_eq!(error.receipt.outcome, LiveOutcome::Failed);
-    assert!(!error.receipt.pong_match);
-    error.receipt.verify().unwrap();
-}
-
-/// Egress backend whose evidence reports a destination was reached; admission
-/// must retain the egress blocker.
-struct ReachedEgressBackend;
-
-impl EgressBackend for ReachedEgressBackend {
+impl EgressBackend for HostileEgress {
     fn sandbox_manifest_digest(&self, _provider: &str) -> Result<String, HarnessError> {
         Ok("a".repeat(64))
     }
@@ -469,14 +254,27 @@ impl EgressBackend for ReachedEgressBackend {
         _provider: &str,
         _workdir: &Path,
     ) -> Result<Box<dyn PreparedEgress + '_>, HarnessError> {
-        Ok(Box::new(ReachedPrepared))
+        if let Some(path) = &self.tamper {
+            fs::write(path, b"#!/bin/bash\necho tampered\n").unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        Ok(Box::new(HostilePrepared {
+            reached: self.reached,
+        }))
     }
 }
 
-struct ReachedPrepared;
+struct HostilePrepared {
+    reached: bool,
+}
 
-impl PreparedEgress for ReachedPrepared {
+impl PreparedEgress for HostilePrepared {
     fn evidence(&self) -> EgressIsolationEvidence {
+        let direct = if self.reached {
+            EgressProbeOutcome::Reached
+        } else {
+            EgressProbeOutcome::Refused
+        };
         EgressIsolationEvidence {
             receipt_digest: "b".repeat(64),
             ruleset_digest: "c".repeat(64),
@@ -484,7 +282,7 @@ impl PreparedEgress for ReachedPrepared {
             probes: vec![
                 EgressProbe {
                     name: "direct-internet".into(),
-                    outcome: EgressProbeOutcome::Reached,
+                    outcome: direct,
                 },
                 EgressProbe {
                     name: "host-jeryu".into(),
@@ -502,4 +300,195 @@ impl PreparedEgress for ReachedPrepared {
         }
         command
     }
+}
+
+#[test]
+fn v1alpha1_policy_refuses_before_enrollment_key_probe_or_spawn() {
+    let harness = Harness::new(FakeMode::Pong);
+    harness.enroll(NOW_MS);
+    // Deliberately no operator key is created: refusal must precede the key read.
+    let policy = LoadedPolicy::from_bytes(V1ALPHA1_POLICY).unwrap();
+    let mut ledger = MemoryLedger::new();
+    let run = run_live_conformance(
+        &harness.data_dir,
+        &mut ledger,
+        &policy,
+        &ClaudeAdapter::new(),
+        &NoopEgressBackend::new(),
+        &options(&harness, HAPPY_CANARY),
+        now(),
+    )
+    .expect("policy refusal is a designed, neutral outcome");
+    assert_eq!(run.receipt.outcome, LiveOutcome::Refused);
+    assert_eq!(
+        run.receipt.refusal_reason.as_deref(),
+        Some("POLICY_LIVE_ADMISSION_DISABLED")
+    );
+    assert_eq!(run.receipt.failed_step, Some(LiveStep::Policy));
+    assert_eq!(run.receipt.steps.len(), LiveStep::ALL.len());
+    for step in LiveStep::ALL.into_iter().skip(1) {
+        assert_eq!(step_status(&run.receipt.steps, step), StepStatus::NotRun);
+    }
+    assert!(run.receipt.enrollment_blake3.is_none());
+    assert!(run.grant.is_none() && run.probe_grant.is_none());
+    assert_eq!(
+        harness.marker_runs(),
+        0,
+        "the fake binary must never execute"
+    );
+    assert!(!harness.data_dir.join("authority/launch-grant.key").exists());
+    run.receipt.verify().unwrap();
+}
+
+#[test]
+fn v1alpha2_test_policy_probes_dispatches_pong_and_spends_both_nonces() {
+    let harness = Harness::new(FakeMode::Pong);
+    harness.enroll(NOW_MS);
+    let mut prepared = prepare(&harness, 7);
+    let dispatcher = ObservedClaudeDispatcher::new();
+    let egress = NoopEgressBackend::new();
+    let run = run_once(
+        &harness,
+        &mut prepared,
+        &dispatcher,
+        &egress,
+        &options(&harness, HAPPY_CANARY),
+    )
+    .expect("PONG");
+    assert_eq!(run.receipt.outcome, LiveOutcome::Pong);
+    assert!(run.receipt.pong_match);
+    assert_eq!(run.receipt.response_text.as_deref(), Some("PONG"));
+    assert_eq!(run.receipt.policy_generation, Some(7));
+    assert_eq!(run.receipt.cost_micro_usd, Some(10_000));
+    assert!(run.receipt.grant_id.is_some());
+    assert!(run.receipt.egress_receipt_digest.is_some());
+    assert!(run.receipt.probe_observation_digest.is_some());
+    assert!(run.receipt_path.exists());
+    let spawns = harness.marker_lines();
+    assert_eq!(
+        spawns.len(),
+        2,
+        "one probe spawn, then one turn: {spawns:?}"
+    );
+    assert_eq!(spawns[0], "ran --version");
+    run.receipt.verify().unwrap();
+
+    // Re-verifying either grant replays its single-use nonce.
+    let (grant, vkey) = (run.grant.unwrap(), run.verification_key.unwrap());
+    let mut expectation = run.expectation.unwrap();
+    let replay = verify_launch_grant(
+        &grant,
+        &vkey,
+        &expectation,
+        &mut StoreNonceLedger(&mut prepared.ledger),
+    )
+    .unwrap_err();
+    assert_eq!(replay.reason_code(), "LAUNCH_GRANT_REPLAYED");
+    // Tampering the executable afterwards: a fresh observation must not match
+    // the grant minted for the original bytes, and nothing else spawns.
+    fs::write(&harness.executable, b"#!/bin/bash\necho tampered\n").unwrap();
+    fs::set_permissions(&harness.executable, fs::Permissions::from_mode(0o755)).unwrap();
+    expectation.provider.executable_digest = executable_digest(&harness.executable).unwrap();
+    let error = verify_launch_grant(
+        &grant,
+        &vkey,
+        &expectation,
+        &mut StoreNonceLedger(&mut prepared.ledger),
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "LAUNCH_GRANT_SUBJECT_MISMATCH");
+    assert_eq!(harness.marker_runs(), 2, "no additional provider spawn");
+    let probe = run.probe_grant.unwrap();
+    let replay = verify_probe_grant(
+        &probe.token,
+        &prepared.policy.binding(),
+        &[prepared.key.verification_key().unwrap()],
+        &mut ProbeNonceLedger {
+            store: &mut prepared.ledger,
+            attempt_id: &probe.attempt_id,
+        },
+        NOW_MS,
+        &probe.expectation,
+    )
+    .unwrap_err();
+    assert_eq!(replay.reason_code(), "PROBE_GRANT_REPLAYED");
+
+    for (mode, reason_code) in [
+        (FakeMode::NonzeroAfterPong, "PROVIDER_FAILURE"),
+        (FakeMode::TimeoutAfterPong, "WALL_CLOCK_TIMEOUT"),
+    ] {
+        let hostile = Harness::new(mode);
+        hostile.enroll(NOW_MS);
+        let mut prepared = prepare(&hostile, 8);
+        let mut hostile_options = options(&hostile, HAPPY_CANARY);
+        hostile_options.wall_timeout = std::time::Duration::from_secs(1);
+        let error = run_once(
+            &hostile,
+            &mut prepared,
+            &dispatcher,
+            &egress,
+            &hostile_options,
+        )
+        .expect_err("a terminal PONG cannot override process failure");
+        assert_eq!(error.reason_code(), reason_code);
+        assert_eq!(error.step, LiveStep::Dispatch);
+        assert_eq!(error.receipt.outcome, LiveOutcome::Failed);
+        assert!(!error.receipt.pong_match);
+        error.receipt.verify().unwrap();
+    }
+}
+
+#[test]
+fn egress_evidence_that_reached_a_destination_blocks_the_probe_and_dispatch() {
+    let harness = Harness::new(FakeMode::Pong);
+    harness.enroll(NOW_MS);
+    let mut prepared = prepare(&harness, 5);
+    let egress = HostileEgress {
+        reached: true,
+        tamper: None,
+    };
+    let error = run_once(
+        &harness,
+        &mut prepared,
+        &ObservedClaudeDispatcher::new(),
+        &egress,
+        &options(&harness, HAPPY_CANARY),
+    )
+    .expect_err("reached egress must fail closed");
+    assert_eq!(error.reason_code(), "PROBE_CONTAINMENT_UNPROVEN");
+    assert_eq!(error.step, LiveStep::ProbeContainment);
+    assert!(error.detail.contains("direct-internet"));
+    assert_eq!(error.receipt.outcome, LiveOutcome::Failed);
+    assert_eq!(
+        step_status(&error.receipt.steps, LiveStep::ProbeGrant),
+        StepStatus::Pass
+    );
+    assert!(error.receipt.probe_containment_receipt_digest.is_none());
+    assert_eq!(harness.marker_runs(), 0, "no spawn once egress is unproven");
+    error.receipt.verify().unwrap();
+}
+
+#[test]
+fn a_canary_in_provider_output_fails_the_run() {
+    let harness = Harness::new(FakeMode::Canary);
+    harness.enroll(NOW_MS);
+    let mut prepared = prepare(&harness, 9);
+    let error = run_once(
+        &harness,
+        &mut prepared,
+        &ObservedClaudeDispatcher::new(),
+        &NoopEgressBackend::new(),
+        &options(&harness, EXPOSED_CANARY),
+    )
+    .expect_err("canary exposure must fail the run");
+    assert_eq!(error.reason_code(), "SECRET_CANARY_EXPOSURE");
+    assert_eq!(error.step, LiveStep::CanaryScan);
+    assert_eq!(error.receipt.outcome, LiveOutcome::Failed);
+    assert!(!error.receipt.pong_match);
+    assert_eq!(
+        harness.marker_runs(),
+        2,
+        "the clean probe ran, then the turn"
+    );
+    error.receipt.verify().unwrap();
 }

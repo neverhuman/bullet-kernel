@@ -4,11 +4,11 @@
 // DO NOT EDIT BY HAND.
 pub const SCHEMA_VERSION: &str = "v1alpha1";
 pub const SCHEMA_BUNDLE_HASH: &str =
-    "0942b0662628b82bc882bc02935db276adf01772ee27f9b257b0e5e9c6a32ce0";
+    "d8792cb9d172ebcad18e38659418b7806fa9f1f0938dcaabb5a300340d80f69f";
 pub const INVARIANT_REGISTRY_HASH: &str =
-    "fd849db391c75398fd82f0f26da18a284ab1a5e5d1c6ff36c01f5015973a053f";
+    "f43cf796d47c18bee2cc11c9084919d0b22b20f6f2b82a8bb5c924ee3108bf9a";
 pub const POLICY_SNAPSHOT_HASH: &str =
-    "827f880ef4a0d14cc56512adcfecd5ae5b141d2b9ef3886f390ce1f31cd30bf6";
+    "cb716c5a6ab0c760efbc4723e2407075e8ee2af1cb23efbde4353ab4862d20a8";
 pub const CANONICAL_GOLDEN_JSON: &str = r##"{"a":"é","array":[true,null,17],"z":"last"}"##;
 pub const CANONICAL_GOLDEN_HASH: &str =
     "1d800cb94962906f78d42cb8cc84c2c078311a50e35ca515240b800abc3d2263";
@@ -491,6 +491,46 @@ pub struct CandidateManifestV1 {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CandidatePreparationGrantV1 {
+    pub schema_version: String,
+    pub candidate_preparation_grant_id: String,
+    pub issuer: String,
+    pub key_id: String,
+    pub signing_purpose: String,
+    pub claims_domain: String,
+    pub envelope_domain: String,
+    pub request_digest: String,
+    pub authority_token_digest: String,
+    pub grant_nonce: String,
+    pub repository_id: String,
+    pub mission_id: String,
+    pub plan_revision_id: String,
+    pub work_package_id: String,
+    pub variant_id: String,
+    pub attempt_id: String,
+    pub attempt_fence: u64,
+    pub runner_id: String,
+    pub runner_epoch: u64,
+    pub workspace_id: String,
+    pub scope_grant_digest: String,
+    pub scope_revision: u64,
+    pub context_revision: u64,
+    pub change_id: String,
+    pub graph_revision_id: String,
+    pub parent_candidate_ids: Vec<String>,
+    pub context_capsule_id: String,
+    pub execution_envelope_id: String,
+    pub environment_digest: String,
+    pub toolchain_digest: String,
+    pub authority_epoch: u64,
+    pub freeze_generation: u64,
+    pub issued_at_unix_ms: u64,
+    pub not_before_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CertificationKey {
     pub schema_version: String,
     pub certification_key_id: String,
@@ -719,6 +759,45 @@ pub struct EvidenceV1 {
     pub started_at_unix_ms: u64,
     pub completed_at_unix_ms: u64,
     pub signature: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionEnvelopeV1 {
+    pub schema_version: String,
+    pub execution_envelope_id: String,
+    pub issuer: String,
+    pub key_id: String,
+    pub signing_purpose: String,
+    pub claims_domain: String,
+    pub runner_id: String,
+    pub runner_epoch: u64,
+    pub provider: String,
+    pub model: String,
+    pub adapter: String,
+    pub provider_profile_id: String,
+    pub platform: String,
+    pub containment_profile_id: String,
+    pub environment_digest: String,
+    pub toolchain_digest: String,
+    pub sandbox_image_digest: String,
+    pub tools: Vec<ExecutionToolV1>,
+    pub authority_epoch: u64,
+    pub freeze_generation: u64,
+    pub issued_at_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionToolV1 {
+    pub schema_version: String,
+    pub tool_id: String,
+    pub role: String,
+    pub executable_path: String,
+    pub executable_digest: String,
+    pub descriptor_digest: String,
+    pub version: String,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1402,6 +1481,17 @@ pub struct ReleaseSignerPolicyV1 {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ReviewerAssignment {
+    pub schema_version: String,
+    pub reviewer_assignment_id: String,
+    pub candidate_id: String,
+    pub reviewer_principal: String,
+    pub independence_class: String,
+    pub seed: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewReceipt {
     pub schema_version: String,
     pub review_receipt_id: String,
@@ -1410,17 +1500,6 @@ pub struct ReviewReceipt {
     pub reason_code: String,
     pub subject_hash: String,
     pub signature: String,
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReviewerAssignment {
-    pub schema_version: String,
-    pub reviewer_assignment_id: String,
-    pub candidate_id: String,
-    pub reviewer_principal: String,
-    pub independence_class: String,
-    pub seed: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1522,6 +1601,15 @@ pub struct SentinelResult {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignedAuthorityEnvelopeV1 {
+    pub schema_version: String,
+    pub issuer: String,
+    pub key_id: String,
+    pub paseto: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedCandidatePreparationGrantV1 {
     pub schema_version: String,
     pub issuer: String,
     pub key_id: String,

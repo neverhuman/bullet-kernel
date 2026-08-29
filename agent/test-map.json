@@ -81,6 +81,30 @@
       "command": "cargo test -p bullet-harness-core -p bullet-harness-sim",
       "purpose": "prove adapter trait, capability matrix, and simulator conformance"
     },
+    "crates/harness-core/tests/candidate_execution_envelope.rs": {
+      "command": "cargo test -p bullet-harness-core --test candidate_execution_envelope",
+      "purpose": "prove exact ordered execution-tool and environment bindings for Candidate preparation"
+    },
+    "crates/application/tests/authority_scope.rs": {
+      "command": "cargo test -p bullet-application --test authority_scope",
+      "purpose": "prove ScopeGrant schema closure, exact revision/envelope bounds, hostile path refusal, command identity, and the shared ordered-path digest"
+    },
+    "crates/adapters/tests/authority_scope.rs": {
+      "command": "cargo test -p bullet-adapters --test authority_scope",
+      "purpose": "prove atomic durable ScopeGrant admission, exact replay across restart, rollback, stale/freeze refusal, and backup identity"
+    },
+    "crates/adapters/tests/candidate_preparation.rs": {
+      "command": "cargo test -p bullet-adapters --test candidate_preparation",
+      "purpose": "prove atomic durable Candidate-grant issuance, replay, rollback, schema refusal, and nonce consumption"
+    },
+    "apps/bullet-farmd/tests/candidate_preparation_rpc.rs": {
+      "command": "cargo test -p bullet-farmd --test candidate_preparation_rpc",
+      "purpose": "prove peer-authenticated bounded workload-UDS Candidate authority/source/issuance/read-back, exact replay and restart, and typed hostile refusal"
+    },
+    "apps/bullet-farmd/tests/kernel_authority_candidate.rs": {
+      "command": "cargo test -p bullet-farmd --test kernel_authority_candidate",
+      "purpose": "prove prepare-candidate final check authenticates and exactly matches durable schema-19 grant truth, then consumes its nonce once across restart"
+    },
     "crates/harness-claude/": {
       "command": "cargo test -p bullet-harness-claude",
       "purpose": "prove Claude adapter parsing and argv guardrails"
@@ -104,6 +128,34 @@
     "crates/runner/": {
       "command": "bash scripts/ci-local.sh fast",
       "purpose": "prove Runner components, including sealed Gitd binary admission, in the standalone partition; connected family sources have exact overrides"
+    },
+    "ops/ci/faults.sh": {
+      "command": "bash scripts/ci-local.sh faults",
+      "purpose": "pin and execute 13 already-inventoried component boundary identities under private-target custody, including the six-process SQLite/local-bare recovery matrix parent; release.fault-suite remains blocked"
+    },
+    "ops/ci/proof-transaction-offline.sh": {
+      "command": "BULLET_GITD_BIN=<absolute admitted binary> BULLET_GITD_SHA256=<exact lowercase digest> bash ops/ci/proof-transaction-offline.sh",
+      "purpose": "repeat the connected offline component bridge and retain its strict unsigned fixture receipt; this does not provide independent transaction or release evidence"
+    },
+    "ops/ci/proof-transaction-offline-test.sh": {
+      "command": "bash ops/ci/proof-transaction-offline-test.sh",
+      "purpose": "prove hostile Gitd, digest, output-directory, and Cargo-target CLI subjects refuse before Cargo or output mutation, while pinning offline locked builds and component-only receipt guards"
+    },
+    "ops/ci/proof-synthetic-dogfood.sh": {
+      "command": "BULLET_GITD_BIN=<absolute admitted binary> BULLET_GITD_SHA256=<exact lowercase digest> bash ops/ci/proof-synthetic-dogfood.sh",
+      "purpose": "repeat two isolated simulator Candidates, blinded non-quality selection, sealed winner, exact retained-origin replay, fresh successor-fence effect authority, fixture verification, local delivery/check/protected-integration/observation closure, ten named and five ordinary-chaos cells including both post-acquire grant-readback cleanup paths, and two create-once unsigned component receipts with every higher eligibility hard-false"
+    },
+    "ops/ci/proof-synthetic-dogfood-test.sh": {
+      "command": "bash ops/ci/proof-synthetic-dogfood-test.sh",
+      "purpose": "prove credential, Gitd, digest, and Cargo-target subjects refuse before Cargo and pin exact locked farmd/app/verifier builds, inherited verifier admission, two-receipt custody, fault ordering, selected effect closure, and hard-false eligibility guards"
+    },
+    "ops/ci/nextest-groups-test.sh": {
+      "command": "bash ops/ci/nextest-groups-test.sh",
+      "purpose": "prove the fast profile serializes exactly the 21 SQLite migration/schema-identity tests without widening timeouts or reducing coverage"
+    },
+    "ops/ci/proof-custody-test.sh": {
+      "command": "bash ops/ci/proof-custody-test.sh",
+      "purpose": "prove standalone and inherited CI proof custody, including explicit removal of an outer admitted Cargo target before the standalone fixture"
     },
     "crates/runner/tests/heartbeat_stale.rs": {
       "command": "bash scripts/ci-local.sh family",
@@ -184,6 +236,10 @@
     ".config/": {
       "command": "bash scripts/ci-local.sh fast",
       "purpose": "nextest profiles used by every lane"
+    },
+    ".config/nextest.toml": {
+      "command": "bash ops/ci/nextest-groups-test.sh",
+      "purpose": "prove the fast-only max-one SQLite migration group expands to exactly its reviewed identities while retaining the frozen timeout"
     },
     "Cargo.toml": {
       "command": "bash scripts/ci-local.sh fast",

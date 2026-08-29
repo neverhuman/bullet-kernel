@@ -96,6 +96,20 @@ impl EffectState {
         )
     }
 
+    /// Normalize any restart-recoverable state to `OUTCOME_UNKNOWN` before a
+    /// durable recovery claim is created. No other state enters recovery.
+    pub fn normalize_unresolved_for_recovery(self) -> Result<Self, DomainError> {
+        match self {
+            Self::Dispatching | Self::ReceiptPending | Self::OutcomeUnknown => {
+                Ok(Self::OutcomeUnknown)
+            }
+            other => Err(DomainError::InvalidTransition {
+                from: other.as_str().into(),
+                to: Self::OutcomeUnknown.as_str().into(),
+            }),
+        }
+    }
+
     /// Absorbing states.
     #[must_use]
     pub fn is_terminal(self) -> bool {

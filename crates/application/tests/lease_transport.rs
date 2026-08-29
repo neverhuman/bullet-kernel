@@ -7,7 +7,9 @@ use bullet_application::lease_transport::{
 };
 use bullet_application::records::{HeartbeatRequest, ReleaseRequest};
 use bullet_application::store::ProjectionReader;
-use bullet_application::{materialize_plan, MemoryLedger, PlanInput};
+use bullet_application::{
+    materialize_plan, materialize_synthetic_selection, Ledger, MemoryLedger, PlanInput,
+};
 use bullet_domain::{AttemptState, RunnerId, TaskClass, WorkPackageId};
 use bullet_harness_core::lease_transport::{
     LeaseTransportOperation, LeaseTransportSigningKey, LEASE_TRANSPORT_AUDIENCE,
@@ -66,6 +68,62 @@ fn acquire_then_readback_returns_the_same_grant() {
     let second = service.readback(&readback, &body, now).unwrap();
     assert_eq!(first.attempt.id, second.attempt.id);
     assert_eq!(first.lease.fence, second.lease.fence);
+}
+
+#[test]
+fn test_service_ambiguity_refuses_without_consuming_permit_or_mutating_ledger() {
+    let mut ledger = MemoryLedger::new();
+    let at = ledger.simulation_time();
+    let mut graph = materialize_synthetic_selection(
+        &mut ledger,
+        "signed-lease-ambiguous",
+        &PlanInput {
+            title: "ambiguous signed lease".into(),
+            objective: "refuse first-Variant fallback".into(),
+            packages: vec![("one".into(), TaskClass::MechanicalCodeEdit)],
+        },
+        &at,
+    )
+    .unwrap();
+    let body = body(graph.packages[0].id.clone());
+    let key = LeaseTransportSigningKey::generate("kernel-local", "lease-1").unwrap();
+    let mut service = SignedLeaseService::new(key.verification_key().unwrap());
+    let now = 1_700_000_000_000;
+    let permit = issue_permit(
+        &key,
+        &mut service,
+        LeaseTransportOperation::Acquire,
+        &body,
+        now,
+    )
+    .unwrap();
+    let events = ledger.list_events().unwrap();
+    let attempts = ledger.list_attempts(&graph.mission.id).unwrap();
+    let ready = ledger.ready_rows().unwrap();
+    let outbox = ledger.outbox_all().unwrap();
+    let error = service
+        .acquire(&mut ledger, &permit, &body, now)
+        .unwrap_err();
+    assert_eq!(error.reason_code(), "STORE_FAILURE");
+    assert_eq!(ledger.list_events().unwrap(), events);
+    assert_eq!(ledger.list_attempts(&graph.mission.id).unwrap(), attempts);
+    assert_eq!(ledger.ready_rows().unwrap(), ready);
+    assert_eq!(ledger.outbox_all().unwrap(), outbox);
+    assert!(ledger.list_leases().unwrap().is_empty());
+    assert!(ledger.transport_grant_rows_mut().is_empty());
+    assert_eq!(
+        ledger
+            .get_graph(&graph.mission.id)
+            .unwrap()
+            .unwrap()
+            .variants,
+        graph.variants
+    );
+
+    graph.variants.truncate(1);
+    ledger.put_graph(&graph).unwrap();
+    let grant = service.acquire(&mut ledger, &permit, &body, now).unwrap();
+    assert_eq!(grant.lease.variant_id, graph.variants[0].id);
 }
 
 #[test]

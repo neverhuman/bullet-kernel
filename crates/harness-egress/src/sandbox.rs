@@ -5,6 +5,7 @@
 use crate::allowlist::EgressPolicy;
 use crate::decisions::{DecisionLog, DecisionRecord};
 use crate::error::{EgressCode, EgressError};
+use crate::filesystem::PreparedFilesystemSandbox;
 use crate::namespace::{Namespace, BACKEND, GATEWAY};
 use crate::probes::{require_all_pass, run_probes, ProbeContext};
 use crate::proxy::{Proxy, ProxyLimits};
@@ -176,6 +177,27 @@ pub struct PreparedSandbox {
 }
 
 impl PreparedSandbox {
+    /// Build an exact filesystem-contained provider command inside this
+    /// already-proven network namespace. The returned command has a closed
+    /// environment and does not resolve either executable through `PATH`.
+    ///
+    /// Keep `filesystem` alive until the returned command has spawned.
+    ///
+    /// # Errors
+    ///
+    /// `EGRESS_FILESYSTEM_CHANGED` when any admitted host subject drifted.
+    pub fn filesystem_command(
+        &self,
+        filesystem: &PreparedFilesystemSandbox,
+        provider_args: &[&str],
+    ) -> Result<Command, EgressError> {
+        let proxy_url = self.proxy_url();
+        let plan = filesystem.command_plan_with_proxy(provider_args, Some(&proxy_url))?;
+        let mut command = self.namespace.enter(plan.program().as_os_str());
+        command.args(plan.arguments()).env_clear();
+        Ok(command)
+    }
+
     /// Command running `program` inside the namespace and the sandbox process
     /// group. The environment is exactly `env` plus `HTTPS_PROXY`,
     /// `HTTP_PROXY`, `NO_PROXY` (and their lowercase twins) pointing at the

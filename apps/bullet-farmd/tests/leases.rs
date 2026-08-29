@@ -1,6 +1,8 @@
 //! The browser API exposes readiness only. Runner lease mutations require a
 //! separate authenticated internal transport and therefore fail closed here.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::{materialize_plan, Ledger, PlanInput};
 use bullet_domain::TaskClass;
@@ -72,7 +74,7 @@ fn json_body(response: &str) -> Value {
 
 #[tokio::test]
 async fn ready_is_a_read_only_watermarked_projection() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let db = directory.path().join("ready.sqlite");
     let package = seed_graph(&db);
     let (status, response) = request(start(&db).await, "GET", "/api/v1/ready").await;
@@ -86,7 +88,7 @@ async fn ready_is_a_read_only_watermarked_projection() {
 
 #[tokio::test]
 async fn runner_mutations_are_not_mounted_on_the_public_router() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let db = directory.path().join("closed.sqlite");
     let package = seed_graph(&db);
     let addr = start(&db).await;

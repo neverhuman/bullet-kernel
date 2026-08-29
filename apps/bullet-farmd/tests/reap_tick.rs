@@ -7,6 +7,8 @@
 //! Raw SQL places an exact expired window without sleeping, exactly as the
 //! adapter's own `lease_reaper.rs` already does.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::records::MAX_LEASE_TTL_SECONDS;
 use bullet_application::{
@@ -118,7 +120,7 @@ async fn get(addr: SocketAddr, path: &str) -> String {
 
 #[test]
 fn tick_and_acquirer_contend_for_one_expired_lease_and_reclaim_it_exactly_once() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
 
     // Round one. The acquirer holds the write lock, reclaims inside its own
     // transaction and then fails after the reclaim, so its reclamation is rolled
@@ -256,7 +258,7 @@ fn tick_and_acquirer_contend_for_one_expired_lease_and_reclaim_it_exactly_once()
 
 #[test]
 fn the_tick_never_touches_a_live_lease_and_is_silent_when_nothing_is_due() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let path = directory.path().join("live.sqlite");
     let mut ledger = SqliteLedger::open(&path).expect("open");
 
@@ -316,7 +318,7 @@ fn the_tick_never_touches_a_live_lease_and_is_silent_when_nothing_is_due() {
 
 #[tokio::test]
 async fn health_reports_the_tick_only_after_it_has_run() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let path = directory.path().join("health.sqlite");
     let (app, state) =
         bullet_farmd::api::daemon(&path, None, LOCAL_ORIGIN.to_string(), None).expect("daemon");
@@ -367,7 +369,7 @@ async fn health_reports_the_tick_only_after_it_has_run() {
 
 #[tokio::test]
 async fn fleet_drops_the_lease_the_tick_reclaimed_and_shows_the_work_ready() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let path = directory.path().join("fleet.sqlite");
     let (_graph, grant) = crashed_writer(&path, "fleet");
     force_expired(&path);

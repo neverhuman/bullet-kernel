@@ -7,10 +7,7 @@ use crate::forge::{
     require_candidate_ref, require_oid, ForgeDescriptor, ForgeEffects, PushRequest,
 };
 use crate::git_env::run_git;
-use crate::integration::{
-    Capability, CheckPublication, CheckReceipt, ForgeIntegration, IntegrationDescriptor,
-    IntegrationSubject, IntegrationSubjectRequest, MergeGroupSubject, ProtectionState,
-};
+use crate::local_state::LocalState;
 use bullet_application::ZERO_OID;
 use std::path::{Path, PathBuf};
 
@@ -20,7 +17,8 @@ pub const LOCAL_PROVIDER: &str = "local-bare";
 /// Local bare repository forge.
 #[derive(Clone, Debug)]
 pub struct LocalBareForge {
-    bare: PathBuf,
+    pub(crate) bare: PathBuf,
+    pub(crate) state: LocalState,
 }
 
 impl LocalBareForge {
@@ -35,9 +33,9 @@ impl LocalBareForge {
         if code != 0 {
             return Err(EffectsError::GitFailed(format!("init --bare: {err}")));
         }
-        Ok(Self {
-            bare: path.to_path_buf(),
-        })
+        let bare = path.to_path_buf();
+        let state = LocalState::open(&bare)?;
+        Ok(Self { bare, state })
     }
 
     /// Open an existing bare repository.
@@ -53,9 +51,9 @@ impl LocalBareForge {
                 path.display()
             )));
         }
-        Ok(Self {
-            bare: path.to_path_buf(),
-        })
+        let bare = path.to_path_buf();
+        let state = LocalState::open(&bare)?;
+        Ok(Self { bare, state })
     }
 
     /// Path of the bare repository.
@@ -115,70 +113,6 @@ impl ForgeEffects for LocalBareForge {
         let (code, out, err) = run_git(None, &["ls-remote", &bare, ref_name])?;
         if code != 0 {
             return Err(EffectsError::GitFailed(format!("ls-remote: {err}")));
-        }
-        Ok(out
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().next())
-            .map(ToString::to_string))
-    }
-}
-
-impl ForgeIntegration for LocalBareForge {
-    fn integration_descriptor(&self) -> IntegrationDescriptor {
-        IntegrationDescriptor {
-            exact_oid_cas: Capability::SupportedWithLimitations(
-                "client --force-with-lease against a local bare repo",
-            ),
-            protected_refs: Capability::Unsupported,
-            check_runs: Capability::Unsupported,
-            merge_group: Capability::Unsupported,
-            exact_oid_readback: Capability::Supported,
-            third_party_credential: Capability::Unsupported,
-        }
-    }
-
-    fn read_protection(&self, target: &str) -> Result<ProtectionState, EffectsError> {
-        Err(EffectsError::UnsupportedByAdapter(format!(
-            "local bare forge has no protection rules on {target}"
-        )))
-    }
-
-    fn publish_check(&mut self, _req: &CheckPublication) -> Result<CheckReceipt, EffectsError> {
-        Err(EffectsError::UnsupportedByAdapter(
-            "local bare forge cannot publish check runs".into(),
-        ))
-    }
-
-    fn read_check(&self, _sha: &str, _name: &str) -> Result<Option<CheckReceipt>, EffectsError> {
-        Err(EffectsError::UnsupportedByAdapter(
-            "local bare forge cannot store check runs".into(),
-        ))
-    }
-
-    fn ensure_integration_subject(
-        &mut self,
-        _req: &IntegrationSubjectRequest,
-    ) -> Result<IntegrationSubject, EffectsError> {
-        Err(EffectsError::UnsupportedByAdapter(
-            "local bare forge has no pull-request subject".into(),
-        ))
-    }
-
-    fn merge_group_subject(
-        &self,
-        _subject: &IntegrationSubject,
-    ) -> Result<Option<MergeGroupSubject>, EffectsError> {
-        Ok(None)
-    }
-
-    fn read_target(&self, target: &str) -> Result<Option<String>, EffectsError> {
-        let bare = self.bare.display().to_string();
-        let (code, out, err) = run_git(None, &["ls-remote", &bare, target])?;
-        if code != 0 {
-            return Err(EffectsError::TargetReadbackUnavailable(format!(
-                "ls-remote {target}: {err}"
-            )));
         }
         Ok(out
             .lines()

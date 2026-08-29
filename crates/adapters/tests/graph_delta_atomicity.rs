@@ -1,5 +1,7 @@
 //! Graph Delta command, graph, event, and result form one durable transaction.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::{
     graph_digest, materialize_plan, CommandRequest, GraphDelta, GraphOp, Ledger, LedgerError,
@@ -35,7 +37,7 @@ fn graph_and_delta(path: &Path, seed: &str) -> (SqliteLedger, StoredGraph, Graph
 #[test]
 fn sqlite_failure_boundaries_recover_to_exactly_old_or_new() {
     for fail_after in 0..=5 {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = support::private_tempdir();
         let path = dir.path().join("delta.sqlite");
         let (mut ledger, before, delta) = graph_and_delta(&path, "sqlite-delta-failpoint");
         let before_json = serde_json::to_string(&before).expect("graph json");
@@ -93,7 +95,7 @@ fn sqlite_failure_boundaries_recover_to_exactly_old_or_new() {
 
 #[test]
 fn sqlite_refusal_and_conflicting_request_are_durable_and_inert() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("delta.sqlite");
     let (mut ledger, graph, delta) = graph_and_delta(&path, "sqlite-delta-conflict");
     let request =

@@ -1,10 +1,14 @@
 //! The ordered provider-side + authority steps of the guarded live path. Each
 //! step records its own status; a step that never ran stays `NotRun`. The
-//! runtime/conformance observation is requested immediately after policy
-//! validation and before credentials or authority. Production adapters fail
-//! closed until a real observation boundary exists; only strict unit tests
-//! supply observed fixture data.
+//! enrollment record is required immediately after policy validation and
+//! before credentials or authority; the granted, contained runtime probe and
+//! runtime admission (`probe_steps`) run after the durable lease and before
+//! `ADMISSION`, which is reached only through a genuine conformance
+//! observation. Production adapters fail closed at runtime admission until a
+//! real read-only turn port exists; only strict unit tests supply one.
 
+use super::enrollment::{load_provider_enrollment, EnrolledProvider, EnrollmentError};
+use super::probe_steps::{failure, run_probe_phase, ProbeContext};
 use super::{LiveConformanceOptions, ReceiptFields, StepFailure, StepSuccess};
 use crate::launch_grant::{
     datetime_unix_ms, durable_lease_binding, LaunchGrantIssuer, LaunchGrantNonceStore,
@@ -35,6 +39,10 @@ use std::time::Duration;
 pub const PROPOSAL_GATE_ID: &str =
     "gat_9999999999999999999999999999999999999999999999999999999999999999";
 
+/// The enrollment names a different executable, version, protocol, or provider
+/// than the run was asked to prove.
+pub const ENROLLMENT_SUBJECT_MISMATCH: &str = "ENROLLMENT_SUBJECT_MISMATCH";
+
 /// Run the full ordered path. On success every step is `Pass` (or `PongMatch`
 /// is `Failed` when the response was not `PONG`); on failure the offending
 /// step is recorded and the rest stay `NotRun`.
@@ -53,7 +61,7 @@ pub(super) fn run_steps<L>(
 where
     L: Ledger + LaunchGrantNonceStore,
 {
-    // 1. POLICY — refuse before any key read, runtime observation, namespace, or spawn. A
+    // 1. POLICY — refuse before any enrollment, key read, probe, namespace, or spawn. A
     // policy that keeps live admission disabled is the designed, neutral,
     // clock-independent refusal; a live-enabled policy must additionally be
     // active at `now` with an active provider-runner key (bullet-wire
@@ -70,26 +78,11 @@ where
     fields.policy_generation = Some(policy.generation());
     log.pass(LiveStep::Policy);
 
-    // Request the observed runtime subject before reading operator custody or
-    // touching graph/lease/nonce/egress/process state. Every production
-    // adapter currently inherits the typed default refusal.
-    let profile = ProfileRef {
-        profile_id: ProfileId::from_seed(&options.provider),
-        expected: ExpectedProfile {
-            email: Some(options.profile_email.clone()),
-            account_id_prefix: None,
-        },
-    };
-    let observation =
-        match dispatcher.observe_runtime_conformance(&options.executable, &profile, now) {
-            Ok(observation) => observation,
-            Err(error @ HarnessError::RuntimeProbeUnavailable { .. }) => {
-                return Err(StepFailure::refusal(LiveStep::Admission, &error));
-            }
-            Err(error) => return Err(StepFailure::harness(LiveStep::Admission, &error)),
-        };
+    // 2. ENROLLMENT — the operator's record for this exact subject, before
+    // operator custody or any graph/lease/nonce/egress/process state.
+    let enrolled = enrollment_step(data_dir, options, dispatcher, now_ms, log, fields)?;
 
-    // 2. OPERATOR KEY — load 0600 custody and confirm the policy admits it.
+    // 3. OPERATOR KEY — load 0600 custody and confirm the policy admits it.
     let key = load_signing_key(data_dir, &options.issuer, &options.key_id)
         .map_err(|error| StepFailure::harness(LiveStep::OperatorKey, &error))?;
     let vkey = policy
@@ -109,12 +102,44 @@ where
     }
     log.pass(LiveStep::OperatorKey);
 
-    // 3. LEASE — materialize a conformance Mission/graph and take a durable lease.
+    // 4. LEASE — materialize a conformance Mission/graph and take a durable lease.
     let (_graph, attempt) = materialize_and_lease(ledger, options, now)
         .map_err(|error| StepFailure::ledger(LiveStep::Lease, &error))?;
     log.pass(LiveStep::Lease);
 
-    // 4. ADMISSION — local prepare/finalize from the runtime probe.
+    // 5-8. PROBE_GRANT, PROBE_CONTAINMENT, PROBE_EXECUTION, RUNTIME_ADMISSION —
+    // one granted, contained, proposal-free probe of the enrolled bytes; the
+    // conformance observation exists only through the dispatcher's separately
+    // authorized read-only turn port, otherwise the run refuses here.
+    let profile = ProfileRef {
+        profile_id: ProfileId::from_seed(&options.provider),
+        expected: ExpectedProfile {
+            email: Some(options.profile_email.clone()),
+            account_id_prefix: None,
+        },
+    };
+    let admitted = run_probe_phase(
+        ProbeContext {
+            data_dir,
+            ledger,
+            policy,
+            dispatcher,
+            egress,
+            options,
+            enrolled: &enrolled,
+            key: &key,
+            verification_key: &vkey,
+            attempt_id: &attempt.id,
+            profile: &profile,
+            now,
+            now_ms,
+        },
+        log,
+        fields,
+    )?;
+    let canaries = admitted.canaries;
+
+    // 9. ADMISSION — local prepare/finalize from the genuine conformance observation.
     let workdir = super::prepare_dir(
         &data_dir
             .join("live")
@@ -123,13 +148,11 @@ where
     .map_err(|error| StepFailure::harness(LiveStep::Admission, &error))?;
     let runtime_root = super::prepare_dir(&data_dir.join("live").join("home"))
         .map_err(|error| StepFailure::harness(LiveStep::Admission, &error))?;
-    let canaries = CanarySecrets::new(options.canaries.clone())
-        .map_err(|error| StepFailure::harness(LiveStep::Admission, &error))?;
     let admission = build_admission(
         dispatcher,
         options,
         profile,
-        observation,
+        admitted.observation,
         &runtime_root,
         &canaries,
         now,
@@ -140,7 +163,7 @@ where
     fields.executable_blake3 = Some(receipt.executable_blake3.clone());
     log.pass(LiveStep::Admission);
 
-    // 5. MINT — bind the durable lease and the evaluated provider facts.
+    // 10. MINT — bind the durable lease and the evaluated provider facts.
     let egress_provider = egress_provider_name(&options.provider);
     let sandbox_manifest_digest = egress
         .sandbox_manifest_digest(egress_provider)
@@ -172,7 +195,7 @@ where
         .map_err(|error| StepFailure::issue(LiveStep::Mint, &error))?;
     log.pass(LiveStep::Mint);
 
-    // 6. VERIFY — re-observe the executable, bind the exact subject, spend the nonce.
+    // 11. VERIFY — re-observe the executable, bind the exact subject, spend the nonce.
     let fresh_digest = executable_digest(&options.executable)
         .map_err(|error| StepFailure::harness(LiveStep::VerifyGrant, &error))?;
     let lease_binding = durable_lease_binding(ledger, &attempt.id)
@@ -190,13 +213,13 @@ where
     fields.grant_envelope_digest = Some(verified.envelope_digest().to_string());
     log.pass(LiveStep::VerifyGrant);
 
-    // 7. ADMIT SIGNED — clear SIGNED_ADMISSION_UNAVAILABLE.
+    // 12. ADMIT SIGNED — clear SIGNED_ADMISSION_UNAVAILABLE.
     let admission = admission
         .admit_signed(verified)
         .map_err(|error| StepFailure::harness(LiveStep::AdmitSigned, &error))?;
     log.pass(LiveStep::AdmitSigned);
 
-    // 8. EGRESS PREPARE — build and prove the containment boundary.
+    // 13. EGRESS PREPARE — build and prove the containment boundary.
     let prepared = egress
         .prepare(egress_provider, &workdir)
         .map_err(|error| StepFailure::harness(LiveStep::EgressPrepare, &error))?;
@@ -206,19 +229,19 @@ where
     fields.egress_allowlist_digest = Some(evidence.allowlist_digest.clone());
     log.pass(LiveStep::EgressPrepare);
 
-    // 9. ADMIT EGRESS — clear EGRESS_ISOLATION_UNAVAILABLE.
+    // 14. ADMIT EGRESS — clear EGRESS_ISOLATION_UNAVAILABLE.
     let admission = admission
         .admit_egress(evidence)
         .map_err(|error| StepFailure::harness(LiveStep::AdmitEgress, &error))?;
     log.pass(LiveStep::AdmitEgress);
 
-    // 10. REQUIRE DISPATCH — the final chokepoint.
+    // 15. REQUIRE DISPATCH — the final chokepoint.
     admission
         .require_dispatch()
         .map_err(|error| StepFailure::harness(LiveStep::RequireDispatch, &error))?;
     log.pass(LiveStep::RequireDispatch);
 
-    // 11. DISPATCH — exactly one read-only turn inside the egress boundary.
+    // 16. DISPATCH — exactly one read-only turn inside the egress boundary.
     let turn_request = LiveTurnRequest {
         session_id: bullet_harness_core::AgentSessionId::new(format!(
             "live-conformance-{}",
@@ -276,7 +299,7 @@ where
     fields.stderr_blake3 = Some(turn.stderr_blake3.clone());
     fields.events_blake3 = Some(turn.events_blake3.clone());
 
-    // 12. PONG MATCH.
+    // 17-18. CANARY SCAN, PONG MATCH.
     let pong = is_pong(&turn.response_text);
     fields.pong_match = pong;
     if pong {
@@ -295,6 +318,45 @@ where
         expectation,
         verification_key: vkey,
     })
+}
+
+/// `ENROLLMENT`: load and re-verify the operator enrollment for the run's
+/// provider and require it to name exactly the run's subject. A missing record
+/// is the designed neutral refusal; every other loader refusal is a failure
+/// carrying the loader's own code. The record is input, never evidence.
+fn enrollment_step(
+    data_dir: &Path,
+    options: &LiveConformanceOptions,
+    dispatcher: &dyn LiveDispatcher,
+    now_ms: u64,
+    log: &mut StepLog,
+    fields: &mut ReceiptFields,
+) -> Result<EnrolledProvider, StepFailure> {
+    let step = LiveStep::Enrollment;
+    let name = egress_provider_name(&options.provider);
+    let enrolled = load_provider_enrollment(data_dir, name, now_ms).map_err(|error| {
+        let refusal = matches!(error, EnrollmentError::Missing { .. });
+        failure(step, error.reason_code(), &error.to_string(), refusal)
+    })?;
+    let record = enrolled.record();
+    let mismatch = [
+        (record.executable != options.executable, "executable"),
+        (record.version != options.version, "version"),
+        (
+            record.protocol != dispatcher.required_protocol(),
+            "protocol",
+        ),
+        (enrolled.wire_provider() != options.provider, "provider"),
+    ]
+    .into_iter()
+    .find_map(|(differs, field)| differs.then_some(field));
+    if let Some(field) = mismatch {
+        let detail = format!("enrollment {field} does not name the run's subject");
+        return Err(failure(step, ENROLLMENT_SUBJECT_MISMATCH, &detail, false));
+    }
+    fields.enrollment_blake3 = Some(enrolled.enrollment_blake3().to_string());
+    log.pass(step);
+    Ok(enrolled)
 }
 
 fn materialize_and_lease<L: Ledger>(
@@ -374,8 +436,8 @@ fn provider_binding(
     }
 }
 
-/// Egress uses `antigravity` where admission/grants use `agy`.
-fn egress_provider_name(provider: &str) -> &str {
+/// Egress and enrollment use `antigravity` where admission/grants use `agy`.
+pub(super) fn egress_provider_name(provider: &str) -> &str {
     if provider == "agy" {
         "antigravity"
     } else {

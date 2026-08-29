@@ -3,6 +3,7 @@
 
 use crate::error::EffectsError;
 use crate::forge::ForgeEffects;
+use serde::{Deserialize, Serialize};
 
 /// Four-valued capability. `Unprobed` is the default and is not permission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,7 +59,8 @@ impl IntegrationDescriptor {
 }
 
 /// Observed protection on one target.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProtectionState {
     /// Target ref.
     pub target: String,
@@ -69,7 +71,8 @@ pub struct ProtectionState {
 }
 
 /// Attestor publication of one check.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckPublication {
     /// Exact commit.
     pub sha: String,
@@ -80,7 +83,8 @@ pub struct CheckPublication {
 }
 
 /// Read-back of a published check.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckReceipt {
     /// Exact commit.
     pub sha: String,
@@ -91,9 +95,10 @@ pub struct CheckReceipt {
 }
 
 /// Open or reconcile a PR / change request.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntegrationSubjectRequest {
-    /// Base ref.
+    /// Exact base commit expected at the target.
     pub base: String,
     /// Head SHA.
     pub head: String,
@@ -102,16 +107,46 @@ pub struct IntegrationSubjectRequest {
 }
 
 /// Durable integration subject.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntegrationSubject {
     /// Adapter-native identity.
     pub id: String,
-    /// Base ref.
+    /// Exact base commit expected at the target.
     pub base: String,
     /// Head SHA.
     pub head: String,
     /// Target ref.
     pub target: String,
+}
+
+/// One authorized protected-target compare-and-swap.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtectedIntegrationRequest {
+    /// Previously persisted exact integration subject.
+    pub subject: IntegrationSubject,
+    /// Exact old target OID; must equal the subject base.
+    pub expected_old_oid: String,
+    /// Exact check name required on the subject head.
+    pub check_name: String,
+    /// Exact proof root required by target protection and check read-back.
+    pub proof_root: String,
+}
+
+/// Authoritative read-back of a completed local protected integration.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationReceipt {
+    /// Persisted integration-subject identity.
+    pub subject_id: String,
+    /// Protected target ref.
+    pub target: String,
+    /// Exact target value before mutation.
+    pub previous_oid: String,
+    /// Exact target value observed after mutation.
+    pub integrated_oid: String,
+    /// Exact check that authorized the mutation.
+    pub check: CheckReceipt,
 }
 
 /// Composed merge-group SHA, if the adapter discloses one.
@@ -156,6 +191,18 @@ pub trait ForgeIntegration: ForgeEffects {
         &mut self,
         req: &IntegrationSubjectRequest,
     ) -> Result<IntegrationSubject, EffectsError>;
+
+    /// Integrate one persisted subject through an expected-old-OID mutation.
+    /// Implementations must verify protection and exact-SHA check read-back
+    /// before mutating, then authoritatively read the target.
+    ///
+    /// # Errors
+    ///
+    /// Typed protection, check, stale-target, drift, or adapter refusal.
+    fn integrate_protected(
+        &mut self,
+        req: &ProtectedIntegrationRequest,
+    ) -> Result<IntegrationReceipt, EffectsError>;
 
     /// Merge-group SHA, or `Ok(None)` when the adapter has no queue.
     ///

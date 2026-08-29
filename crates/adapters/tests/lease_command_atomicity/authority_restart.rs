@@ -4,7 +4,7 @@ use bullet_application::{Ledger, LedgerError};
 use rusqlite::Connection;
 
 pub(super) fn missing_singleton_refuses_lease(table: &str) {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = secure_tempdir();
     let path = directory.path().join(format!("missing-{table}.sqlite3"));
     let (_graph, request) = setup(&path, table);
     let mut ledger = SqliteLedger::open(&path).expect("open before corruption");
@@ -97,4 +97,15 @@ fn refused_open(path: &std::path::Path) -> LedgerError {
         Ok(_) => panic!("missing singleton reopened"),
         Err(error) => error,
     }
+}
+
+fn secure_tempdir() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().expect("tempdir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("secure tempdir mode");
+    }
+    directory
 }

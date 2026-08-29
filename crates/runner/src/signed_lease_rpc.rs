@@ -9,23 +9,33 @@ use crate::lease::{
     AcquireGrant, AcquireRequest, HeartbeatCall, LeaseClient, ReadyView, ReleaseCall,
 };
 use async_trait::async_trait;
-use bullet_application::lease_transport::{
-    SignedAcquireBody, SignedAdvanceBody, SignedHeartbeatBody, SignedReleaseBody,
-};
-use bullet_application::{HeartbeatRequest, ReleaseRequest};
-use bullet_domain::{AttemptId, AttemptState, RunnerId, WorkPackageId};
+use bullet_application::lease_transport::{SignedAcquireBody, SignedHeartbeatBody};
+use bullet_application::HeartbeatRequest;
+use bullet_domain::{AttemptId, AttemptState, RunnerId};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 const PROTO: &str = "bullet-farm.lease-transport.rpc.v1";
-const LINE_MAX: usize = 65_536;
 const SOCKET_MODE: u32 = 0o660;
+
+mod acquire;
+mod candidate;
+mod command_dispatch;
+mod recovery;
+mod settlement;
+mod support;
+#[cfg(all(feature = "test-seams", debug_assertions))]
+mod synthetic_selection;
+
+pub use candidate::{
+    CandidatePreparationAuthority, CandidatePreparationGrant, CandidatePreparationRpcClient,
+};
+use recovery::{load_recovery, persist_recovery, AcquireIntent, AcquireMeta, RecoveryJournal};
+use support::*;
 
 /// Expected identity of the farmd service and its shared socket group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +50,18 @@ impl ExpectedLeaseServer {
     pub const fn new(uid: u32, socket_gid: u32) -> Self {
         Self { uid, socket_gid }
     }
+
+    /// Pinned farmd service UID.
+    #[must_use]
+    pub const fn uid(self) -> u32 {
+        self.uid
+    }
+
+    /// Pinned socket GID.
+    #[must_use]
+    pub const fn socket_gid(self) -> u32 {
+        self.socket_gid
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,32 +73,28 @@ struct SocketIdentity {
     mode: u32,
 }
 
-struct AcquireMeta {
-    work_package_id: WorkPackageId,
-    idempotency_key: String,
-    runner_id: RunnerId,
-    runner_epoch: u64,
-}
-
 /// Unix JSON-RPC client. No signing key is stored or accepted.
 pub struct SignedLeaseRpcClient {
     socket: PathBuf,
     runner_id: RunnerId,
     runner_epoch: u64,
     expected_server: Option<ExpectedLeaseServer>,
-    last: Mutex<BTreeMap<String, AcquireMeta>>,
+    recovery_file: Option<PathBuf>,
+    last: Mutex<RecoveryJournal>,
 }
 
 impl SignedLeaseRpcClient {
     /// Bind one socket and the hello runner identity.
     #[must_use]
     pub fn new(socket: impl Into<PathBuf>, runner_id: RunnerId, runner_epoch: u64) -> Self {
+        let journal = RecoveryJournal::new(runner_id.clone(), runner_epoch);
         Self {
             socket: socket.into(),
             runner_id,
             runner_epoch,
             expected_server: None,
-            last: Mutex::new(BTreeMap::new()),
+            recovery_file: None,
+            last: Mutex::new(journal),
         }
     }
 
@@ -88,13 +106,37 @@ impl SignedLeaseRpcClient {
         runner_epoch: u64,
         expected_server: ExpectedLeaseServer,
     ) -> Self {
+        let journal = RecoveryJournal::new(runner_id.clone(), runner_epoch);
         Self {
             socket: socket.into(),
             runner_id,
             runner_epoch,
             expected_server: Some(expected_server),
-            last: Mutex::new(BTreeMap::new()),
+            recovery_file: None,
+            last: Mutex::new(journal),
         }
+    }
+
+    /// Persist and reload acquire metadata from one regular file.
+    ///
+    /// Process-local `last` is not admission. This only survives runner restart
+    /// so heartbeat/advance/release can read back the exact acquire subject.
+    /// Product CLI admission stays unavailable until durable registration exists.
+    pub fn with_recovery_file(mut self, path: impl Into<PathBuf>) -> Result<Self, RunnerError> {
+        let path = path.into();
+        if !path.is_absolute() {
+            return Err(rpc_err(
+                "LEASE_RECOVERY_NOT_ABSOLUTE",
+                "acquire recovery file must be an absolute path",
+            ));
+        }
+        let loaded = load_recovery(&path, &self.runner_id, self.runner_epoch)?;
+        *self
+            .last
+            .lock()
+            .map_err(|_| io_err("lease-transport meta lock", "poisoned"))? = loaded;
+        self.recovery_file = Some(path);
+        Ok(self)
     }
 
     fn socket(&self) -> &Path {
@@ -105,13 +147,7 @@ impl SignedLeaseRpcClient {
         self.last
             .lock()
             .map_err(|_| io_err("lease-transport meta lock", "poisoned"))?
-            .get(attempt_id.as_str())
-            .map(|meta| AcquireMeta {
-                work_package_id: meta.work_package_id.clone(),
-                idempotency_key: meta.idempotency_key.clone(),
-                runner_id: meta.runner_id.clone(),
-                runner_epoch: meta.runner_epoch,
-            })
+            .intent_for(attempt_id)
             .ok_or_else(|| RunnerError::Lease {
                 code: "LEASE_TRANSPORT_UNKNOWN".into(),
                 message: format!("no signed acquire recorded for {attempt_id}"),
@@ -288,35 +324,74 @@ impl SignedLeaseRpcClient {
         serde_json::from_value(result)
             .map_err(|err| io_err("lease-transport decode", &err.to_string()))
     }
-}
 
-fn validate_server_uid(expected: u32, observed: u32) -> Result<(), RunnerError> {
-    if observed == expected {
-        Ok(())
-    } else {
-        Err(rpc_err(
-            "LEASE_SERVER_UID_MISMATCH",
-            "connected server UID does not match expected farmd UID",
-        ))
+    #[cfg(test)]
+    fn reserve_intent(&self, body: SignedAcquireBody) -> Result<(AcquireMeta, bool), RunnerError> {
+        self.reserve_tagged_intent(AcquireIntent::ordinary(body))
     }
-}
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct HelloAck {
-    ok: bool,
-    proto: String,
-    peer_uid: u32,
-    peer_gid: u32,
-    peer_pid: i32,
-    socket_dev: u64,
-    socket_ino: u64,
-    listener_dev: u64,
-    listener_ino: u64,
+    fn reserve_tagged_intent(
+        &self,
+        intent: AcquireIntent,
+    ) -> Result<(AcquireMeta, bool), RunnerError> {
+        let body = intent.body().clone();
+        self.mutate_recovery(|journal| {
+            let is_new = journal.reserve_intent(intent)?;
+            let attempt = AttemptId::from_seed(&body.idempotency_key);
+            let meta = journal.intent_for(&attempt).ok_or_else(|| {
+                rpc_err(
+                    "LEASE_RECOVERY_CORRUPT",
+                    "reserved acquire intent disappeared before request",
+                )
+            })?;
+            Ok((meta, is_new))
+        })
+    }
+
+    fn forget_intent(&self, body: &SignedAcquireBody) -> Result<(), RunnerError> {
+        self.mutate_recovery(|journal| journal.forget(body))
+    }
+
+    fn record_acquire_grant(
+        &self,
+        body: &SignedAcquireBody,
+        grant: AcquireGrant,
+    ) -> Result<(), RunnerError> {
+        self.mutate_recovery(|journal| journal.record_grant(body, grant))
+    }
+
+    fn mutate_recovery<T>(
+        &self,
+        mutation: impl FnOnce(&mut RecoveryJournal) -> Result<T, RunnerError>,
+    ) -> Result<T, RunnerError> {
+        let path = self.recovery_file.as_ref().ok_or_else(|| {
+            rpc_err(
+                "LEASE_RECOVERY_UNCONFIGURED",
+                "durable lease recovery must be configured before authority use",
+            )
+        })?;
+        let mut current = self
+            .last
+            .lock()
+            .map_err(|_| io_err("lease-transport meta lock", "poisoned"))?;
+        let mut next = current.clone();
+        let result = mutation(&mut next)?;
+        persist_recovery(path, &next)?;
+        *current = next;
+        Ok(result)
+    }
+
+    async fn active_readback(&self, meta: &AcquireMeta) -> Result<AcquireGrant, RunnerError> {
+        self.call("readback_active", &meta.body).await
+    }
 }
 
 #[async_trait]
 impl LeaseClient for SignedLeaseRpcClient {
+    fn candidate_preparation_rpc(&self) -> Option<&dyn CandidatePreparationRpcClient> {
+        Some(self)
+    }
+
     async fn acquire(&self, request: &AcquireRequest) -> Result<AcquireGrant, RunnerError> {
         let body = SignedAcquireBody {
             work_package_id: request.work_package_id.clone(),
@@ -325,27 +400,15 @@ impl LeaseClient for SignedLeaseRpcClient {
             idempotency_key: request.idempotency_key.clone(),
             ttl_seconds: request.ttl_seconds,
         };
-        let grant: AcquireGrant = self.call("acquire", &body).await?;
-        self.last
-            .lock()
-            .map_err(|_| io_err("lease-transport meta lock", "poisoned"))?
-            .insert(
-                grant.attempt.id.to_string(),
-                AcquireMeta {
-                    work_package_id: request.work_package_id.clone(),
-                    idempotency_key: request.idempotency_key.clone(),
-                    runner_id: request.runner_id.clone(),
-                    runner_epoch: request.runner_epoch,
-                },
-            );
-        Ok(grant)
+        self.reconcile_acquire(AcquireIntent::ordinary(body)).await
     }
 
     async fn heartbeat(&self, call: &HeartbeatCall) -> Result<(), RunnerError> {
         let meta = self.meta_for(&call.attempt_id)?;
+        let ttl_seconds = meta.body.ttl_seconds;
         let body = SignedHeartbeatBody {
-            work_package_id: meta.work_package_id,
-            idempotency_key: meta.idempotency_key,
+            work_package_id: meta.body.work_package_id,
+            idempotency_key: meta.body.idempotency_key,
             call: HeartbeatRequest {
                 variant_id: call.variant_id.clone(),
                 attempt_id: call.attempt_id.clone(),
@@ -353,7 +416,7 @@ impl LeaseClient for SignedLeaseRpcClient {
                 runner_id: call.runner_id.clone(),
                 runner_epoch: call.runner_epoch,
                 workspace_nonce: call.workspace_nonce,
-                ttl_seconds: call.ttl_seconds,
+                ttl_seconds,
             },
         };
         let _: serde_json::Value = self.call("heartbeat", &body).await?;
@@ -365,101 +428,15 @@ impl LeaseClient for SignedLeaseRpcClient {
         attempt_id: &AttemptId,
         state: AttemptState,
     ) -> Result<(), RunnerError> {
-        let meta = self.meta_for(attempt_id)?;
-        let body = SignedAdvanceBody {
-            work_package_id: meta.work_package_id,
-            runner_id: meta.runner_id,
-            runner_epoch: meta.runner_epoch,
-            idempotency_key: meta.idempotency_key,
-            attempt_id: attempt_id.clone(),
-            state,
-        };
-        let _: serde_json::Value = self.call("advance", &body).await?;
-        Ok(())
+        self.settle_advance(attempt_id, state).await
     }
 
     async fn release(&self, call: &ReleaseCall) -> Result<(), RunnerError> {
-        let meta = self.meta_for(&call.attempt_id)?;
-        let attempt: AcquireGrant = self
-            .call(
-                "readback",
-                &SignedAcquireBody {
-                    work_package_id: meta.work_package_id.clone(),
-                    runner_id: meta.runner_id.clone(),
-                    runner_epoch: meta.runner_epoch,
-                    idempotency_key: meta.idempotency_key.clone(),
-                    ttl_seconds: 15,
-                },
-            )
-            .await
-            .map_err(|_| RunnerError::Lease {
-                code: "LEASE_TRANSPORT_UNKNOWN".into(),
-                message: format!("no grant for {}", call.attempt_id),
-            })?;
-        let body = SignedReleaseBody {
-            work_package_id: meta.work_package_id,
-            runner_id: meta.runner_id,
-            runner_epoch: meta.runner_epoch,
-            idempotency_key: meta.idempotency_key,
-            call: ReleaseRequest {
-                variant_id: attempt.lease.variant_id,
-                attempt_id: call.attempt_id.clone(),
-                final_state: call.outcome,
-                requeue: call.requeue,
-            },
-        };
-        let _: serde_json::Value = self.call("release", &body).await?;
-        Ok(())
+        self.settle_release(call).await
     }
 
     async fn next_ready(&self) -> Result<Option<ReadyView>, RunnerError> {
         self.call("next_ready", &serde_json::json!({})).await
-    }
-}
-
-async fn write_line(stream: &mut UnixStream, value: &impl Serialize) -> Result<(), RunnerError> {
-    let mut bytes = serde_json::to_vec(value)
-        .map_err(|err| io_err("lease-transport encode", &err.to_string()))?;
-    bytes.push(b'\n');
-    stream
-        .write_all(&bytes)
-        .await
-        .map_err(|err| io_err("lease-transport write", &err.to_string()))
-}
-
-async fn read_json<R: DeserializeOwned>(stream: &mut UnixStream) -> Result<R, RunnerError> {
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        if buf.len() >= LINE_MAX {
-            return Err(io_err("lease-transport read", "line too long"));
-        }
-        let n = stream
-            .read(&mut byte)
-            .await
-            .map_err(|err| io_err("lease-transport read", &err.to_string()))?;
-        if n == 0 {
-            return Err(io_err("lease-transport read", "eof"));
-        }
-        if byte[0] == b'\n' {
-            break;
-        }
-        buf.push(byte[0]);
-    }
-    serde_json::from_slice(&buf).map_err(|err| io_err("lease-transport decode", &err.to_string()))
-}
-
-fn io_err(context: &str, reason: &str) -> RunnerError {
-    RunnerError::Io {
-        context: context.into(),
-        reason: reason.into(),
-    }
-}
-
-fn rpc_err(code: &str, message: &str) -> RunnerError {
-    RunnerError::Lease {
-        code: code.into(),
-        message: message.into(),
     }
 }
 

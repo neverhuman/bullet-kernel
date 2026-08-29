@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 /// Exact Candidate identity a gate ran against.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CandidateSubject {
     /// Base commit SHA.
     pub base_sha: String,
@@ -29,6 +30,7 @@ pub enum EvidenceCustody {
 
 /// The record the verifier binary emits on stdout.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerifierEvidence {
     /// Trust tier. The clean-room verifier produces `E2`.
     pub tier: EvidenceTier,

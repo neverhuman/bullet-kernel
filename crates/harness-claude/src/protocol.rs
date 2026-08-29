@@ -1,8 +1,9 @@
 //! Pure, frozen Claude bidirectional stream-JSON protocol boundary.
 
 use bullet_harness_core::{
-    proposal::validate_gate_ids, unsupported, AgentEvent, AgentEventKind, AgentSessionId,
-    EventNormalizer, HarnessError, InvocationId, NativeMeta, PatchProposal,
+    live::dispatch::MAX_INTERACTIVE_LINES, proposal::validate_gate_ids, unsupported, AgentEvent,
+    AgentEventKind, AgentSessionId, EventNormalizer, HarnessError, InvocationId, NativeMeta,
+    PatchProposal,
 };
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -21,6 +22,67 @@ pub const MAX_ASSISTANT_MESSAGES: u64 = 32;
 pub const MAX_ASSISTANT_CONTENT_ITEMS: usize = 32;
 const MAX_PROMPT_BYTES: usize = 256 * 1024;
 const MAX_ID_BYTES: usize = 128;
+
+/// Frames admitted by one dogfood read-only turn.
+///
+/// A real read-only turn interleaves `assistant`/`user` tool frames, so the
+/// frozen conformance bound of [`MAX_STREAM_JSON_FRAMES`] (sized for a single
+/// PONG exchange) cannot express it. This bound is still a hard refusal.
+pub const DOGFOOD_MAX_STREAM_JSON_FRAMES: u64 = MAX_INTERACTIVE_LINES as u64;
+/// Assistant messages admitted by one dogfood read-only turn.
+pub const DOGFOOD_MAX_ASSISTANT_MESSAGES: u64 = 512;
+/// The only tools a read-only provider turn may advertise, in any order.
+///
+/// Membership is checked as a set: a `system/init` advertising anything outside
+/// this list (`Bash`, `Write`, `Edit`, …) poisons the transcript under every
+/// profile. ADR 0001 makes providers proposers; this is where that is enforced
+/// on the wire.
+pub const READ_ONLY_TOOL_ALLOWLIST: [&str; 3] = ["Read", "Glob", "Grep"];
+
+/// Which transcript contract one turn is parsed under.
+///
+/// The two profiles are not interchangeable and a transcript never changes
+/// profile after construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TranscriptProfile {
+    /// The frozen V1 conformance subject: one PONG exchange, no tool use, and
+    /// the exact runtime build recorded in [`OBSERVED_CLAUDE_SCHEMA_VERSION`].
+    /// Its admission is unchanged by the existence of any other profile.
+    ConformanceV1,
+    /// One read-only dogfood coding turn (ADR 0015). It admits read-only tool
+    /// use and the operator-enrolled runtime build, and it relaxes nothing that
+    /// bounds provider authority: the tool allowlist, `permissionMode: "plan"`,
+    /// empty mcp/agents/skills/plugins, the terminal `PatchProposal` and its
+    /// exact `gate_ids`, frame/message ceilings, duplicate-frame and
+    /// duplicate-uuid refusal, and native-session binding all still apply.
+    DogfoodReadOnlyV0,
+}
+
+impl TranscriptProfile {
+    /// Maximum inbound frames admitted under this profile.
+    #[must_use]
+    pub const fn max_stream_json_frames(self) -> u64 {
+        match self {
+            Self::ConformanceV1 => MAX_STREAM_JSON_FRAMES,
+            Self::DogfoodReadOnlyV0 => DOGFOOD_MAX_STREAM_JSON_FRAMES,
+        }
+    }
+
+    /// Maximum assistant messages admitted under this profile.
+    #[must_use]
+    pub const fn max_assistant_messages(self) -> u64 {
+        match self {
+            Self::ConformanceV1 => MAX_ASSISTANT_MESSAGES,
+            Self::DogfoodReadOnlyV0 => DOGFOOD_MAX_ASSISTANT_MESSAGES,
+        }
+    }
+
+    /// Whether this profile admits read-only tool use and its `user` frames.
+    #[must_use]
+    pub const fn admits_tool_use(self) -> bool {
+        matches!(self, Self::DogfoodReadOnlyV0)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Phase {
@@ -46,6 +108,7 @@ pub enum ClaudeStreamOutcome {
 /// network I/O. A separate signed runtime admission is required before any
 /// request returned here may be transported to Claude.
 pub struct ClaudeStreamTranscript {
+    pub(super) profile: TranscriptProfile,
     pub(super) phase: Phase,
     pub(super) invocation_id: String,
     pub(super) expected_cwd: String,
@@ -56,6 +119,8 @@ pub struct ClaudeStreamTranscript {
     pub(super) seen_frames: BTreeSet<String>,
     pub(super) seen_event_ids: BTreeSet<String>,
     pub(super) seen_message_ids: BTreeSet<String>,
+    pub(super) seen_tool_use_ids: BTreeSet<String>,
+    pub(super) outstanding_tool_use_ids: BTreeSet<String>,
     pub(super) inbound_frames: u64,
     pub(super) assistant_messages: u64,
     pub(super) normalizer: EventNormalizer,
@@ -75,6 +140,38 @@ impl ClaudeStreamTranscript {
         expected_runtime_version: impl Into<String>,
         admitted_gate_ids: Vec<String>,
     ) -> Result<Self, HarnessError> {
+        Self::new_with_profile(
+            session_id,
+            invocation_id,
+            expected_cwd,
+            expected_runtime_version,
+            admitted_gate_ids,
+            TranscriptProfile::ConformanceV1,
+        )
+    }
+
+    /// Bind one turn under an explicit [`TranscriptProfile`].
+    ///
+    /// Under [`TranscriptProfile::ConformanceV1`] the runtime version must be
+    /// exactly [`OBSERVED_CLAUDE_SCHEMA_VERSION`], as before. Under
+    /// [`TranscriptProfile::DogfoodReadOnlyV0`] it must be a well-formed
+    /// version string, which the caller takes from the operator's enrollment
+    /// record: that record — not a constant in this crate — is the pin, and it
+    /// binds the executable digest the bytes were observed from. `system/init`
+    /// must still match the bound version exactly, so a runtime that differs
+    /// from the enrolled one poisons the transcript.
+    ///
+    /// # Errors
+    ///
+    /// Refuses malformed identifiers, cwd, runtime version, or gate admission.
+    pub fn new_with_profile(
+        session_id: AgentSessionId,
+        invocation_id: InvocationId,
+        expected_cwd: impl Into<String>,
+        expected_runtime_version: impl Into<String>,
+        admitted_gate_ids: Vec<String>,
+        profile: TranscriptProfile,
+    ) -> Result<Self, HarnessError> {
         let kernel_session_id = session_id.as_str();
         let invocation = invocation_id.as_str().to_string();
         let expected_cwd = expected_cwd.into();
@@ -85,15 +182,27 @@ impl ClaudeStreamTranscript {
         if !valid_cwd(&expected_cwd) {
             return Err(protocol("invalid read-only cwd binding"));
         }
-        if expected_runtime_version != OBSERVED_CLAUDE_SCHEMA_VERSION {
-            return Err(protocol(format!(
-                "runtime version {expected_runtime_version:?} has no frozen transcript contract"
-            )));
+        match profile {
+            TranscriptProfile::ConformanceV1 => {
+                if expected_runtime_version != OBSERVED_CLAUDE_SCHEMA_VERSION {
+                    return Err(protocol(format!(
+                        "runtime version {expected_runtime_version:?} has no frozen transcript contract"
+                    )));
+                }
+            }
+            TranscriptProfile::DogfoodReadOnlyV0 => {
+                if !valid_runtime_version(&expected_runtime_version) {
+                    return Err(protocol(format!(
+                        "enrolled runtime version {expected_runtime_version:?} is malformed"
+                    )));
+                }
+            }
         }
         validate_gate_ids(&admitted_gate_ids)?;
         let mut normalizer = EventNormalizer::new(session_id, "claude");
         normalizer.set_invocation(invocation_id);
         Ok(Self {
+            profile,
             phase: Phase::New,
             invocation_id: invocation,
             expected_cwd,
@@ -104,6 +213,8 @@ impl ClaudeStreamTranscript {
             seen_frames: BTreeSet::new(),
             seen_event_ids: BTreeSet::new(),
             seen_message_ids: BTreeSet::new(),
+            seen_tool_use_ids: BTreeSet::new(),
+            outstanding_tool_use_ids: BTreeSet::new(),
             inbound_frames: 0,
             assistant_messages: 0,
             normalizer,
@@ -193,6 +304,21 @@ impl ClaudeStreamTranscript {
         self.outcome = None;
         Err(protocol(reason))
     }
+}
+
+/// A syntactically admissible provider runtime version.
+///
+/// Deliberately narrow: dotted digits with optional short alphanumeric or
+/// `-`/`+` build parts, bounded length. It authenticates nothing — the
+/// operator's enrollment record binds the executable digest.
+fn valid_runtime_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.starts_with(|c: char| c.is_ascii_digit())
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
+        && value.contains('.')
 }
 
 pub(super) fn protocol(reason: impl Into<String>) -> HarnessError {

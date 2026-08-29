@@ -69,6 +69,15 @@ pub enum EffectsError {
     /// More than one open subject matches (base, head, target).
     #[error("integration subject ambiguous: {0}")]
     IntegrationSubjectAmbiguous(String),
+    /// A caller-supplied subject differs from the persisted exact subject.
+    #[error("integration subject mismatch: {0}")]
+    IntegrationSubjectMismatch(String),
+    /// The protected target no longer matches the authorized old OID.
+    #[error("integration precondition failed: {0}")]
+    IntegrationPreconditionFailed(String),
+    /// Remote state changed without a matching successful local receipt.
+    #[error("orphaned remote state: {0}")]
+    OrphanedRemote(String),
     /// Adapter has a merge queue but will not disclose the composed SHA.
     #[error("merge group opaque: {0}")]
     MergeGroupOpaque(String),
@@ -99,6 +108,9 @@ impl EffectsError {
             Self::ProtectionMismatch(_) => "PROTECTION_MISMATCH",
             Self::CheckSubjectMismatch(_) => "CHECK_SUBJECT_MISMATCH",
             Self::IntegrationSubjectAmbiguous(_) => "INTEGRATION_SUBJECT_AMBIGUOUS",
+            Self::IntegrationSubjectMismatch(_) => "INTEGRATION_SUBJECT_MISMATCH",
+            Self::IntegrationPreconditionFailed(_) => "INTEGRATION_PRECONDITION_FAILED",
+            Self::OrphanedRemote(_) => "ORPHANED_REMOTE",
             Self::MergeGroupOpaque(_) => "MERGE_GROUP_OPAQUE",
             Self::TargetReadbackUnavailable(_) => "TARGET_READBACK_UNAVAILABLE",
         }

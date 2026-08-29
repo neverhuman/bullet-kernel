@@ -198,6 +198,7 @@ pub(super) fn assert_hostile_contract(directory: &Path, database: &Path) {
 
     let unsafe_parent = directory.join("cleanup-unsafe-parent");
     std::fs::create_dir(&unsafe_parent).unwrap();
+    std::fs::set_permissions(&unsafe_parent, std::fs::Permissions::from_mode(0o700)).unwrap();
     let unsafe_path = unsafe_parent.join("database.sqlite3");
     let admitted = connection(&unsafe_path).unwrap();
     std::fs::set_permissions(&unsafe_parent, std::fs::Permissions::from_mode(0o770)).unwrap();

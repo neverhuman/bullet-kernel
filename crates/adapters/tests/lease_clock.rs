@@ -1,6 +1,8 @@
 //! Adversarial database-clock lease authority tests. Raw SQL is used only to
 //! place canonical persisted windows at exact boundaries without sleeping.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::{
     materialize_plan, LeaseGrant, LeaseService, Ledger, PlanInput, StoredGraph,
@@ -12,6 +14,18 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 const MATERIALIZED_AT: &str = "2026-01-01T00:00:00.000Z";
+
+fn sqlite_fixture(path: &Path) -> Connection {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    drop(options.open(path).expect("create private SQLite fixture"));
+    Connection::open(path).expect("open SQLite fixture")
+}
 
 fn setup(path: &Path, seed: &str, ttl_seconds: i64) -> (StoredGraph, LeaseGrant) {
     let mut ledger = SqliteLedger::open(path).expect("open");
@@ -54,10 +68,9 @@ fn stored_window(path: &Path) -> (String, String, i64) {
 
 #[test]
 fn database_owns_grant_window_and_exact_replay_never_renews() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("clock.sqlite");
-    let before: String = Connection::open(&path)
-        .expect("raw open")
+    let before: String = sqlite_fixture(&path)
         .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
             row.get(0)
         })
@@ -100,7 +113,7 @@ fn database_owns_grant_window_and_exact_replay_never_renews() {
 
 #[test]
 fn invalid_ttl_never_consumes_a_fence_and_exact_expiry_advances_once() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("expiry.sqlite");
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let graph = materialize_plan(
@@ -147,7 +160,7 @@ fn invalid_ttl_never_consumes_a_fence_and_exact_expiry_advances_once() {
 
 #[test]
 fn changed_ttl_and_stale_identity_leave_the_window_unchanged() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("heartbeat.sqlite");
     let (_, grant) = setup(&path, "heartbeat", 15);
     let original = stored_window(&path);
@@ -189,7 +202,7 @@ fn corrupt_or_inexact_persisted_windows_fail_closed_without_mutation() {
             "2000-01-01T00:00:00.000Z",
         ),
     ] {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = support::private_tempdir();
         let path = dir.path().join(format!("{name}.sqlite"));
         let (_, grant) = setup(&path, name, 15);
         set_window(&path, heartbeat_at, expires_at);
@@ -215,7 +228,7 @@ fn corrupt_or_inexact_persisted_windows_fail_closed_without_mutation() {
 
 #[test]
 fn corrupt_persisted_ttl_is_store_failure_not_request_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("ttl-corrupt.sqlite");
     let (graph, _) = setup(&path, "ttl-corrupt", 15);
     let conn = Connection::open(&path).expect("raw open");
@@ -235,7 +248,7 @@ fn corrupt_persisted_ttl_is_store_failure_not_request_error() {
 
 #[test]
 fn concurrent_heartbeat_cannot_revive_an_expiring_lease() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("race.sqlite");
     let (_, grant) = setup(&path, "race-expiry", 15);
     set_window(

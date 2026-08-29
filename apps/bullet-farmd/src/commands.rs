@@ -6,7 +6,10 @@ use axum::extract::{rejection::JsonRejection, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use bullet_application::commands::COMMAND_RECONCILED_EVENT;
-use bullet_application::{CommandRecord, CommandRequest, Ledger, LedgerEvent, OutboxItem};
+use bullet_application::{
+    CommandDispatchClaim, CommandDispatchDisposition, CommandDispatchStore, CommandRecord,
+    CommandRequest, Ledger, LedgerEvent, OutboxItem,
+};
 use bullet_domain::{CommandId, CommandPhase};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -54,17 +57,21 @@ pub(crate) async fn get(
         .ok_or_else(|| ApiError::NotFound(format!("command {id}")))?;
     let request = CommandRequest::from_json(&record.idempotency_key, &record.kind, &record.payload)
         .map_err(|error| ApiError::Internal(format!("persisted command request: {error}")))?;
-    let dispatch = serde_json::to_string(&request)
-        .map_err(|error| ApiError::Internal(format!("command dispatch encoding: {error}")))?;
+    let dispatch =
+        crate::dispatch::encode_command_dispatch(&request).map_err(ApiError::Internal)?;
     let outbox = ledger.outbox_for_command(&id)?;
     let events = ledger.list_events()?;
-    validate_projection(&record, &dispatch, &outbox, &events)?;
+    let claim = ledger
+        .command_dispatch_claim_for_command(&id)
+        .map_err(|error| ApiError::Internal(error.to_string()))?;
+    validate_projection(&record, &dispatch, claim.as_ref(), &outbox, &events)?;
     Ok(Json(status_view(record)?))
 }
 
 fn validate_projection(
     record: &CommandRecord,
     dispatch: &str,
+    claim: Option<&CommandDispatchClaim>,
     outbox: &[OutboxItem],
     events: &[LedgerEvent],
 ) -> Result<(), ApiError> {
@@ -103,24 +110,80 @@ fn validate_projection(
                     || event.correlation_id.as_deref() == Some(id))
         })
         .collect();
+    let claimed: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event.kind == "command_dispatch_claimed"
+                && (event.stream_id.as_deref() == Some(id)
+                    || event.correlation_id.as_deref() == Some(id))
+        })
+        .collect();
     let row = &outbox[0];
-    if record.phase == CommandPhase::Pending {
-        if row.phase != CommandPhase::Pending
-            || row.delivered_at.is_some()
-            || row.acked_at.is_some()
-            || !reconciled.is_empty()
+    if let Some(claim) = claim {
+        claim
+            .validate()
+            .map_err(|error| ApiError::Internal(error.to_string()))?;
+        if claim.command_id != record.id
+            || claim.outbox_sequence != row.seq
+            || claim.request_digest != record.payload_digest
         {
             return Err(ApiError::Internal(
-                "pending command has conflicting projection truth".into(),
+                "command dispatch claim is bound to another subject".into(),
             ));
         }
-        return Ok(());
+    }
+    let exact_claimed = |claim: &CommandDispatchClaim| {
+        claimed.len() == 1
+            && claimed[0].body == claim.claim_id
+            && claimed[0].stream_id.as_deref() == Some(id)
+            && claimed[0].correlation_id.as_deref() == Some(id)
+    };
+    let pending = match claim {
+        None => {
+            row.phase == CommandPhase::Pending
+                && row.delivered_at.is_none()
+                && row.acked_at.is_none()
+                && claimed.is_empty()
+                && reconciled.is_empty()
+        }
+        Some(value)
+            if matches!(
+                value.disposition,
+                CommandDispatchDisposition::Claimed | CommandDispatchDisposition::Invalidated
+            ) =>
+        {
+            row.phase == CommandPhase::Applied
+                && row.delivered_at.is_some()
+                && row.acked_at.is_none()
+                && exact_claimed(value)
+                && reconciled.is_empty()
+        }
+        _ => false,
+    };
+    if record.phase == CommandPhase::Pending {
+        return pending.then_some(()).ok_or_else(|| {
+            ApiError::Internal("pending command has conflicting projection truth".into())
+        });
     }
     let response = record
         .response
         .as_deref()
         .ok_or_else(|| ApiError::Internal("settled command has no exact result truth".into()))?;
-    if row.phase != record.phase
+    let terminal_claim = match (record.phase, claim) {
+        (CommandPhase::Unknown, Some(value))
+            if value.disposition == CommandDispatchDisposition::Unknown =>
+        {
+            row.delivered_at.is_some() && exact_claimed(value)
+        }
+        (CommandPhase::Failed, Some(value))
+            if value.disposition == CommandDispatchDisposition::Failed =>
+        {
+            row.delivered_at.is_none() && claimed.is_empty()
+        }
+        _ => false,
+    };
+    if !terminal_claim
+        || row.phase != record.phase
         || row.acked_at.is_none()
         || reconciled.len() != 1
         || reconciled[0].stream_id.as_deref() != Some(id)
@@ -137,17 +200,15 @@ fn validate_projection(
 pub(crate) async fn reconcile(
     State(state): State<SharedState>,
     headers: HeaderMap,
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
 ) -> Result<Json<CommandStatus>, ApiError> {
     state.auth.lock().await.authorize_worker(&headers)?;
-    let id = CommandId::parse(id)?;
-    let now = bullet_application::LeaseService::rfc3339(chrono::Utc::now());
-    let mut ledger = state.ledger.lock().await;
-    if ledger.get_command_by_id(&id)?.is_none() {
-        return Err(ApiError::NotFound(format!("command {id}")));
-    }
-    let record = ledger.reconcile_offline_command(&id, &now)?;
-    Ok(Json(status_view(record)?))
+    Err(ApiError::protocol(
+        StatusCode::GONE,
+        "WORKLOAD_API_UDS_REQUIRED",
+        "Public HTTP cannot carry Runner workload authority and performs no reconciliation.",
+        "Use the registered Runner service identity on the admitted Unix workload socket.",
+    ))
 }
 
 fn status_view(record: CommandRecord) -> Result<CommandStatus, ApiError> {
@@ -181,7 +242,13 @@ mod tests {
     use super::*;
     use bullet_application::CommandRequest;
 
-    fn fixture() -> (CommandRecord, String, OutboxItem, Vec<LedgerEvent>) {
+    fn fixture() -> (
+        CommandRecord,
+        String,
+        CommandDispatchClaim,
+        OutboxItem,
+        Vec<LedgerEvent>,
+    ) {
         let request =
             CommandRequest::new("projection", "run_demo", &serde_json::json!({})).expect("request");
         let resolution = request.offline_worker_resolution().expect("resolution");
@@ -204,8 +271,25 @@ mod tests {
             kind: "command_dispatch".into(),
             payload: dispatch.clone(),
             phase: record.phase,
-            delivered_at: None,
+            delivered_at: Some("2026-08-25T00:00:00Z".into()),
             acked_at: Some("2026-08-25T00:00:00Z".into()),
+        };
+        let claim = CommandDispatchClaim {
+            schema_version: "bullet.command-dispatch-claim.v1".into(),
+            claim_id: format!("dcl_{}", "a".repeat(64)),
+            command_id: record.id.clone(),
+            outbox_sequence: 1,
+            request: request.clone(),
+            request_digest: request.digest(),
+            runner_id: bullet_domain::RunnerId::from_seed("projection"),
+            runner_epoch: 1,
+            authority_epoch: 1,
+            freeze_generation: 0,
+            restore_epoch: 0,
+            disposition: CommandDispatchDisposition::Unknown,
+            completion_digest: Some(bullet_domain::Digest::of(response.as_bytes())),
+            claimed_at: "2026-08-25T00:00:00Z".into(),
+            updated_at: "2026-08-25T00:00:00Z".into(),
         };
         let event = |kind: &str, body: String| LedgerEvent {
             seq: 1,
@@ -221,23 +305,41 @@ mod tests {
         };
         let events = vec![
             event("command_submitted", record.id.to_string()),
+            event("command_dispatch_claimed", claim.claim_id.clone()),
             event(COMMAND_RECONCILED_EVENT, response),
         ];
-        (record, dispatch, outbox, events)
+        (record, dispatch, claim, outbox, events)
     }
 
     #[test]
     fn projection_requires_exact_correlated_result_and_outbox_truth() {
-        let (record, dispatch, outbox, events) = fixture();
-        assert!(
-            validate_projection(&record, &dispatch, std::slice::from_ref(&outbox), &events).is_ok()
+        let (record, dispatch, claim, outbox, events) = fixture();
+        let request =
+            CommandRequest::new("projection", "run_demo", &serde_json::json!({})).expect("request");
+        assert_eq!(
+            crate::dispatch::encode_command_dispatch(&request).expect("dispatch"),
+            dispatch
         );
+        let settlement = request.offline_worker_resolution().expect("settlement");
+        assert_eq!(settlement.phase(), CommandPhase::Unknown);
+        assert!(settlement
+            .response()
+            .contains("EXECUTION_ADAPTER_UNAVAILABLE"));
+        assert!(validate_projection(
+            &record,
+            &dispatch,
+            Some(&claim),
+            std::slice::from_ref(&outbox),
+            &events
+        )
+        .is_ok());
 
         let mut substituted = record.clone();
         substituted.response = Some(r#"{"evidence":"PASS"}"#.into());
         assert!(validate_projection(
             &substituted,
             &dispatch,
+            Some(&claim),
             std::slice::from_ref(&outbox),
             &events
         )
@@ -245,17 +347,32 @@ mod tests {
 
         let mut wrong_phase = outbox;
         wrong_phase.phase = CommandPhase::Pending;
-        assert!(validate_projection(&record, &dispatch, &[wrong_phase], &events).is_err());
+        assert!(
+            validate_projection(&record, &dispatch, Some(&claim), &[wrong_phase], &events).is_err()
+        );
 
-        assert!(validate_projection(&record, &dispatch, &[], &events).is_err());
-        assert!(validate_projection(&record, &dispatch, &[fixture().2], &events[..1]).is_err());
+        assert!(validate_projection(&record, &dispatch, Some(&claim), &[], &events).is_err());
+        assert!(validate_projection(&record, &dispatch, None, &[fixture().3], &events).is_err());
+        assert!(validate_projection(
+            &record,
+            &dispatch,
+            Some(&claim),
+            &[fixture().3],
+            &events[..2]
+        )
+        .is_err());
 
         let mut conflicting_events = events;
         let mut conflict = conflicting_events[1].clone();
         conflict.stream_id = Some("cmd_conflict".into());
         conflicting_events.push(conflict);
-        assert!(
-            validate_projection(&record, &dispatch, &[fixture().2], &conflicting_events).is_err()
-        );
+        assert!(validate_projection(
+            &record,
+            &dispatch,
+            Some(&claim),
+            &[fixture().3],
+            &conflicting_events
+        )
+        .is_err());
     }
 }

@@ -94,6 +94,19 @@ requires_network = false
 destructive = false
 
 [[lane]]
+name = "faults"
+command = "bash scripts/ci-local.sh faults"
+purpose = "scope=standalone; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; exact 13-test component sampler under wrapper-owned private Cargo-target custody; no release fault receipt"
+command_id = "lane.faults"
+kind = "validation"
+cost = 20
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK", "HLT-020-CI-HARDENING-GAP"]
+required_artifacts = [".ci-artifacts/junit/faults.xml"]
+timeout_seconds = 1800
+requires_network = false
+destructive = false
+
+[[lane]]
 name = "preflight"
 command = "bash scripts/ci-local.sh preflight"
 purpose = "scope=standalone; scheduled=true; hosted_required=true; jeryu=prepared-inactive; release_authority=false; release_state=BLOCKED; source and lockfile admission before project dependency installation"

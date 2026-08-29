@@ -22,3 +22,5 @@ tempfile.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+bullet-application = { workspace = true, features = ["test-seams"] }
+bullet-effects-core.workspace = true

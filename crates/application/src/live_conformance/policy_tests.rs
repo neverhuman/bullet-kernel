@@ -1,12 +1,13 @@
 //! v1alpha2 gating of the live-conformance path through the production loader
 //! (`load_policy` / `LoadedPolicy::from_bytes`, no policy bypass). Positive
 //! fixture dispatch uses the strict `cfg(test)` observation wrapper; a real
-//! product adapter with a valid policy/key refuses at runtime observation
-//! before authority, egress, or provider process activity.
+//! product adapter with a valid policy/key and no enrollment refuses at
+//! `ENROLLMENT` before authority, egress, or provider process activity.
 
 use super::egress::NoopEgressBackend;
+use super::probe_tests::ObservedClaudeDispatcher;
 use super::run_live_conformance;
-use super::tests::{options, FakeMode, Harness, ObservedClaudeDispatcher, HAPPY_CANARY};
+use super::tests::{options, step_status, FakeMode, Harness, HAPPY_CANARY};
 use crate::memory::MemoryLedger;
 use crate::policy_snapshot::{
     load_policy, LoadedPolicy, PolicySchemaVersion, LIVE_ADMISSION_MIN_GENERATION,
@@ -51,8 +52,10 @@ fn instant(unix_ms: u64) -> DateTime<Utc> {
         .unwrap()
 }
 
+const IN_WINDOW_MS: u64 = FIXTURE_ACTIVATION_MS + 60_000;
+
 fn in_window() -> DateTime<Utc> {
-    instant(FIXTURE_ACTIVATION_MS + 60_000)
+    instant(IN_WINDOW_MS)
 }
 
 /// A memory ledger whose deterministic simulation clock has been advanced to
@@ -105,20 +108,12 @@ fn write_policy(harness: &Harness, value: &Value) -> std::path::PathBuf {
     path
 }
 
-fn step_status(run_steps: &[bullet_harness_core::LiveStepRecord], step: LiveStep) -> StepStatus {
-    run_steps
-        .iter()
-        .find(|record| record.step == step)
-        .unwrap()
-        .status
-}
-
-/// Any call proves the runtime-observation refusal happened too late.
+/// Any call proves the enrollment refusal happened too late.
 struct RejectIfCalledEgress;
 
 impl EgressBackend for RejectIfCalledEgress {
     fn sandbox_manifest_digest(&self, _provider: &str) -> Result<String, HarnessError> {
-        panic!("egress manifest requested before runtime observation")
+        panic!("egress manifest requested before enrollment")
     }
 
     fn prepare(
@@ -126,13 +121,14 @@ impl EgressBackend for RejectIfCalledEgress {
         _provider: &str,
         _workdir: &Path,
     ) -> Result<Box<dyn PreparedEgress + '_>, HarnessError> {
-        panic!("egress prepared before runtime observation")
+        panic!("egress prepared before enrollment")
     }
 }
 
 #[test]
 fn hub_fixture_passes_the_policy_step_through_the_production_loader_and_pongs() {
     let harness = Harness::new(FakeMode::Pong);
+    harness.enroll(IN_WINDOW_MS);
     install_fixture_key(&harness.data_dir);
     fs::create_dir_all(harness.data_dir.join("policy")).unwrap();
     fs::write(harness.data_dir.join("policy/policy.json"), FIXTURE).unwrap();
@@ -165,7 +161,13 @@ fn hub_fixture_passes_the_policy_step_through_the_production_loader_and_pongs() 
         .steps
         .iter()
         .all(|record| record.status == StepStatus::Pass));
-    assert_eq!(harness.marker_runs(), 1, "exactly one provider spawn");
+    let spawns = harness.marker_lines();
+    assert_eq!(
+        spawns.len(),
+        2,
+        "one probe spawn, then one turn: {spawns:?}"
+    );
+    assert_eq!(spawns[0], "ran --version");
     assert_eq!(
         run.verification_key.unwrap().public_key_hex(),
         FIXTURE_PUBLIC_KEY_HEX
@@ -283,7 +285,7 @@ fn an_out_of_window_instant_fails_the_policy_step_before_the_key_is_read() {
             StepStatus::Failed
         );
         assert_eq!(
-            step_status(&error.receipt.steps, LiveStep::OperatorKey),
+            step_status(&error.receipt.steps, LiveStep::Enrollment),
             StepStatus::NotRun
         );
         assert_eq!(harness.marker_runs(), 0, "{now_ms}: the fake binary ran");
@@ -291,9 +293,11 @@ fn an_out_of_window_instant_fails_the_policy_step_before_the_key_is_read() {
         error.receipt.verify().unwrap();
     }
 
-    // Inside the window the same policy passes the step; without a key the
-    // path stops at OPERATOR_KEY, still before any spawn.
+    // Inside the window the same policy passes the step and the enrollment
+    // loads; without a key the path stops at OPERATOR_KEY, still before any
+    // spawn.
     let harness = Harness::new(FakeMode::Pong);
+    harness.enroll(IN_WINDOW_MS);
     let policy = LoadedPolicy::from_bytes(FIXTURE).unwrap();
     let mut ledger = MemoryLedger::new();
     let error = run_live_conformance(
@@ -307,10 +311,10 @@ fn an_out_of_window_instant_fails_the_policy_step_before_the_key_is_read() {
     )
     .expect_err("no operator key");
     assert_eq!(error.step, LiveStep::OperatorKey);
-    assert_eq!(
-        step_status(&error.receipt.steps, LiveStep::Policy),
-        StepStatus::Pass
-    );
+    for step in [LiveStep::Policy, LiveStep::Enrollment] {
+        assert_eq!(step_status(&error.receipt.steps, step), StepStatus::Pass);
+    }
+    assert!(error.receipt.enrollment_blake3.is_some());
     assert_eq!(harness.marker_runs(), 0);
 }
 
@@ -356,20 +360,24 @@ fn a_runner_key_not_yet_active_fails_the_policy_step_at_that_instant() {
         &fixture_options(&harness),
         instant(activates),
     )
-    .expect("missing runtime observation is a designed refusal");
+    .expect("a missing enrollment is a designed refusal");
     assert_eq!(run.receipt.outcome, LiveOutcome::Refused);
     assert_eq!(
         run.receipt.refusal_reason.as_deref(),
-        Some("RUNTIME_PROBE_UNAVAILABLE")
+        Some("ENROLLMENT_MISSING")
     );
-    assert_eq!(run.receipt.failed_step, Some(LiveStep::Admission));
+    assert_eq!(run.receipt.failed_step, Some(LiveStep::Enrollment));
     assert_eq!(
         step_status(&run.receipt.steps, LiveStep::Policy),
         StepStatus::Pass
     );
     assert_eq!(
-        step_status(&run.receipt.steps, LiveStep::Admission),
+        step_status(&run.receipt.steps, LiveStep::Enrollment),
         StepStatus::Refused
+    );
+    assert_eq!(
+        step_status(&run.receipt.steps, LiveStep::Admission),
+        StepStatus::NotRun
     );
     assert_eq!(
         step_status(&run.receipt.steps, LiveStep::OperatorKey),

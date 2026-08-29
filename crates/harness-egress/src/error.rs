@@ -20,6 +20,10 @@ pub enum EgressCode {
     IsolationUnproven,
     /// A CONNECT target or policy entry was refused by the allowlist rules.
     AllowlistDenied,
+    /// A filesystem-containment profile is outside the closed admission grammar.
+    FilesystemDenied,
+    /// An admitted filesystem object changed after preparation.
+    FilesystemChanged,
     /// Filesystem or pipe I/O failed while building or recording the sandbox.
     IoFailed,
 }
@@ -36,6 +40,8 @@ impl EgressCode {
             Self::ProxyFailed => "EGRESS_PROXY_FAILED",
             Self::IsolationUnproven => "EGRESS_ISOLATION_UNPROVEN",
             Self::AllowlistDenied => "EGRESS_ALLOWLIST_DENIED",
+            Self::FilesystemDenied => "EGRESS_FILESYSTEM_DENIED",
+            Self::FilesystemChanged => "EGRESS_FILESYSTEM_CHANGED",
             Self::IoFailed => "EGRESS_IO_FAILED",
         }
     }
@@ -92,6 +98,8 @@ mod tests {
             EgressCode::ProxyFailed,
             EgressCode::IsolationUnproven,
             EgressCode::AllowlistDenied,
+            EgressCode::FilesystemDenied,
+            EgressCode::FilesystemChanged,
             EgressCode::IoFailed,
         ];
         let mut seen = std::collections::BTreeSet::new();
@@ -99,7 +107,7 @@ mod tests {
             assert!(code.as_str().starts_with("EGRESS_"), "{code}");
             assert!(seen.insert(code.as_str()), "duplicate {code}");
         }
-        assert_eq!(seen.len(), 8);
+        assert_eq!(seen.len(), 10);
     }
 
     #[test]

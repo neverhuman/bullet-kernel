@@ -52,7 +52,8 @@ log "advisory database $advisory_db newest commit ${advisory_db_age_days}d old (
 
 # licenses/advisories/bans/sources are gated by the committed deny.toml policy.
 cargo deny --locked check licenses advisories bans sources
-# Audit only the committed workflow bytes. Offline mode is explicit, every
-# ignore is forbidden, and collection warnings fail the command.
-zizmor --offline --no-ignores --strict-collection .
+# Audit the repository's GitHub automation bytes without traversing runtime
+# state under .git. Offline mode is explicit, every ignore is forbidden, and
+# collection warnings fail the command.
+zizmor --offline --no-ignores --strict-collection .github
 log "security lane passed"

@@ -4,15 +4,23 @@
 //! launch grant. Audience is `lease-runner`. Footer purpose is
 //! `lease-transport-signing`. Implicit assertion is
 //! `bullet-farm.lease-transport.v1alpha1`. A valid permit authorizes one
-//! named operation for one request digest; it does not acquire a lease by
-//! itself and it never clears provider live admission.
+//! named operation for one request digest against one durable lease
+//! subject; it does not acquire a lease by itself and it never clears
+//! provider live admission. The claim set is represented by
+//! [`LeaseTransportClaims`] and its re-exported subject types.
 
-use crate::error::HarnessError;
-use crate::launch_grant::{
-    canonical_json, decode_canonical, hash_canonical, is_lower_hex_64, random_hex_64,
-    validate_label, LaunchGrantNonceLedger, NonceConsumption, MAX_LAUNCH_GRANT_TTL_MS,
-    MAX_SAFE_INTEGER,
+mod binding;
+
+pub use binding::{
+    nonce_binding, LeaseIncarnationClaims, LeaseSubjectClaims, LeaseTransportClaims,
+    LeaseTransportError, LeaseTransportExpectation, LeaseTransportOperation,
 };
+
+use crate::launch_grant::{
+    canonical_json, decode_canonical, is_lower_hex_64, random_hex_64, validate_label,
+    LaunchGrantNonceLedger, NonceConsumption,
+};
+use binding::{invalid, map_harness, printable};
 use pasetors::keys::{AsymmetricKeyPair, AsymmetricPublicKey, AsymmetricSecretKey, Generate};
 use pasetors::token::UntrustedToken;
 use pasetors::version4::{PublicToken, V4};
@@ -30,151 +38,6 @@ pub const LEASE_TRANSPORT_IMPLICIT_ASSERTION: &[u8] = b"bullet-farm.lease-transp
 /// Digest domain for canonical claims.
 pub const LEASE_TRANSPORT_CLAIMS_DOMAIN: &str = "authority.lease-transport-claims.v1alpha1";
 const MAX_TOKEN_BYTES: usize = 32_768;
-
-/// One Kernel↔Runner lease-transport operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeaseTransportOperation {
-    /// Create or replay the writer lease for one work package.
-    Acquire,
-    /// Renew the active lease.
-    Heartbeat,
-    /// Apply one legal attempt transition.
-    Advance,
-    /// Close the lease.
-    Release,
-    /// Return the last grant for a lost acquire response.
-    Readback,
-}
-
-impl LeaseTransportOperation {
-    /// Wire label.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Acquire => "acquire",
-            Self::Heartbeat => "heartbeat",
-            Self::Advance => "advance",
-            Self::Release => "release",
-            Self::Readback => "readback",
-        }
-    }
-}
-
-/// Signed claim set. Shape validity is not authority.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeaseTransportClaims {
-    /// Always `v1alpha1`.
-    pub schema_version: String,
-    /// Unique 64-hex permit identifier.
-    pub permit_id: String,
-    /// Always `lease-runner`.
-    pub audience: String,
-    /// One of the frozen operations.
-    pub operation: LeaseTransportOperation,
-    /// Issuer label.
-    pub issuer: String,
-    /// Key label.
-    pub key_id: String,
-    /// Issue instant.
-    pub issued_at_unix_ms: u64,
-    /// Inclusive validity start.
-    pub not_before_unix_ms: u64,
-    /// Exclusive validity end; at most 15 s after `not_before`.
-    pub expires_at_unix_ms: u64,
-    /// Single-use 64-hex nonce.
-    pub permit_nonce: String,
-    /// Framed digest of the exact request body this permit covers.
-    pub request_digest: String,
-    /// Runner that may present the permit.
-    pub runner_id: String,
-    /// Runner incarnation.
-    pub runner_epoch: u64,
-    /// Kernel authority epoch.
-    pub authority_epoch: u64,
-    /// Work package the operation names.
-    pub work_package_id: String,
-    /// Digest of the acquire idempotency key.
-    pub idempotency_digest: String,
-}
-
-impl LeaseTransportClaims {
-    /// Validate every field exactly.
-    ///
-    /// # Errors
-    ///
-    /// `LEASE_TRANSPORT_INVALID` or `LEASE_TRANSPORT_AUDIENCE_MISMATCH`.
-    pub fn validate_shape(&self) -> Result<(), LeaseTransportError> {
-        if self.schema_version != LEASE_TRANSPORT_SCHEMA_VERSION {
-            return Err(invalid("schema_version must be v1alpha1"));
-        }
-        if self.audience != LEASE_TRANSPORT_AUDIENCE {
-            return Err(LeaseTransportError::AudienceMismatch {
-                audience: printable(&self.audience),
-            });
-        }
-        validate_label("issuer", &self.issuer).map_err(map_harness)?;
-        validate_label("key_id", &self.key_id).map_err(map_harness)?;
-        for (name, value) in [
-            ("permit_id", self.permit_id.as_str()),
-            ("permit_nonce", self.permit_nonce.as_str()),
-            ("request_digest", self.request_digest.as_str()),
-            ("idempotency_digest", self.idempotency_digest.as_str()),
-        ] {
-            if !is_lower_hex_64(value) {
-                return Err(invalid(&format!(
-                    "{name} must be 64 lowercase hex characters"
-                )));
-            }
-        }
-        if self.runner_id.is_empty() || self.work_package_id.is_empty() {
-            return Err(invalid("runner_id and work_package_id are required"));
-        }
-        for (name, value) in [
-            ("runner_epoch", self.runner_epoch),
-            ("authority_epoch", self.authority_epoch),
-            ("issued_at_unix_ms", self.issued_at_unix_ms),
-            ("not_before_unix_ms", self.not_before_unix_ms),
-            ("expires_at_unix_ms", self.expires_at_unix_ms),
-        ] {
-            if value > MAX_SAFE_INTEGER {
-                return Err(invalid(&format!(
-                    "{name} exceeds the interoperable integer range"
-                )));
-            }
-        }
-        if self.issued_at_unix_ms > self.not_before_unix_ms
-            || self.not_before_unix_ms >= self.expires_at_unix_ms
-        {
-            return Err(invalid(
-                "window requires issued_at <= not_before < expires_at",
-            ));
-        }
-        if self.expires_at_unix_ms - self.not_before_unix_ms > MAX_LAUNCH_GRANT_TTL_MS {
-            return Err(LeaseTransportError::TtlExceeded {
-                ttl_ms: self.expires_at_unix_ms - self.not_before_unix_ms,
-            });
-        }
-        Ok(())
-    }
-
-    /// Exact validity window `[not_before, expires_at)`.
-    #[must_use]
-    pub fn window(&self) -> (u64, u64) {
-        (self.not_before_unix_ms, self.expires_at_unix_ms)
-    }
-
-    /// Framed digest of the canonical claims.
-    ///
-    /// # Errors
-    ///
-    /// Shape or encoding refusal.
-    pub fn digest(&self) -> Result<String, LeaseTransportError> {
-        self.validate_shape()?;
-        hash_canonical(LEASE_TRANSPORT_CLAIMS_DOMAIN, self).map_err(map_harness)
-    }
-}
 
 /// Compact envelope carrying one PASETO v4.public token.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,6 +140,12 @@ impl LeaseTransportSigningKey {
     #[must_use]
     pub fn key_id(&self) -> &str {
         &self.key_id
+    }
+
+    /// Raw 64 secret bytes, for the 0600 farmd key file only.
+    #[must_use]
+    pub fn secret_bytes(&self) -> &[u8] {
+        self.secret.as_bytes()
     }
 
     /// Matching verification key.
@@ -396,48 +265,6 @@ impl LeaseTransportVerificationKey {
     }
 }
 
-/// Expected subject for one verified permit.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LeaseTransportExpectation {
-    /// Operation the caller is invoking now.
-    pub operation: LeaseTransportOperation,
-    /// Digest of the exact request body presented with the permit.
-    pub request_digest: String,
-    /// Runner the Kernel will execute as.
-    pub runner_id: String,
-    /// Runner incarnation.
-    pub runner_epoch: u64,
-    /// Kernel authority epoch.
-    pub authority_epoch: u64,
-    /// Work package named by the body.
-    pub work_package_id: String,
-    /// Digest of the acquire idempotency key.
-    pub idempotency_digest: String,
-    /// Verifier clock.
-    pub now_unix_ms: u64,
-}
-
-impl LeaseTransportExpectation {
-    fn check(&self, claims: &LeaseTransportClaims) -> Result<(), LeaseTransportError> {
-        if claims.operation != self.operation {
-            return Err(LeaseTransportError::OperationMismatch {
-                expected: self.operation.as_str(),
-                actual: claims.operation.as_str(),
-            });
-        }
-        if claims.request_digest != self.request_digest
-            || claims.runner_id != self.runner_id
-            || claims.runner_epoch != self.runner_epoch
-            || claims.authority_epoch != self.authority_epoch
-            || claims.work_package_id != self.work_package_id
-            || claims.idempotency_digest != self.idempotency_digest
-        {
-            return Err(LeaseTransportError::SubjectMismatch);
-        }
-        Ok(())
-    }
-}
-
 /// A permit that passed authentication, subject, time, and nonce consumption.
 #[derive(Debug)]
 #[must_use = "a verified lease permit must be consumed by the Kernel service or dropped"]
@@ -478,11 +305,10 @@ pub fn verify_lease_permit(
             expires_at_unix_ms: expires_at,
         });
     }
-    let attempt_binding = format!(
-        "{}:{}:{}",
-        claims.operation.as_str(),
-        claims.runner_id,
-        claims.idempotency_digest
+    let attempt_binding = nonce_binding(
+        claims.operation,
+        &claims.runner_id,
+        &claims.idempotency_digest,
     );
     match nonces
         .consume_nonce(
@@ -508,7 +334,8 @@ pub fn verify_lease_permit(
 ///
 /// Encoding failure.
 pub fn request_digest<T: Serialize>(body: &T) -> Result<String, LeaseTransportError> {
-    hash_canonical("authority.lease-transport-request.v1alpha1", body).map_err(map_harness)
+    crate::launch_grant::hash_canonical("authority.lease-transport-request.v1alpha1", body)
+        .map_err(map_harness)
 }
 
 /// Fresh 64-hex identifier.
@@ -518,84 +345,6 @@ pub fn request_digest<T: Serialize>(body: &T) -> Result<String, LeaseTransportEr
 /// Entropy failure.
 pub fn new_hex_64() -> Result<String, LeaseTransportError> {
     random_hex_64().map_err(map_harness)
-}
-
-/// Typed lease-transport refusal.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum LeaseTransportError {
-    /// Shape, framing, or encoding refusal.
-    #[error("lease transport invalid: {reason}")]
-    Invalid {
-        /// Non-secret detail.
-        reason: String,
-    },
-    /// Audience is not `lease-runner`.
-    #[error("lease transport audience mismatch: {audience}")]
-    AudienceMismatch {
-        /// Presented audience.
-        audience: String,
-    },
-    /// Operation does not match the invoked verb.
-    #[error("lease transport operation mismatch: expected {expected}, got {actual}")]
-    OperationMismatch {
-        /// Expected verb.
-        expected: &'static str,
-        /// Presented verb.
-        actual: &'static str,
-    },
-    /// Subject fields do not match the request body.
-    #[error("lease transport subject mismatch")]
-    SubjectMismatch,
-    /// Verification key identity is unknown.
-    #[error("lease transport key unknown: {issuer}/{key_id}")]
-    KeyUnknown {
-        /// Presented issuer.
-        issuer: String,
-        /// Presented key id.
-        key_id: String,
-    },
-    /// Permit is not yet valid.
-    #[error("lease transport not yet valid (not_before={not_before_unix_ms})")]
-    NotYetValid {
-        /// Inclusive start.
-        not_before_unix_ms: u64,
-    },
-    /// Permit has expired.
-    #[error("lease transport expired (expires_at={expires_at_unix_ms})")]
-    Expired {
-        /// Exclusive end.
-        expires_at_unix_ms: u64,
-    },
-    /// TTL exceeds 15 s.
-    #[error("lease transport ttl exceeded: {ttl_ms} ms")]
-    TtlExceeded {
-        /// Requested ttl.
-        ttl_ms: u64,
-    },
-    /// Nonce was already consumed.
-    #[error("lease transport replayed: {permit_id}")]
-    Replayed {
-        /// Replayed permit.
-        permit_id: String,
-    },
-}
-
-impl LeaseTransportError {
-    /// Stable machine-readable reason code.
-    #[must_use]
-    pub fn reason_code(&self) -> &'static str {
-        match self {
-            Self::Invalid { .. } => "LEASE_TRANSPORT_INVALID",
-            Self::AudienceMismatch { .. } => "LEASE_TRANSPORT_AUDIENCE_MISMATCH",
-            Self::OperationMismatch { .. } => "LEASE_TRANSPORT_OPERATION_MISMATCH",
-            Self::SubjectMismatch => "LEASE_TRANSPORT_SUBJECT_MISMATCH",
-            Self::KeyUnknown { .. } => "LEASE_TRANSPORT_KEY_UNKNOWN",
-            Self::NotYetValid { .. } => "LEASE_TRANSPORT_NOT_YET_VALID",
-            Self::Expired { .. } => "LEASE_TRANSPORT_EXPIRED",
-            Self::TtlExceeded { .. } => "LEASE_TRANSPORT_TTL_EXCEEDED",
-            Self::Replayed { .. } => "LEASE_TRANSPORT_REPLAYED",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -618,28 +367,33 @@ impl LeaseTransportFooter {
     }
 }
 
-fn invalid(reason: &str) -> LeaseTransportError {
-    LeaseTransportError::Invalid {
-        reason: reason.to_string(),
-    }
-}
-
-fn map_harness(error: HarnessError) -> LeaseTransportError {
-    invalid(&error.to_string())
-}
-
-fn printable(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| !character.is_control())
-        .take(64)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::launch_grant::MemoryNonceLedger;
+
+    fn subject(operation: LeaseTransportOperation) -> LeaseSubjectClaims {
+        LeaseSubjectClaims {
+            workspace_id: "wsp_one".into(),
+            workspace_generation: 1,
+            workspace_nonce_digest: "e".repeat(64),
+            scope_digest: "f".repeat(64),
+            policy_generation: 1,
+            freeze_generation: 0,
+            graph_revision: 1,
+            routing_generation: 1,
+            authority_epoch: 1,
+            incarnation: operation
+                .binds_incarnation()
+                .then(|| LeaseIncarnationClaims {
+                    variant_id: "var_one".into(),
+                    attempt_id: "atm_one".into(),
+                    fence: 1,
+                    scope_revision: 1,
+                    context_revision: 1,
+                }),
+        }
+    }
 
     fn claims(
         key: &LeaseTransportSigningKey,
@@ -663,6 +417,7 @@ mod tests {
             authority_epoch: 1,
             work_package_id: "wp_one".into(),
             idempotency_digest: "d".repeat(64),
+            subject: subject(operation),
         }
     }
 
@@ -675,6 +430,7 @@ mod tests {
             authority_epoch: claims.authority_epoch,
             work_package_id: claims.work_package_id.clone(),
             idempotency_digest: claims.idempotency_digest.clone(),
+            subject: claims.subject.clone(),
             now_unix_ms: now,
         }
     }
@@ -718,10 +474,8 @@ mod tests {
             claims.expires_at_unix_ms,
         ));
         assert_eq!(
-            verify_lease_permit(&permit, &verify, &expect, &mut nonces)
-                .unwrap_err()
-                .reason_code(),
-            "LEASE_TRANSPORT_SUBJECT_MISMATCH"
+            verify_lease_permit(&permit, &verify, &expect, &mut nonces).unwrap_err(),
+            LeaseTransportError::SubjectMismatch { field: "runner_id" }
         );
         assert!(!nonces.is_consumed(&claims.permit_nonce));
     }

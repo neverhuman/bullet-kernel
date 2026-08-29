@@ -13,11 +13,11 @@ that aggregator fail.
 
 | Partition | Selected | Meaning |
 | --- | ---: | --- |
-| standalone | 596 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
+| standalone | 747 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
 | egress | 3 | the exact host-dependent namespace/nftables/CONNECT-proxy identities; only the capability-admitted `egress` lane executes them |
 | contract | 34 | four offline provider protocol binaries plus `bullet-test-simulation` |
 | family | 9 | five `transaction_demo` identities plus `heartbeat_stale`, `kill_retry`, `loop_sim`, and `synthetic_e2e` |
-| total | 642 | exact union of the four disjoint partitions above |
+| total | 793 | exact union of the four disjoint partitions above |
 
 `ops/ci/inventory-test.sh` independently lists all four partitions, requires
 every set to be nonzero, checks pairwise disjointness and exact union,
@@ -65,6 +65,77 @@ provenance or release authority. The lane never falls back to
 until the Hub can provision immutable authenticated repository subjects and
 pass the exact daemon path.
 
+The first self-dogfood loop is an explicit local component lane:
+
+```bash
+BULLET_GITD_BIN=/canonical/absolute/path/to/bullet-gitd \
+BULLET_GITD_SHA256=<lowercase-sha256> \
+  just proof-synthetic-dogfood
+```
+
+It builds default-off debug seams from locked offline dependencies, starts
+peer-authenticated farmd authority, and runs two sequential fresh simulator
+participants against one plan/base. Each author participant has a distinct
+logical Runner, Variant, Attempt, workspace, recovery journal, raw transcript,
+and reconstructed Candidate. A private selector sees only blinded content
+subjects and a frozen non-quality tiebreak. The selected result is sealed back
+to the create-once selection receipt, exact winning handle, Candidate row,
+repository, author authority, plan graph, package, Variant, base, gates, and
+scope before any effect work begins.
+
+The selected component path then executes this exact order:
+
+1. A third logical Runner obtains a fresh synthetic writer lease for the
+   selected Variant at successor fence 2; neither terminal author lease is
+   reused.
+2. Fixture keys sign and reverify the exact verification intent, PASS Evidence,
+   and proof bundle after the author-as-verifier path is refused.
+3. A local-bare Candidate-ref push deliberately loses its response. The effect
+   remains `UNKNOWN` until authoritative ref read-back adopts the exact head.
+4. The local forge publishes and reads back a proof-root-bound check at the
+   exact Candidate SHA, performs protected integration with the expected old
+   OID, emits and reverifies a fixture-signed observation, and matches the
+   check, protection, and target again after reopen.
+5. The third Attempt settles terminal `Superseded`, and a second create-once
+   canonical receipt binds the sealed selection, verification, delivery,
+   reconciliation, check, integration, observation, settlement, and their
+   durable rows. It retains the exact canonical selection-receipt bytes and
+   decode-time replay derives both author grants, blinded views, the exact
+   unblinding pair, selection decision, and winning Candidate.
+
+The wrapper rejects credential-bearing environments before Cargo and runs the
+subjects under `env -i`. Its fault campaign retains the five original author/
+selection cells and adds `effect-grant-changed`,
+`effect-grant-readback-error`, `after-delivery-unknown`,
+`before-effect-receipt`, and `after-effect-receipt`, for ten named cells total,
+plus the applicable ordinary chaos boundaries
+`verifier-handoff`, `candidate-delivery`, `check-publication`, `integration`,
+and `observation-cleanup`. It checks which of the two receipts may exist at
+each boundary, terminal lease/Attempt truth, exact ledger/ref/check/target
+subjects, replay immutability, and retained artifact digests. The two grant
+read-back faults execute after acquire and prove cleanup leaves three terminal
+Attempts, three distinct logical Runners, no active lease, and no premature
+effect intent or receipt. The wrapper independently derives the framed
+selection artifact/body digests and proves the final receipt's retained hex
+decodes byte-for-byte to that exact selection artifact.
+
+Both receipts remain `COMPONENT_PROOF` with `UNSIGNED_FIXTURE` trust. Shell
+rehashing and retained-path inspection are cooperative same-UID checks, not
+adversarial custody. The three Runners are logical identities in one fixture
+security context; verifier, broker/delivery, attestor/check, integrator, and
+observer do not have distinct service/OS identities. There is no
+`DeliveryGrant`, `CheckGrant`, or `IntegrationGrant`, and the fixture-signed
+records are not independently anchored Evidence.
+
+The response-loss case is only reconciled while this process remains alive.
+An interruption after the remote ref changes but before read-back has no
+durable resumable effect claimant; that state is `ORPHANED_REMOTE`, never an
+implicit retry or PASS. Independent-Evidence, transaction, five-plane,
+provider-certification, team-recipe, evolution-profile, live, release,
+routing-activation, comparative, and restart-recovery eligibility are all
+hard-false. This lane accelerates local component dogfood mechanics; it clears
+no transaction, release, or profile gate.
+
 The standalone live-conformance tests keep positive PONG mechanics behind a
 strict `cfg(test)` observed-subject wrapper. A separate valid-v1alpha2 test
 uses the real Claude adapter and proves `RUNTIME_PROBE_UNAVAILABLE` leaves the
@@ -77,7 +148,7 @@ provider conformance.
 
 | Lane | Scope |
 | --- | --- |
-| `fast` | exactly 596 standalone nextest identities, all executed with zero skipped |
+| `fast` | exactly 747 standalone nextest identities, all executed with zero skipped |
 | `lint` | rustfmt, all-target Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow policy, inventory/observation/nightly meta-tests |
 | `contract` | exactly 34 offline provider-contract and simulation tests |
 | `security` | current-tree gitleaks 8.21.2; full cargo-deny 0.19.8 advisories/bans/licenses/sources with independently proved RustSec freshness; zizmor 1.25.2 |

@@ -1,5 +1,7 @@
 //! Kill/retry suite against the durable ledger. Replay is the recovery path.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::{materialize_plan, run_demo, LeaseService, Ledger, PlanInput};
 use bullet_domain::observation::{
@@ -39,7 +41,7 @@ fn force_expired(path: &std::path::Path) {
 
 #[test]
 fn sqlite_demo_roundtrip_shows_both_fences() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("ledger.sqlite");
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let receipt = run_demo(&mut ledger).expect("demo");
@@ -59,7 +61,7 @@ fn sqlite_demo_roundtrip_shows_both_fences() {
 
 #[test]
 fn killed_writer_is_reclaimed_and_successor_gets_next_fence() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("ledger.sqlite");
     let first_grant = {
         let mut ledger = SqliteLedger::open(&path).expect("open");
@@ -95,7 +97,7 @@ fn killed_writer_is_reclaimed_and_successor_gets_next_fence() {
 
 #[test]
 fn stale_delta_cannot_rewind_successor_fence() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("ledger.sqlite");
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let graph = materialize_plan(&mut ledger, "rewind", &plan(), &ts(0)).expect("plan");
@@ -127,7 +129,7 @@ fn stale_delta_cannot_rewind_successor_fence() {
 
 #[test]
 fn exact_preservation_decision_is_consumed_before_cleanup() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("ledger.sqlite");
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let graph = materialize_plan(&mut ledger, "unknown", &plan(), &ts(0)).expect("plan");
@@ -182,7 +184,7 @@ fn exact_preservation_decision_is_consumed_before_cleanup() {
 
 #[test]
 fn corrupt_or_superseded_active_lease_fails_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("corrupt-active.sqlite");
     let mut ledger = SqliteLedger::open(&path).expect("open");
     let graph = materialize_plan(&mut ledger, "corrupt-active", &plan(), &ts(0)).expect("plan");

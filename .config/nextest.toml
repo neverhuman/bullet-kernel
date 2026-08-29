@@ -5,6 +5,13 @@ slow-timeout = { period = "30s", terminate-after = 2 }
 slow-timeout = { period = "20s", terminate-after = 2 }
 fail-fast = true
 
+[test-groups]
+sqlite-migration-identity = { max-threads = 1 }
+
+[[profile.fast.overrides]]
+filter = '(binary_id(bullet-adapters) & test(sqlite::migrations::)) | (binary_id(bullet-adapters::candidate_preparation) & test(=schema::exact_schema_eighteen_is_refused_without_byte_mutation))'
+test-group = 'sqlite-migration-identity'
+
 [profile.fast.junit]
 path = "junit.xml"
 

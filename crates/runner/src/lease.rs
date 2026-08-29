@@ -6,6 +6,7 @@
 //! simulator only, never an admission path.
 
 use crate::error::RunnerError;
+use crate::signed_lease_rpc::CandidatePreparationRpcClient;
 use async_trait::async_trait;
 use bullet_application::{
     ActiveLease, HeartbeatRequest, LeaseRequest, LeaseService, Ledger, ReleaseRequest, StoredGraph,
@@ -114,6 +115,12 @@ pub struct ReadyView {
 /// Writer-lease authority as seen by the runner.
 #[async_trait]
 pub trait LeaseClient: Send + Sync {
+    /// Candidate authority on the same authenticated workload client.
+    ///
+    /// Generic lease simulators and retired transports expose no fallback.
+    fn candidate_preparation_rpc(&self) -> Option<&dyn CandidatePreparationRpcClient> {
+        None
+    }
     /// Acquire the writer lease for one work package.
     async fn acquire(&self, request: &AcquireRequest) -> Result<AcquireGrant, RunnerError>;
     /// Renew the lease. Zero matched rows is typed `STALE_AUTHORITY`.

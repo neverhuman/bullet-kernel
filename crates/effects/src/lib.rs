@@ -14,7 +14,11 @@ pub mod gitlab;
 pub mod integration;
 pub mod jeryu;
 pub mod local;
+mod local_integration;
+mod local_state;
 pub mod lost;
+pub mod observation;
+pub mod recovery;
 
 pub use attest::{attestor_push, broker_attest, validate_attestation_request, AttestorCredential};
 pub use broker::{authorize, dispatch, propose, reconcile, IntentInput, ReconcileOutcome};
@@ -28,12 +32,18 @@ pub use forge::{
     CANDIDATE_REF_PREFIX,
 };
 pub use github::{GitHubForge, GITHUB_PROVIDER};
-pub use gitlab::{GitLabForge, GITLAB_PROVIDER};
+pub use gitlab::{GitLabForge, GitLabProfile, GITLAB_PROVIDER};
 pub use integration::{
     require_probed, Capability, CheckPublication, CheckReceipt, ForgeIntegration,
-    IntegrationDescriptor, IntegrationSubject, IntegrationSubjectRequest, MergeGroupSubject,
-    ProtectionState,
+    IntegrationDescriptor, IntegrationReceipt, IntegrationSubject, IntegrationSubjectRequest,
+    MergeGroupSubject, ProtectedIntegrationRequest, ProtectionState,
 };
 pub use jeryu::{JeryuForge, JERYU_BASE_URL, JERYU_PROVIDER};
 pub use local::{LocalBareForge, LOCAL_PROVIDER};
 pub use lost::{LossMode, LostResponseForge};
+pub use observation::{
+    canonical_observation_bytes, decode_and_verify_fixture_observation, FixtureObserverSigningKey,
+    FixtureObserverVerificationKey, ObservationError, ObservationInputV1, ObservationOutcomeV1,
+    ObservationSubjectV1, ObservationV1, SignedObservationV1,
+};
+pub use recovery::{reconcile_local_bare_restart, RestartReconcileOutcome, RestartRecoveryError};

@@ -84,6 +84,8 @@ fn lost_response_after_push_is_unknown_then_adopted() {
             .phase,
         CommandPhase::Verified
     );
+    let inner = forge.into_inner().expect("settled forge handoff");
+    assert_eq!(inner.bare_path(), repos.bare);
 }
 
 #[test]
@@ -280,4 +282,12 @@ fn reconcile_outside_unknown_is_a_typed_phase_refusal() {
     )
     .expect_err("authorized is not unknown");
     assert_eq!(err.reason_code(), "ILLEGAL_EFFECT_PHASE");
+    forge.lose_next(LossMode::AfterPush);
+    assert_eq!(
+        forge
+            .into_inner()
+            .expect_err("armed loss cannot be discarded")
+            .reason_code(),
+        "DURABLE_QUEUE_INVALID"
+    );
 }

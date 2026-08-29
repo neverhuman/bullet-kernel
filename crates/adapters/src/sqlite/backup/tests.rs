@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 fn paths() -> (TempDir, PathBuf, PathBuf, PathBuf) {
-    let directory = TempDir::new().unwrap();
+    let directory = crate::test_support::private_tempdir();
     let source = directory.path().join("source.sqlite");
     let backup = directory.path().join("backup.sqlite");
     let restored = directory.path().join("restored.sqlite");

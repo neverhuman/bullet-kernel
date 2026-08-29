@@ -1,10 +1,12 @@
 //! Strict ingestion for the pinned Claude bidirectional stream transcript.
 
+mod tools;
+
 use crate::protocol::{
     basic_event_subject, empty_array, empty_optional_array, event_subject, exact_fields, protocol,
     unique_string_array, valid_native_id, valid_result_common, valid_uuid, ClaudeStreamOutcome,
-    ClaudeStreamTranscript, Phase, MAX_ASSISTANT_CONTENT_ITEMS, MAX_ASSISTANT_MESSAGES,
-    MAX_STREAM_JSON_FRAMES, MAX_STREAM_JSON_FRAME_BYTES,
+    ClaudeStreamTranscript, Phase, TranscriptProfile, MAX_ASSISTANT_CONTENT_ITEMS,
+    MAX_STREAM_JSON_FRAME_BYTES, READ_ONLY_TOOL_ALLOWLIST,
 };
 use bullet_harness_core::{
     decode_strict_json, AgentEvent, AgentEventKind, HarnessError, PatchProposal,
@@ -35,7 +37,7 @@ impl ClaudeStreamTranscript {
             .inbound_frames
             .checked_add(1)
             .ok_or_else(|| protocol("stream-JSON frame counter overflow"))?;
-        if self.inbound_frames > MAX_STREAM_JSON_FRAMES {
+        if self.inbound_frames > self.profile.max_stream_json_frames() {
             return self.fail("stream-JSON transcript frame limit exceeded");
         }
         let value: Value = match decode_strict_json(line) {
@@ -54,6 +56,7 @@ impl ClaudeStreamTranscript {
             Some("system") => self.system_init(object),
             Some("assistant") => self.assistant(object),
             Some("result") => self.result(object),
+            Some("user") if self.profile.admits_tool_use() => self.tool_result(object),
             Some(other) => self.fail(format!("unadmitted stream-JSON type {other:?}")),
             None => self.fail("stream-JSON frame lacks string type"),
         }
@@ -121,8 +124,26 @@ impl ClaudeStreamTranscript {
             Some(tools) => tools,
             None => return self.fail("system/init tools are malformed"),
         };
-        if tools != ["Read", "Glob", "Grep"] {
-            return self.fail("system/init tools differ from the exact read-only admission");
+        match self.profile {
+            TranscriptProfile::ConformanceV1 => {
+                if tools != READ_ONLY_TOOL_ALLOWLIST {
+                    return self
+                        .fail("system/init tools differ from the exact read-only admission");
+                }
+            }
+            TranscriptProfile::DogfoodReadOnlyV0 => {
+                // Set membership, not order: the real CLI may order or omit
+                // tools. Anything outside the read-only allowlist (Bash, Write,
+                // Edit, …) still poisons the transcript, so a provider that was
+                // granted write authority can never be parsed as read-only.
+                if tools.is_empty()
+                    || !tools
+                        .iter()
+                        .all(|tool| READ_ONLY_TOOL_ALLOWLIST.contains(tool))
+                {
+                    return self.fail("system/init tools exceed the read-only allowlist");
+                }
+            }
         }
         if object.contains_key("capabilities")
             && unique_string_array(object, "capabilities").is_none()
@@ -160,7 +181,7 @@ impl ClaudeStreamTranscript {
 
     fn assistant(&mut self, object: &Map<String, Value>) -> Result<Vec<AgentEvent>, HarnessError> {
         self.require_phase(Phase::Active, "assistant")?;
-        if self.assistant_messages >= MAX_ASSISTANT_MESSAGES {
+        if self.assistant_messages >= self.profile.max_assistant_messages() {
             return self.fail("assistant message limit exceeded");
         }
         if !exact_fields(
@@ -201,9 +222,11 @@ impl ClaudeStreamTranscript {
             || message.get("model").and_then(Value::as_str) != self.model.as_deref()
             || !message.get("usage").is_some_and(Value::is_object)
             || !message.get("stop_sequence").is_some_and(Value::is_null)
-            || !message
-                .get("stop_reason")
-                .is_some_and(|value| value.is_null() || value.as_str() == Some("end_turn"))
+            || !message.get("stop_reason").is_some_and(|value| {
+                value.is_null()
+                    || value.as_str() == Some("end_turn")
+                    || (self.profile.admits_tool_use() && value.as_str() == Some("tool_use"))
+            })
         {
             return self.fail("assistant message subject is malformed or mismatched");
         }
@@ -244,8 +267,12 @@ impl ClaudeStreamTranscript {
                         json!({"text": item.get("thinking")}),
                     )
                 }
+                Some("tool_use") if self.profile.admits_tool_use() => (
+                    AgentEventKind::ToolRequested,
+                    self.admit_tool_request(item)?,
+                ),
                 Some("tool_use") => {
-                    return self.fail("tool use is outside the frozen V1 transcript")
+                    return self.fail("tool use is outside the frozen V1 transcript");
                 }
                 _ => return self.fail("unadmitted assistant content item"),
             };
@@ -283,15 +310,37 @@ impl ClaudeStreamTranscript {
         object: &Map<String, Value>,
         uuid: &str,
     ) -> Result<Vec<AgentEvent>, HarnessError> {
+        // A conformance turn is one model, one turn. A real read-only turn may
+        // bill a helper model and may count turns differently once tools are
+        // involved, so the dogfood profile requires the bound model to be
+        // present and the count to be positive and within what was observed,
+        // rather than an exact single-model equality it cannot satisfy.
         let model_usage_matches = self.model.as_deref().is_some_and(|model| {
             object
                 .get("modelUsage")
                 .and_then(Value::as_object)
-                .is_some_and(|usage| usage.len() == 1 && usage.contains_key(model))
+                .is_some_and(|usage| {
+                    usage.contains_key(model)
+                        && match self.profile {
+                            TranscriptProfile::ConformanceV1 => usage.len() == 1,
+                            TranscriptProfile::DogfoodReadOnlyV0 => !usage.is_empty(),
+                        }
+                })
         });
+        let num_turns_matches =
+            object
+                .get("num_turns")
+                .and_then(Value::as_u64)
+                .is_some_and(|turns| match self.profile {
+                    TranscriptProfile::ConformanceV1 => turns == self.assistant_messages,
+                    TranscriptProfile::DogfoodReadOnlyV0 => {
+                        turns > 0 && turns <= self.assistant_messages
+                    }
+                });
         if self.phase != Phase::Active
             || self.assistant_messages == 0
-            || object.get("num_turns").and_then(Value::as_u64) != Some(self.assistant_messages)
+            || !self.outstanding_tool_use_ids.is_empty()
+            || !num_turns_matches
             || !model_usage_matches
             || object.get("is_error").and_then(Value::as_bool) != Some(false)
             || object.get("stop_reason").and_then(Value::as_str) != Some("end_turn")

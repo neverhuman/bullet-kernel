@@ -1,3 +1,5 @@
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::store::ProjectionReader;
 use bullet_application::{materialize_plan, LeaseService, Ledger, PlanInput, StoredGraph};
@@ -25,7 +27,7 @@ fn reopen(path: &Path) -> SqliteLedger {
 #[test]
 fn sqlite_failure_boundaries_reopen_to_exactly_old_or_complete_next() {
     for fail_after in 0..=8 {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = support::private_tempdir();
         let path = dir.path().join("materialize.sqlite");
         let seed = format!("sqlite-materialize-{fail_after}");
         let key = format!("materialize:{seed}");
@@ -81,7 +83,7 @@ fn sqlite_failure_boundaries_reopen_to_exactly_old_or_complete_next() {
 
 #[test]
 fn sqlite_conflict_and_corrupt_result_survive_reopen_inertly() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("materialize.sqlite");
     let seed = "sqlite-materialize-corrupt";
     let key = format!("materialize:{seed}");

@@ -5,6 +5,7 @@ mod contracts;
 #[path = "demo_live/mod.rs"]
 mod demo_synthetic;
 mod maintenance;
+mod mission;
 mod provider;
 mod transaction;
 
@@ -46,6 +47,11 @@ enum Commands {
     Authority {
         #[command(subcommand)]
         command: authority::AuthorityCommands,
+    },
+    /// Materialize one plan revision into the local ledger and read it back.
+    Mission {
+        #[command(subcommand)]
+        command: mission::MissionCommands,
     },
     /// Provider live-conformance: policy-gated and fail-closed at runtime observation.
     Provider {
@@ -189,6 +195,7 @@ fn run(command: Commands) -> Result<(), String> {
             ContractsCommands::Check => contracts::check(),
         },
         Commands::Authority { command } => authority::run(command),
+        Commands::Mission { command } => mission::run(command),
     }
 }
 

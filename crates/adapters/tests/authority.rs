@@ -1,5 +1,7 @@
 //! Durable authority checks fail closed on corrupt or unavailable lease truth.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::{materialize_plan, ActiveLeaseSubject, LeaseService, Ledger, PlanInput};
 use bullet_domain::TaskClass;
@@ -27,7 +29,7 @@ fn acquire(path: &std::path::Path, seed: &str) -> ActiveLeaseSubject {
 
 #[test]
 fn corrupt_lease_row_never_authorizes() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("corrupt.sqlite");
     let subject = acquire(&path, "corrupt");
     Connection::open(&path)
@@ -46,7 +48,7 @@ fn corrupt_lease_row_never_authorizes() {
 
 #[test]
 fn unavailable_authority_table_never_authorizes() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let path = dir.path().join("unavailable.sqlite");
     let _subject = acquire(&path, "unavailable");
     Connection::open(&path)

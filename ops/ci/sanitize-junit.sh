@@ -21,6 +21,11 @@ done
 
 destination_dir="$(dirname "$destination")"
 mkdir -p "$destination_dir"
+if [[ -e "$destination" || -L "$destination" ]]; then
+  [[ -f "$destination" && ! -L "$destination" ]] \
+    || refuse_sanitizer JUNIT_SANITIZER_DESTINATION_INVALID \
+      "$destination is not a non-symlink regular file"
+fi
 temporary="$(mktemp "$destination_dir/.$(basename "$destination").XXXXXX.tmp")"
 cleanup() { rm -f -- "$temporary"; }
 trap cleanup EXIT
@@ -200,6 +205,6 @@ END {
 fi
 
 sync -f "$temporary"
-mv -f -- "$temporary" "$destination"
+mv -fT -- "$temporary" "$destination"
 sync -f "$destination_dir"
 trap - EXIT

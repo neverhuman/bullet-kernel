@@ -3,6 +3,8 @@
 //! durable rows, every route shares one watermark, and corrupt rows are
 //! typed 500 problems rather than shorter lists.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::{materialize_plan, run_demo, LeaseService, PlanInput};
 use bullet_domain::{Digest, TaskClass};
@@ -135,7 +137,7 @@ fn insert_events(db: &Path, count: u64) {
 
 #[tokio::test]
 async fn empty_database_projects_zero_rows_at_watermark_zero_on_every_route() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let addr = start(&dir.path().join("ledger.sqlite")).await;
     let (fleet, as_of) = snapshot(addr, "/api/v1/fleet").await;
     assert_eq!(as_of, 0);
@@ -183,7 +185,7 @@ async fn empty_database_projects_zero_rows_at_watermark_zero_on_every_route() {
 
 #[tokio::test]
 async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     let receipt = {
         let mut ledger = SqliteLedger::open(&db).expect("ledger");
@@ -257,7 +259,7 @@ async fn seeded_demo_projects_durable_rows_under_one_shared_watermark() {
 
 #[tokio::test]
 async fn fleet_and_sessions_project_a_live_lease_from_the_database_clock() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     let (graph, attempt) = {
         let mut ledger = SqliteLedger::open(&db).expect("ledger");
@@ -297,7 +299,7 @@ async fn fleet_and_sessions_project_a_live_lease_from_the_database_clock() {
 
 #[tokio::test]
 async fn corrupt_rows_are_typed_500_problems_not_shorter_lists() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     {
         let mut ledger = SqliteLedger::open(&db).expect("ledger");
@@ -337,7 +339,7 @@ async fn corrupt_rows_are_typed_500_problems_not_shorter_lists() {
 
 #[tokio::test]
 async fn audit_tail_is_bounded_to_the_newest_sixty_four_events() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = support::private_tempdir();
     let db = dir.path().join("ledger.sqlite");
     insert_events(&db, 100);
     let addr = start(&db).await;

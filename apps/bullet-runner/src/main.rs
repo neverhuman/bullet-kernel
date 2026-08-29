@@ -1,4 +1,4 @@
-//! Attempt runner CLI (ADR 0001): leases a ready work package from farmd,
+//! Attempt runner CLI (ADR 0001): replays a Kernel-selected work-package lease,
 //! spawns bullet-gitd for the private clone, drives a read-only provider
 //! session, applies scope-checked PatchProposals through the daemon, runs
 //! the deterministic gate, and reports the exact candidate.
@@ -9,8 +9,9 @@ mod supervisor;
 use bullet_domain::{RunnerId, WorkPackageId};
 use bullet_harness_core::HarnessAdapter;
 use bullet_runner_core::{
-    run_attempt, AcquireRequest, AttemptConfig, AttemptOutcome, HttpLeaseClient, JournalSink,
-    LeaseClient, MonotonicClock,
+    run_attempt, AcquireRequest, AttemptConfig, AttemptOutcome, CandidatePreparationAdmission,
+    ExpectedLeaseServer, HttpLeaseClient, JournalSink, LeaseClient, MonotonicClock,
+    SignedLeaseRpcClient,
 };
 use clap::Parser;
 use std::path::PathBuf;
@@ -28,12 +29,31 @@ struct Args {
     /// farmd control-plane base URL. Not a lease-transport admission path.
     #[arg(long, default_value = "http://127.0.0.1:7420")]
     farmd: String,
-    /// Reserved Kernel socket input. Product admission remains unavailable.
+    /// Absolute farmd lease-transport socket. Product admission requires this
+    /// together with `--farmd-uid`, `--socket-gid`, and `--lease-recovery`.
     #[arg(long)]
     lease_socket: Option<PathBuf>,
+    /// Pinned farmd service UID for UDS admission.
+    #[arg(long)]
+    farmd_uid: Option<u32>,
+    /// Pinned lease-transport socket GID.
+    #[arg(long)]
+    socket_gid: Option<u32>,
+    /// Absolute acquire-recovery file used by the admitted UDS client.
+    #[arg(long)]
+    lease_recovery: Option<PathBuf>,
+    /// Exact digest of the registered Candidate-preparation source.
+    #[arg(long)]
+    candidate_request_digest: String,
+    /// Absolute canonical protected public-key record for Candidate grants.
+    #[arg(long)]
+    candidate_verification_key: PathBuf,
     /// Exact runner identity (run_<32hex>).
     #[arg(long)]
     runner_id: String,
+    /// Exact Kernel-selected work package to acquire/replay (wpk_<64hex>).
+    #[arg(long)]
+    work_package_id: String,
     /// Runner generation.
     #[arg(long, default_value_t = 1)]
     runner_epoch: u64,
@@ -49,6 +69,9 @@ struct Args {
     /// Exact base commit SHA.
     #[arg(long)]
     base_sha: String,
+    /// Exact new external directory for the successful Candidate preservation.
+    #[arg(long)]
+    preservation_destination: PathBuf,
     /// Mission objective for the prompt capsule.
     #[arg(long)]
     objective: String,
@@ -61,9 +84,9 @@ struct Args {
     /// Checkpoint journal directory.
     #[arg(long, default_value = "./target/demo/runner")]
     data_dir: PathBuf,
-    /// Idempotency key; omit for a fresh attempt.
+    /// Exact idempotency key used by the Kernel's pre-acquisition.
     #[arg(long)]
-    idempotency_key: Option<String>,
+    idempotency_key: String,
     /// Lease TTL seconds (self-kill deadline is 4/5 of this).
     #[arg(long, default_value_t = bullet_runner_core::lease::MAX_LEASE_TTL_SECONDS)]
     ttl_seconds: i64,
@@ -78,6 +101,10 @@ fn adapter_for(provider: &str) -> Option<Arc<dyn HarnessAdapter>> {
 
 fn parse_runner_id(raw: &str) -> Result<RunnerId, String> {
     RunnerId::parse(raw).map_err(|error| error.to_string())
+}
+
+fn parse_work_package_id(raw: &str) -> Result<WorkPackageId, String> {
+    WorkPackageId::parse(raw).map_err(|error| error.to_string())
 }
 
 /// Bridges the runner loop's journal into the durable checkpoint supervisor.
@@ -124,6 +151,7 @@ fn outcome_json(outcome: &AttemptOutcome) -> serde_json::Value {
         "gate_passed": outcome.gates.iter().all(|gate| gate.passed()),
         "gates": outcome.gates,
         "candidate": outcome.candidate,
+        "preservation": outcome.preservation,
     })
 }
 
@@ -133,13 +161,118 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> ExitCode {
-    // Both component clients remain compiler-checked but unreachable from the
-    // product CLI until durable runner registration supplies the two pinned UIDs.
+    // HttpLeaseClient stays compiler-checked and unreachable. Product dispatch
+    // constructs SignedLeaseRpcClient::new_admitted only when every local
+    // admission input exists.
     let _preserved_http_path = run_quarantined;
-    let _ = args;
-    let (code, message) = lease_transport_refusal();
-    eprintln!("bullet-runner: {code}: {message}");
-    ExitCode::from(2)
+    let work_package_id = match parse_work_package_id(&args.work_package_id) {
+        Ok(work_package_id) => work_package_id,
+        Err(error) => {
+            eprintln!("bullet-runner: INVALID_WORK_PACKAGE_ID: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let candidate_admission = match admit_candidate_authority(&args) {
+        Ok(admission) => admission,
+        Err(error) => {
+            eprintln!("bullet-runner: {}: {error}", error.reason_code());
+            return ExitCode::from(2);
+        }
+    };
+    match admit_signed_lease_client(&args) {
+        Ok(client) => run_admitted(args, client, candidate_admission, work_package_id).await,
+        Err((code, message)) => {
+            eprintln!("bullet-runner: {code}: {message}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn admit_candidate_authority(
+    args: &Args,
+) -> Result<CandidatePreparationAdmission, bullet_runner_core::RunnerError> {
+    CandidatePreparationAdmission::from_key_file(
+        args.candidate_request_digest.clone(),
+        &args.candidate_verification_key,
+    )
+}
+
+fn admit_signed_lease_client(
+    args: &Args,
+) -> Result<std::sync::Arc<SignedLeaseRpcClient>, (&'static str, &'static str)> {
+    let socket = args
+        .lease_socket
+        .as_ref()
+        .ok_or_else(lease_transport_refusal)?;
+    if !socket.is_absolute() {
+        return Err(lease_transport_refusal());
+    }
+    let farmd_uid = args.farmd_uid.ok_or_else(lease_transport_refusal)?;
+    let socket_gid = args.socket_gid.ok_or_else(lease_transport_refusal)?;
+    let recovery = args
+        .lease_recovery
+        .as_ref()
+        .ok_or_else(lease_transport_refusal)?;
+    if !recovery.is_absolute() {
+        return Err(lease_transport_refusal());
+    }
+    let runner_id = parse_runner_id(&args.runner_id).map_err(|_| lease_transport_refusal())?;
+    SignedLeaseRpcClient::new_admitted(
+        socket.clone(),
+        runner_id,
+        args.runner_epoch,
+        ExpectedLeaseServer::new(farmd_uid, socket_gid),
+    )
+    .with_recovery_file(recovery)
+    .map(std::sync::Arc::new)
+    .map_err(|_| lease_transport_refusal())
+}
+
+async fn run_admitted(
+    args: Args,
+    client: std::sync::Arc<SignedLeaseRpcClient>,
+    candidate_admission: CandidatePreparationAdmission,
+    work_package_id: WorkPackageId,
+) -> ExitCode {
+    let runner_id = match parse_runner_id(&args.runner_id) {
+        Ok(runner_id) => runner_id,
+        Err(error) => {
+            eprintln!("bullet-runner: INVALID_RUNNER_ID: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let Some(adapter) = adapter_for(&args.provider) else {
+        eprintln!(
+            "bullet-runner: unavailable provider {} (simulator-only quarantine)",
+            args.provider
+        );
+        return ExitCode::from(2);
+    };
+    let supervisor = match Supervisor::open(&args.data_dir) {
+        Ok(supervisor) => supervisor,
+        Err(err) => {
+            eprintln!("bullet-runner: journal: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    let session = runner_id.to_string();
+    if let Ok(prior) = supervisor.salvage(&session) {
+        eprintln!(
+            "bullet-runner: prior checkpoint seq {} ({})",
+            prior.seq, prior.last_command
+        );
+    }
+    let journal = std::sync::Arc::new(SupervisorJournal::new(supervisor, session));
+    execute(
+        args,
+        client,
+        adapter,
+        journal,
+        runner_id,
+        work_package_id,
+        candidate_admission,
+    )
+    .await
 }
 
 fn lease_transport_refusal() -> (&'static str, &'static str) {
@@ -150,6 +283,13 @@ fn lease_transport_refusal() -> (&'static str, &'static str) {
 }
 
 async fn run_quarantined(args: Args) -> ExitCode {
+    let candidate_admission = match admit_candidate_authority(&args) {
+        Ok(admission) => admission,
+        Err(error) => {
+            eprintln!("bullet-runner: {}: {error}", error.reason_code());
+            return ExitCode::from(2);
+        }
+    };
     let runner_id = match parse_runner_id(&args.runner_id) {
         Ok(runner_id) => runner_id,
         Err(error) => {
@@ -204,7 +344,16 @@ async fn run_quarantined(args: Args) -> ExitCode {
         );
     }
     let journal = Arc::new(SupervisorJournal::new(supervisor, session));
-    execute(args, client, adapter, journal, runner_id, work_package_id).await
+    execute(
+        args,
+        client,
+        adapter,
+        journal,
+        runner_id,
+        work_package_id,
+        candidate_admission,
+    )
+    .await
 }
 
 async fn execute(
@@ -214,18 +363,13 @@ async fn execute(
     journal: Arc<SupervisorJournal>,
     runner_id: RunnerId,
     work_package_id: WorkPackageId,
+    candidate_admission: CandidatePreparationAdmission,
 ) -> ExitCode {
-    let idempotency_key = args.idempotency_key.clone().unwrap_or_else(|| {
-        format!(
-            "lease:{}",
-            bullet_harness_core::synthetic_uuid("bullet-runner")
-        )
-    });
     let request = AcquireRequest {
         work_package_id,
         runner_id,
         runner_epoch: args.runner_epoch,
-        idempotency_key,
+        idempotency_key: args.idempotency_key.clone(),
         ttl_seconds: args.ttl_seconds,
     };
     let config = AttemptConfig::new(
@@ -235,7 +379,9 @@ async fn execute(
         args.objective,
         args.scope,
         args.gate_ids,
-    );
+    )
+    .with_candidate_preparation(candidate_admission)
+    .with_preservation_destination(args.preservation_destination);
     let clock = Arc::new(MonotonicClock::new());
     let result = run_attempt(client, adapter, journal.clone(), clock, &request, &config).await;
     journal.close();
@@ -252,104 +398,5 @@ async fn execute(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{lease_transport_refusal, parse_runner_id, run, Args};
-    use bullet_domain::RunnerId;
-    use std::path::PathBuf;
-    use std::process::ExitCode;
-
-    #[tokio::test]
-    async fn runner_identity_is_exact_and_never_derived_from_malformed_text() {
-        let expected = RunnerId::from_seed("admitted-runner");
-        assert_eq!(parse_runner_id(expected.as_str()).unwrap(), expected);
-
-        for invalid in ["", "admitted-runner", "run_short", "run_not-hex"] {
-            assert!(parse_runner_id(invalid).is_err(), "{invalid:?} must refuse");
-        }
-
-        let (code, message) = lease_transport_refusal();
-        assert_eq!(code, "LEASE_TRANSPORT_ADMISSION_UNAVAILABLE");
-        assert!(message.contains("authenticated"));
-        assert!(message.contains("descriptor-bound"));
-        assert!(message.contains("durable"));
-
-        let root = std::env::temp_dir().join(format!(
-            "bullet-runner-refusal-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        assert!(!root.exists(), "test subject must begin absent");
-        let workspace = root.join("must-not-create-workspace");
-        let journal = root.join("must-not-create-journal");
-        let status = run(Args {
-            farmd: "not-a-url".into(),
-            runner_id: "not-a-runner".into(),
-            runner_epoch: 0,
-            provider: "not-a-provider".into(),
-            workspace_root: workspace.clone(),
-            source_repo: root.join("missing-source"),
-            base_sha: "not-an-oid".into(),
-            objective: "must not dispatch".into(),
-            gate_ids: vec!["not-a-gate".into()],
-            scope: vec![".".into()],
-            data_dir: journal.clone(),
-            idempotency_key: None,
-            ttl_seconds: 0,
-            lease_socket: None,
-        })
-        .await;
-        assert_eq!(status, ExitCode::from(2));
-        assert!(!workspace.exists(), "workspace must remain absent");
-        assert!(!journal.exists(), "supervisor journal must remain absent");
-
-        let relative = run(Args {
-            farmd: "http://127.0.0.1:9".into(),
-            runner_id: expected.as_str().into(),
-            runner_epoch: 1,
-            provider: "sim".into(),
-            workspace_root: workspace.clone(),
-            source_repo: root.join("missing-source"),
-            base_sha: "a".repeat(40),
-            objective: "must not dispatch".into(),
-            gate_ids: vec!["gate".into()],
-            scope: vec!["src".into()],
-            data_dir: journal.clone(),
-            idempotency_key: None,
-            ttl_seconds: 15,
-            lease_socket: Some(PathBuf::from("relative/lease.sock")),
-        })
-        .await;
-        assert_eq!(relative, ExitCode::from(2));
-        assert!(
-            !workspace.exists(),
-            "relative socket must not create a workspace"
-        );
-
-        let configured_but_unregistered = run(Args {
-            farmd: "http://127.0.0.1:9".into(),
-            runner_id: expected.as_str().into(),
-            runner_epoch: 1,
-            provider: "sim".into(),
-            workspace_root: workspace.clone(),
-            source_repo: root.join("missing-source"),
-            base_sha: "a".repeat(40),
-            objective: "must not dispatch".into(),
-            gate_ids: vec!["gate".into()],
-            scope: vec!["src".into()],
-            data_dir: journal.clone(),
-            idempotency_key: None,
-            ttl_seconds: 15,
-            lease_socket: Some(root.join("lease.sock")),
-        })
-        .await;
-        assert_eq!(configured_but_unregistered, ExitCode::from(2));
-        assert!(
-            !workspace.exists(),
-            "socket input must not create a workspace"
-        );
-        assert!(!journal.exists(), "socket input must not create a journal");
-    }
-}
+#[path = "main/tests.rs"]
+mod tests;

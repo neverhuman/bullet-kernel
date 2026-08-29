@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Prove that the four nextest filters are non-empty, pairwise disjoint, cover
-# the complete inventory, retain the reviewed counts, and enumerate every test
-# source that can resolve bullet-gitd.
+# the complete inventory, retain reviewed identity/member subjects, reject a
+# count-neutral identity substitution, and enumerate every test source that
+# can resolve bullet-gitd.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
@@ -21,7 +22,8 @@ trap cleanup EXIT
 list_matches() {
   local output="$1"
   local filter="${2:-}"
-  local inventory="$test_root/inventory.json"
+  local inventory
+  inventory="$test_root/$(basename "$output")-inventory.json"
   if [[ -n "$filter" ]]; then
     cargo nextest list --locked --workspace "${NEXTEST_FEATURES[@]}" --run-ignored all --message-format json -E "$filter" >"$inventory"
   else
@@ -98,6 +100,27 @@ assert_digest() {
   fi
 }
 
+expect_digest_rejection() {
+  local source="$1"
+  local expected="$2"
+  local mutated="$test_root/count-neutral-identity-substitution"
+  local output code
+  awk 'NR == 1 { $0 = "synthetic::count_neutral_identity_substitution" } { print }' \
+    "$source" >"$mutated"
+  if [[ "$(line_count "$source")" -ne "$(line_count "$mutated")" ]]; then
+    refuse TEST_PARTITION_HOSTILE_FAILED "identity substitution changed the count"
+    exit 1
+  fi
+  set +e
+  output="$(assert_digest count-neutral-substitution "$mutated" "$expected" 2>&1)"
+  code=$?
+  set -e
+  if [[ "$code" -ne 1 || "$output" != *TEST_IDENTITY_DIGEST_DRIFT* ]]; then
+    refuse TEST_PARTITION_HOSTILE_FAILED "identity substitution code=$code output=$output"
+    exit 1
+  fi
+}
+
 expect_count_rejection inventory-zero 0 "$EXPECTED_TOTAL_TESTS"
 expect_count_rejection inventory-minus-one "$((EXPECTED_TOTAL_TESTS - 1))" "$EXPECTED_TOTAL_TESTS"
 expect_count_rejection inventory-plus-one "$((EXPECTED_TOTAL_TESTS + 1))" "$EXPECTED_TOTAL_TESTS"
@@ -110,6 +133,12 @@ list_matches "$test_root/family" "$FAMILY_FILTER"
 list_ignored_matches "$test_root/all-ignored"
 list_ignored_matches "$test_root/standalone-ignored" "$STANDALONE_FILTER"
 list_ignored_matches "$test_root/egress-ignored" "$EGRESS_FILTER"
+
+cargo metadata --locked --no-deps --format-version 1 >"$test_root/metadata.json"
+jq -r '.workspace_members[] as $id | .packages[] | select(.id == $id) | .name' \
+  "$test_root/metadata.json" | sort -u >"$test_root/workspace-members"
+jq -r '."rust-suites" | to_entries[] | .value["package-name"]' \
+  "$test_root/all-inventory.json" | sort -u >"$test_root/nextest-packages"
 
 assert_count all "$test_root/all" "$EXPECTED_TOTAL_TESTS"
 assert_count standalone "$test_root/standalone" "$EXPECTED_STANDALONE_TESTS"
@@ -124,6 +153,14 @@ assert_digest standalone "$test_root/standalone" "$EXPECTED_STANDALONE_IDENTITIE
 assert_digest egress "$test_root/egress" "$EXPECTED_EGRESS_IDENTITIES_SHA256"
 assert_digest contract "$test_root/contract" "$EXPECTED_CONTRACT_IDENTITIES_SHA256"
 assert_digest family "$test_root/family" "$EXPECTED_FAMILY_IDENTITIES_SHA256"
+assert_count workspace-members "$test_root/workspace-members" "$EXPECTED_WORKSPACE_MEMBERS"
+assert_digest workspace-members "$test_root/workspace-members" "$EXPECTED_WORKSPACE_MEMBERS_SHA256"
+if ! cmp -s "$test_root/workspace-members" "$test_root/nextest-packages"; then
+  diff -u "$test_root/workspace-members" "$test_root/nextest-packages" >&2 || true
+  refuse TEST_WORKSPACE_MEMBER_OMITTED "nextest inventory does not contain every workspace member"
+  exit 1
+fi
+expect_digest_rejection "$test_root/all" "$EXPECTED_ALL_IDENTITIES_SHA256"
 
 if [[ $((EXPECTED_STANDALONE_TESTS + EXPECTED_EGRESS_TESTS + EXPECTED_CONTRACT_TESTS + EXPECTED_FAMILY_TESTS)) -ne "$EXPECTED_TOTAL_TESTS" ]]; then
   refuse TEST_PARTITION_DECLARATION_INVALID "declared partition counts do not sum to total"

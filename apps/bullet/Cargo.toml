@@ -8,6 +8,10 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+synthetic-dogfood = ["bullet-application/test-seams", "bullet-runner-core/test-seams"]
+
 [dependencies]
 bullet-adapters.workspace = true
 bullet-application.workspace = true

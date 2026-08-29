@@ -1,6 +1,8 @@
 //! SQLite launch-grant nonces: single use under the database clock, and the
 //! full issuer path against a real durable lease.
 
+mod support;
+
 use bullet_adapters::SqliteLedger;
 use bullet_application::launch_grant::{
     durable_lease_binding, verify_launch_grant, LaunchGrantExpectation, LaunchGrantIssuer,
@@ -34,7 +36,7 @@ fn far_future() -> u64 {
 
 #[test]
 fn nonces_are_consumed_exactly_once_under_the_database_clock() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = support::private_tempdir();
     let mut ledger = SqliteLedger::open(directory.path().join("nonces.sqlite")).unwrap();
     let attempt = AttemptId::from_seed("attempt");
     let other = AttemptId::from_seed("other");
@@ -124,7 +126,7 @@ fn acquire(ledger: &mut SqliteLedger, seed: &str) -> Attempt {
 
 #[test]
 fn issuer_mints_from_the_sqlite_lease_and_replay_is_durable() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = support::private_tempdir();
     let path = directory.path().join("ledger.sqlite");
     let mut ledger = SqliteLedger::open(&path).unwrap();
     let attempt = acquire(&mut ledger, "sqlite-grant");

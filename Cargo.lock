@@ -255,6 +255,7 @@ dependencies = [
  "blake3",
  "bullet-application",
  "bullet-domain",
+ "bullet-effects-core",
  "chrono",
  "libc",
  "rusqlite",
@@ -286,6 +287,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -344,9 +346,13 @@ dependencies = [
 name = "bullet-effects-core"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "bullet-application",
  "bullet-domain",
+ "bullet-harness-core",
  "chrono",
+ "hex",
+ "pasetors",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -363,6 +369,7 @@ dependencies = [
  "bullet-adapters",
  "bullet-application",
  "bullet-domain",
+ "bullet-harness-core",
  "bullet-runner-core",
  "chrono",
  "clap",
@@ -474,6 +481,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "chrono",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
@@ -544,13 +552,21 @@ dependencies = [
 name = "bullet-runner"
 version = "0.1.0"
 dependencies = [
+ "bullet-application",
  "bullet-domain",
+ "bullet-effects-core",
  "bullet-harness-core",
  "bullet-harness-sim",
  "bullet-runner-core",
+ "bullet-verifier-core",
  "clap",
+ "hex",
+ "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "tokio",
 ]
 
@@ -604,6 +620,9 @@ name = "bullet-verifier-core"
 version = "0.1.0"
 dependencies = [
  "bullet-domain",
+ "bullet-harness-core",
+ "hex",
+ "pasetors",
  "serde",
  "serde_json",
  "tempfile",

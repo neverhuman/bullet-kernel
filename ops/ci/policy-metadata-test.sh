@@ -5,7 +5,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
 umask 077
 
-for tool in awk cmp cp git ln mktemp rm sha256sum sort; do
+for tool in awk cmp cp git ln mkdir mktemp rg rm sha256sum sort zizmor; do
   require_tool "$tool" || exit 1
 done
 
@@ -13,19 +13,19 @@ test_root="$(mktemp -d)"
 cleanup() { rm -rf -- "$test_root"; }
 trap cleanup EXIT
 
-readonly registry_digest=57cb9f69fef171eb5f826e4020161862d29f5ae17d3d7680ce5c2034575b21ce
+readonly registry_digest=35183b08cb636c370b777f01d1782e6ad442711d165735d8723d011cf073bcac
 readonly policy_digest=3751585d43e598503679f0efa4a516a14698e2eb62778d0e8ec2922409c7ba68
-readonly security_digest=da1bbe63104393c60c3477f501e9a485194119b5bdd54c777e47a819f561bcf8
-readonly dispatcher_digest=af35d9cf83fc751293f95ce961d7ba724c341b03c7282d0c2c0fdcdd516c7882
-readonly doctor_digest=ec40895791b09d232e32776311947f336ceca48ebe432c76b3b1ffc9fdebc4e7
+readonly security_digest=313750deb16b9531b9a758795c2f7acdbbe6c168ad12bf0d75da1424c79b09be
+readonly dispatcher_digest=bffb9db7ae5db2e00b2d3f86408061d8cddeb624ba0f6136749949626ea69182
+readonly doctor_digest=8a780cb8fe41231d752be17b3b1367eb1ef98081d0fb45609c33aff87ad708fa
 
 declare -ar lane_names=(
-  required fast lint contract security docs family preflight links coverage
+  required fast lint contract security docs family faults preflight links coverage
   history-secrets portable-refusal nightly audit egress toolchain-msrv gates all
 )
 declare -ar lane_scripts=(
   ops/ci/required.sh ops/ci/fast.sh ops/ci/lint.sh ops/ci/contract.sh
-  ops/ci/security.sh ops/ci/docs.sh ops/ci/family.sh ops/ci/preflight.sh
+  ops/ci/security.sh ops/ci/docs.sh ops/ci/family.sh ops/ci/faults.sh ops/ci/preflight.sh
   ops/ci/links.sh ops/ci/coverage.sh ops/ci/history-secrets.sh
   ops/ci/portable-refusal.sh ops/ci/nightly.sh ops/ci/audit.sh ops/ci/egress.sh
   ops/ci/toolchain-msrv.sh ops/ci/required.sh ops/ci/required.sh
@@ -254,17 +254,19 @@ remove_line_once "$policy" '[pins]' "$test_root/security-order-a.toml"
 insert_before_once "$test_root/security-order-a.toml" '[severity_thresholds]' '[pins]' "$test_root/security-order.toml"
 expect_failure security-section-order validate_security_policy "$test_root/security-order.toml"
 
-exact_zizmor='zizmor --offline --no-ignores --strict-collection .'
+exact_zizmor='zizmor --offline --no-ignores --strict-collection .github'
 for hostile in 'set +e' 'set +o errexit' 'builtin set +e' 'command set +e' "trap 'exit 0' EXIT" 'zizmor() { return 0; }' 'alias zizmor=true'; do
   insert_before_once ops/ci/security.sh "$exact_zizmor" "$hostile" "$test_root/security-control.sh"
   expect_failure security-control validate_security_shell "$test_root/security-control.sh"
 done
 for hostile in \
-  'zizmor --no-ignores --strict-collection .' \
-  'zizmor --offline --strict-collection .' \
-  'zizmor --offline --no-ignores .' \
-  'zizmor --offline --no-ignores --strict-collection . || true' \
-  '! zizmor --offline --no-ignores --strict-collection .'; do
+  'zizmor --no-ignores --strict-collection .github' \
+  'zizmor --offline --strict-collection .github' \
+  'zizmor --offline --no-ignores .github' \
+  'zizmor --offline --no-ignores --strict-collection .' \
+  'zizmor --offline --no-ignores --strict-collection .github/workflows' \
+  'zizmor --offline --no-ignores --strict-collection .github || true' \
+  '! zizmor --offline --no-ignores --strict-collection .github'; do
   replace_line_once ops/ci/security.sh "$exact_zizmor" "$hostile" "$test_root/security-zizmor.sh"
   expect_failure security-zizmor validate_security_shell "$test_root/security-zizmor.sh"
 done
@@ -272,7 +274,22 @@ insert_after_once ops/ci/security.sh "$exact_zizmor" "$exact_zizmor" "$test_root
 expect_failure security-zizmor-duplicate validate_security_shell "$test_root/security-duplicate-command.sh"
 remove_line_once ops/ci/security.sh "$exact_zizmor" "$test_root/security-missing-command.sh"
 expect_failure security-zizmor-missing validate_security_shell "$test_root/security-missing-command.sh"
+zizmor_fixture="$test_root/zizmor-fixture"
+mkdir -p "$zizmor_fixture/.github/workflows"
+printf '%s\n' \
+  'name: hostile-scope-canary' \
+  'on: push' \
+  'jobs: []' \
+  >"$zizmor_fixture/.github/workflows/hostile.yml"
+if (cd "$zizmor_fixture" \
+    && zizmor --offline --no-ignores --strict-collection .github \
+      >"$test_root/zizmor-scope.out" 2>&1); then
+  refuse POLICY_HOSTILE_ACCEPTED security-zizmor-scope
+  exit 1
+fi
+rg -q 'hostile.yml' "$test_root/zizmor-scope.out" \
+  || { refuse SECURITY_ZIZMOR_SCOPE_UNPROVED .github; exit 1; }
 insert_before_once scripts/ci-local.sh '    fast)     bash ops/ci/fast.sh ;;' '    fast)     true ;;' "$test_root/dispatcher-shadow.sh"
 expect_failure dispatcher-shadow validate_dispatcher "$test_root/dispatcher-shadow.sh"
 
-log "policy metadata passed: exact-byte 18-lane/security/dispatcher subjects; hostile bypasses rejected"
+log "policy metadata passed: exact-byte 19-lane/security/dispatcher subjects; hostile bypasses rejected"

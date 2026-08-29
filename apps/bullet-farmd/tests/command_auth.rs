@@ -1,5 +1,7 @@
 //! Real-socket browser authority and public command reconciliation tests.
 
+mod support;
+
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -134,7 +136,7 @@ fn command_headers<'a>(cookie: &'a str, csrf: &'a str) -> [(&'a str, &'a str); 3
 
 #[tokio::test]
 async fn bootstrap_is_strict_one_time_and_never_enables_wildcard_cors() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let server = start(&directory.path().join("auth.sqlite")).await;
     let missing = request(
         &server,
@@ -175,7 +177,7 @@ async fn bootstrap_is_strict_one_time_and_never_enables_wildcard_cors() {
 
 #[tokio::test]
 async fn origin_cookie_and_csrf_each_fail_closed_before_command_mutation() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let server = start(&directory.path().join("guards.sqlite")).await;
     let (cookie, csrf) = bootstrap(&server).await;
     let command = json!({"idempotency_key":"guarded","kind":"run_demo","payload":{}});
@@ -230,7 +232,7 @@ async fn origin_cookie_and_csrf_each_fail_closed_before_command_mutation() {
 
 #[tokio::test]
 async fn command_submission_replay_and_raw_phase_writes_fail_closed() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let server = start(&directory.path().join("commands.sqlite")).await;
     let (cookie, csrf) = bootstrap(&server).await;
     let headers = command_headers(&cookie, &csrf);
@@ -312,7 +314,7 @@ async fn command_submission_replay_and_raw_phase_writes_fail_closed() {
 
 #[tokio::test]
 async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let server = start(&directory.path().join("strict.sqlite")).await;
     let (cookie, csrf) = bootstrap(&server).await;
     let headers = command_headers(&cookie, &csrf);
@@ -425,7 +427,7 @@ async fn strict_envelope_and_authenticated_status_reads_refuse_ambiguity() {
 
 #[tokio::test]
 async fn missing_command_reconciliation_is_typed_not_found_without_mutation() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let server = start(&directory.path().join("worker.sqlite")).await;
     let bearer = format!("Bearer {WORKER}");
     let missing_id = format!("cmd_{}", "f".repeat(64));
@@ -441,26 +443,21 @@ async fn missing_command_reconciliation_is_typed_not_found_without_mutation() {
         None,
     )
     .await;
-    assert_eq!(missing.status, 404, "{}", missing.text);
+    assert_eq!(missing.status, 410, "{}", missing.text);
     assert_eq!(
         header(&missing, "content-type").as_deref(),
         Some("application/problem+json")
     );
-    assert_eq!(missing.body["status"], 404);
-    assert_eq!(missing.body["code"], "NOT_FOUND");
+    assert_eq!(missing.body["status"], 410);
+    assert_eq!(missing.body["code"], "WORKLOAD_API_UDS_REQUIRED");
     assert_eq!(missing.body["retryable"], false);
     assert_eq!(
         missing.body["type"],
-        "https://bullet.farm/problems/not-found"
+        "https://bullet.farm/problems/workload-api-uds-required"
     );
-    assert_eq!(
-        missing.body["repair"],
-        "Refresh the owning projection and retry only if the resource appears there."
-    );
-    assert_eq!(
-        missing.body["detail"],
-        format!("command {missing_id} was not found")
-    );
+    assert!(missing.body["repair"]
+        .as_str()
+        .is_some_and(|repair| repair.contains("Unix")));
     let connection = Connection::open(&server.db).expect("open missing ledger");
     for table in ["commands", "outbox", "events"] {
         let count: i64 = connection
@@ -474,7 +471,7 @@ async fn missing_command_reconciliation_is_typed_not_found_without_mutation() {
 
 #[tokio::test]
 async fn only_independent_worker_authority_can_reconcile_and_replay() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = support::private_tempdir();
     let server = start(&directory.path().join("worker.sqlite")).await;
     let (cookie, csrf) = bootstrap(&server).await;
     let admitted = request(
@@ -522,19 +519,13 @@ async fn only_independent_worker_authority_can_reconcile_and_replay() {
     assert_eq!(pending.body["status"], "PENDING");
 
     let settled = request(&server, "POST", &path, &[("Authorization", &bearer)], None).await;
-    assert_eq!(settled.status, 200, "{}", settled.text);
-    assert_eq!(settled.body["status"], "UNKNOWN");
-    assert_eq!(settled.body["result"]["command_id"], id);
-    assert_eq!(
-        settled.body["result"]["payload_digest"],
-        settled.body["payload_digest"]
-    );
-    assert_eq!(
-        settled.body["result"]["code"],
-        "EXECUTION_ADAPTER_UNAVAILABLE"
-    );
+    assert_eq!(settled.status, 410, "{}", settled.text);
+    assert_eq!(settled.body["code"], "WORKLOAD_API_UDS_REQUIRED");
     let replay = request(&server, "POST", &path, &[("Authorization", &bearer)], None).await;
-    assert_eq!(replay.body, settled.body);
+    assert_eq!(replay.status, 410);
+    for field in ["code", "status", "detail", "repair", "retryable", "type"] {
+        assert_eq!(replay.body[field], settled.body[field]);
+    }
     let projected = request(
         &server,
         "GET",
@@ -543,7 +534,8 @@ async fn only_independent_worker_authority_can_reconcile_and_replay() {
         None,
     )
     .await;
-    assert_eq!(projected.body, settled.body);
+    assert_eq!(projected.body["status"], "PENDING");
+    assert_eq!(projected.body["result"], Value::Null);
     let connection = Connection::open(&server.db).expect("open");
     let reconciled: i64 = connection
         .query_row(
@@ -552,5 +544,5 @@ async fn only_independent_worker_authority_can_reconcile_and_replay() {
             |row| row.get(0),
         )
         .expect("count");
-    assert_eq!(reconciled, 1);
+    assert_eq!(reconciled, 0);
 }

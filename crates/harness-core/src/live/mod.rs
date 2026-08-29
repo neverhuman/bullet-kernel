@@ -6,18 +6,29 @@
 //! blocker has already been cleared by its own evidence.
 
 pub mod dispatch;
+pub mod probe;
 pub mod receipt;
 pub mod request;
+pub mod s2_boundary;
 
 pub use dispatch::{
-    artifact_digest, capture_turn, run_interactive, scan_events, CommandFactory,
-    InteractiveReaction, LineHandler, LiveTurnOutcome, RawCapture,
+    artifact_digest, capture_turn, capture_turn_supervised, run_interactive,
+    run_interactive_supervised, scan_events, CommandFactory, DispatchCapture, DispatchSignal,
+    DispatchStop, FallibleCommandFactory, InteractiveReaction, LineHandler, LiveTurnOutcome,
+    RawCapture, SupervisedCommand,
+};
+pub use probe::{
+    native_text, ContainmentClass, ExecutableIdentity, ObservedCapability, ProbeExit, ProbeFacts,
+    ProbeGrantEvidence, ProtocolHandshake, RuntimeProbeError, RuntimeProbeObservation,
+    MAX_PROBE_ARGV, MAX_PROBE_STDOUT_BYTES, MAX_PROBE_VERSION_BYTES, MAX_PROBE_WALL_MS,
+    RUNTIME_PROBE_DOMAIN, RUNTIME_PROBE_SCHEMA_VERSION,
 };
 pub use receipt::{
     LiveConformanceReceipt, LiveOutcome, LiveStep, LiveStepRecord, StepLog, StepStatus,
     LIVE_CONFORMANCE_SCHEMA_VERSION,
 };
 pub use request::{LiveTurnRequest, CONFORMANCE_EXPECTED_RESPONSE, CONFORMANCE_PROMPT};
+pub use s2_boundary::{admit_s2_spawn, S2BoundaryError};
 
 use crate::adapter::HarnessDescriptor;
 use crate::admission::{
@@ -97,6 +108,43 @@ impl RuntimeConformanceObservation {
     }
 }
 
+/// What one runtime observation step produced. The two arms are disjoint
+/// types: there is deliberately no `From<RuntimeProbeObservation>` for
+/// [`RuntimeConformanceObservation`], no `into_parts` on the probe type, and
+/// no constructor that accepts probe facts in place of a validated proposal.
+/// An admission-style consumer must match this enum explicitly and can only
+/// reach conformance evidence through the `Conformance` arm.
+#[derive(Clone, Debug)]
+pub enum ProbeOutcome {
+    /// Facts only; never admits.
+    ProbeOnly(Box<RuntimeProbeObservation>),
+    /// A genuine conformance observation from a separately authorized turn.
+    Conformance(Box<RuntimeConformanceObservation>),
+}
+
+impl ProbeOutcome {
+    /// The conformance observation, if this outcome is one.
+    ///
+    /// # Errors
+    ///
+    /// `RUNTIME_PROBE_NOT_ADMISSIBLE` for a probe-only outcome.
+    pub fn into_conformance(self) -> Result<RuntimeConformanceObservation, RuntimeProbeError> {
+        match self {
+            Self::Conformance(observation) => Ok(*observation),
+            Self::ProbeOnly(_) => Err(RuntimeProbeError::NotAdmissible),
+        }
+    }
+
+    /// The probe-only observation, if this outcome is one.
+    #[must_use]
+    pub fn probe_only(&self) -> Option<&RuntimeProbeObservation> {
+        match self {
+            Self::ProbeOnly(observation) => Some(observation),
+            Self::Conformance(_) => None,
+        }
+    }
+}
+
 /// True when a response is exactly the single admitted word, ignoring only
 /// surrounding whitespace.
 #[must_use]
@@ -139,6 +187,27 @@ pub trait LiveDispatcher {
         _observed_at: DateTime<Utc>,
     ) -> Result<RuntimeConformanceObservation, HarnessError> {
         Err(HarnessError::RuntimeProbeUnavailable {
+            provider: self.provider().to_string(),
+        })
+    }
+
+    /// Produce probe-only facts from a separately granted, contained probe
+    /// execution: executable identity, argv, native version text, handshake,
+    /// capabilities, exit, wall time. The result carries no proposal and no
+    /// turn lifecycle and can never satisfy runtime admission by itself.
+    ///
+    /// The default is deliberately fail-closed; an adapter overriding it must
+    /// run under `grant`'s containment and bind the observation to that grant.
+    ///
+    /// # Errors
+    ///
+    /// `RUNTIME_PROBE_UNAVAILABLE` unless an adapter supplies a real contained
+    /// probe, or another typed probe refusal.
+    fn observe_runtime_probe(
+        &self,
+        _grant: &ProbeGrantEvidence,
+    ) -> Result<RuntimeProbeObservation, RuntimeProbeError> {
+        Err(RuntimeProbeError::Unavailable {
             provider: self.provider().to_string(),
         })
     }

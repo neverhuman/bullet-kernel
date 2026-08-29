@@ -1,8 +1,18 @@
 //! Control-plane daemon. The portal is a projection of this API.
 
+#[path = "main/launch.rs"]
+mod launch;
+
 use bullet_farmd::api;
 use bullet_farmd::reaper::{self, ReapInterval};
 use clap::Parser;
+#[cfg(test)]
+use launch::admit_lease_transport;
+use launch::{
+    admit_lease_transport_launch, provision_lease_transport_key, read_worker_token, validate_bind,
+};
+#[cfg(all(test, unix))]
+use launch::{open_worker_token, read_worker_token_descriptor};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -10,6 +20,10 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(name = "bullet-farmd")]
 struct Args {
+    /// Create one durable lease-transport signing key and exit. The path must
+    /// be absolute, absent, and beneath a private caller-owned directory.
+    #[arg(long, value_name = "ABSOLUTE_PATH", exclusive = true)]
+    provision_lease_transport_key: Option<PathBuf>,
     /// SQLite data directory.
     #[arg(long, default_value = "./target/demo")]
     data_dir: PathBuf,
@@ -32,6 +46,15 @@ struct Args {
     /// Reserved Unix socket input. Refuses until durable peer registration exists.
     #[arg(long)]
     lease_transport_socket: Option<PathBuf>,
+    /// Durable local peer-registry file (0700 parent, 0600 file).
+    #[arg(long, requires = "lease_transport_socket")]
+    lease_peer_registry: Option<PathBuf>,
+    /// Durable local lease-transport signing key (0700 parent, 0600, 64 bytes).
+    #[arg(long, requires = "lease_transport_socket")]
+    lease_transport_key: Option<PathBuf>,
+    /// Absolute Kernel authority socket for production gitd permit mint/check.
+    #[arg(long, requires = "lease_transport_socket")]
+    kernel_authority_socket: Option<PathBuf>,
     /// Debug-only exact Runner incarnation for component fixtures.
     #[cfg(debug_assertions)]
     #[arg(long, requires = "lease_transport_socket")]
@@ -42,22 +65,25 @@ struct Args {
 async fn main() -> ExitCode {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let args = Args::parse();
-    #[cfg(debug_assertions)]
-    let fixture_lease_registry = match validate_lease_transport_config(
-        args.lease_transport_socket.as_deref(),
-        args.fixture_lease_peer_registration.as_deref(),
-    ) {
-        Ok(registry) => registry,
+    if let Some(path) = args.provision_lease_transport_key.as_deref() {
+        return match provision_lease_transport_key(path) {
+            Ok(()) => {
+                println!("LEASE_TRANSPORT_KEY_PROVISIONED: {}", path.display());
+                ExitCode::SUCCESS
+            }
+            Err(message) => {
+                eprintln!("bullet-farmd: {message}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let lease_launch = match admit_lease_transport_launch(&args) {
+        Ok(launch) => launch,
         Err(message) => {
             eprintln!("bullet-farmd: {message}");
             return ExitCode::FAILURE;
         }
     };
-    #[cfg(not(debug_assertions))]
-    if let Err(message) = validate_lease_transport_config(args.lease_transport_socket.as_deref()) {
-        eprintln!("bullet-farmd: {message}");
-        return ExitCode::FAILURE;
-    }
     if let Err(message) = validate_bind(args.bind) {
         eprintln!("bullet-farmd: {message}");
         return ExitCode::FAILURE;
@@ -116,30 +142,84 @@ async fn main() -> ExitCode {
     if worker_token.is_some() {
         tracing::info!("authenticated internal command reconciler enabled");
     }
-    #[cfg(debug_assertions)]
-    if let (Some(socket), Some(registry)) = (args.lease_transport_socket, fixture_lease_registry) {
-        let transport = match bullet_application::lease_transport::KernelLeaseTransport::generate()
-        {
-            Ok(transport) => std::sync::Arc::new(transport),
-            Err(error) => {
-                eprintln!("bullet-farmd: fixture lease transport: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
+    if let Some(launch) = lease_launch {
+        let fixture = launch.fixture;
+        let key_bytes = launch.key_bytes;
+        let candidate_key = launch.candidate_key;
         let rpc_state = state.clone();
         tokio::spawn(async move {
-            if let Err(error) = bullet_farmd::lease_transport_rpc::serve(
-                socket,
-                rpc_state,
-                transport,
-                std::sync::Arc::new(registry),
-            )
-            .await
-            {
-                tracing::error!("fixture lease-transport socket: {error}");
+            let result = match candidate_key {
+                Some(key) => {
+                    bullet_farmd::lease_transport_rpc::serve_with_candidate(
+                        launch.socket,
+                        rpc_state,
+                        launch.transport,
+                        launch.registry,
+                        key,
+                    )
+                    .await
+                }
+                None => {
+                    bullet_farmd::lease_transport_rpc::serve(
+                        launch.socket,
+                        rpc_state,
+                        launch.transport,
+                        launch.registry,
+                    )
+                    .await
+                }
+            };
+            if let Err(error) = result {
+                tracing::error!("lease-transport socket: {error}");
             }
         });
-        tracing::warn!("debug-only fixture lease peer registration enabled");
+        if fixture {
+            if args.kernel_authority_socket.is_some() {
+                eprintln!(
+                    "bullet-farmd: LEASE_PEER_REGISTRY_UNAVAILABLE: Kernel authority is not admitted on the debug fixture path"
+                );
+                return ExitCode::FAILURE;
+            }
+            tracing::warn!("debug-only fixture lease peer registration enabled");
+        } else {
+            tracing::info!("durable local lease-transport admission enabled");
+        }
+        if let (Some(kernel_socket), Some(key_bytes)) =
+            (args.kernel_authority_socket.clone(), key_bytes)
+        {
+            let kernel = match bullet_farmd::kernel_authority::KernelAuthority::from_secret_bytes(
+                &key_bytes,
+            ) {
+                Ok(kernel) => std::sync::Arc::new(kernel),
+                Err(error) => {
+                    eprintln!("bullet-farmd: kernel authority key: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let process = match std::fs::metadata("/proc/self") {
+                Ok(meta) => meta,
+                Err(error) => {
+                    eprintln!("bullet-farmd: kernel authority identity: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            use std::os::unix::fs::MetadataExt;
+            let farmd_uid = process.uid();
+            let rpc_state = state.clone();
+            tokio::spawn(async move {
+                if let Err(error) = bullet_farmd::kernel_authority_rpc::serve(
+                    kernel_socket,
+                    rpc_state,
+                    kernel,
+                    farmd_uid,
+                )
+                .await
+                {
+                    tracing::error!("kernel-authority socket: {error}");
+                }
+            });
+            tracing::info!("durable Kernel authority socket enabled");
+        }
     }
     tracing::info!("bullet-farmd listening on {bound}");
     // Reclaiming an expired writer lease is the running daemon's own job, not
@@ -153,132 +233,68 @@ async fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-#[cfg(unix)]
-fn read_worker_token(path: &std::path::Path) -> Result<String, String> {
-    read_worker_token_descriptor(open_worker_token(path)?)
-}
-
-#[cfg(unix)]
-fn open_worker_token(path: &std::path::Path) -> Result<std::fs::File, String> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(unix)]
-fn read_worker_token_descriptor(file: std::fs::File) -> Result<String, String> {
-    use std::io::Read;
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = file.metadata().map_err(|error| error.to_string())?;
-    if !metadata.is_file() {
-        return Err("token descriptor must refer to a regular file".into());
-    }
-    if metadata.permissions().mode() & 0o077 != 0 {
-        return Err("token file must not be accessible by group or other users".into());
-    }
-    if metadata.len() > 128 {
-        return Err("token file exceeds 128 bytes".into());
-    }
-    let mut bytes = Vec::with_capacity(128);
-    file.take(129)
-        .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
-    if bytes.len() > 128 {
-        return Err("token file exceeds 128 bytes".into());
-    }
-    let text = String::from_utf8(bytes).map_err(|_| "token file must be UTF-8".to_string())?;
-    let token = text
-        .strip_suffix("\r\n")
-        .or_else(|| text.strip_suffix('\n'))
-        .unwrap_or(&text);
-    if token.contains(['\r', '\n']) {
-        return Err("token file must contain exactly one token".into());
-    }
-    Ok(token.to_string())
-}
-
-#[cfg(not(unix))]
-fn read_worker_token(_path: &std::path::Path) -> Result<String, String> {
-    Err(
-        "worker token files are unavailable without descriptor-safe admission on this platform"
-            .into(),
-    )
-}
-
-fn validate_bind(bind: SocketAddr) -> Result<(), String> {
-    if bind.ip().is_loopback() {
-        Ok(())
-    } else {
-        Err(format!(
-            "refusing non-loopback bind {bind}; local V1 accepts loopback only"
-        ))
-    }
-}
-
-#[cfg(debug_assertions)]
-fn validate_lease_transport_config(
-    socket: Option<&std::path::Path>,
-    fixture_registration: Option<&str>,
-) -> Result<Option<bullet_farmd::lease_transport_rpc::LeasePeerRegistry>, String> {
-    let Some(socket) = socket else {
-        return if fixture_registration.is_some() {
-            Err("FIXTURE_LEASE_SOCKET_REQUIRED: fixture registration needs --lease-transport-socket".into())
-        } else {
-            Ok(None)
-        };
-    };
-    let Some(registration) = fixture_registration else {
-        return Err("LEASE_PEER_REGISTRY_UNAVAILABLE: durable runner UID registration and pinned farmd identity are not configured".into());
-    };
-    let (runner, epoch) = registration.rsplit_once(':').ok_or_else(|| {
-        "FIXTURE_LEASE_PEER_INVALID: expected <run_<32hex>:<nonzero-epoch>>".to_string()
-    })?;
-    let runner_id = bullet_domain::RunnerId::parse(runner)
-        .map_err(|error| format!("FIXTURE_LEASE_PEER_INVALID: {error}"))?;
-    let runner_epoch = epoch
-        .parse::<u64>()
-        .map_err(|_| "FIXTURE_LEASE_PEER_INVALID: epoch must be an integer".to_string())?;
-    if runner_epoch == 0 {
-        return Err("FIXTURE_LEASE_PEER_INVALID: epoch must be nonzero".into());
-    }
-    use std::os::unix::fs::MetadataExt;
-    let process = std::fs::metadata("/proc/self")
-        .map_err(|error| format!("FIXTURE_LEASE_PEER_IDENTITY_UNAVAILABLE: {error}"))?;
-    let registry = bullet_farmd::lease_transport_rpc::LeasePeerRegistry::new(
-        process.uid(),
-        process.gid(),
-        [
-            bullet_farmd::lease_transport_rpc::RegisteredRunnerPeer::new(
-                runner_id,
-                runner_epoch,
-                process.uid(),
-            ),
-        ],
-    )
-    .map_err(|error| format!("FIXTURE_LEASE_PEER_INVALID: {error}"))?;
-    registry
-        .preflight_socket_path(socket)
-        .map_err(|error| format!("FIXTURE_LEASE_SOCKET_INVALID: {error}"))?;
-    Ok(Some(registry))
-}
-
-#[cfg(not(debug_assertions))]
-fn validate_lease_transport_config(socket: Option<&std::path::Path>) -> Result<(), String> {
-    if socket.is_none() {
-        Ok(())
-    } else {
-        Err("LEASE_PEER_REGISTRY_UNAVAILABLE: durable runner UID registration and pinned farmd identity are not configured".into())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lease_transport_key_provisioning_is_exclusive_create_only_and_valid() {
+        use bullet_harness_core::lease_transport::LeaseTransportSigningKey;
+        use clap::Parser as _;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("private custody root");
+        let key = root.path().join("lease-transport.key");
+        assert!(Args::try_parse_from([
+            "bullet-farmd",
+            "--provision-lease-transport-key",
+            key.to_str().expect("UTF-8 fixture path"),
+        ])
+        .is_ok());
+        assert!(Args::try_parse_from([
+            "bullet-farmd",
+            "--provision-lease-transport-key",
+            key.to_str().expect("UTF-8 fixture path"),
+            "--bind",
+            "127.0.0.1:0",
+        ])
+        .is_err());
+
+        provision_lease_transport_key(&key).expect("create exact key");
+        let metadata = std::fs::symlink_metadata(&key).expect("key metadata");
+        assert!(metadata.file_type().is_file());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        let bytes = std::fs::read(&key).expect("key bytes");
+        assert_eq!(bytes.len(), 64);
+        LeaseTransportSigningKey::from_bytes("kernel-local", "lease-1", &bytes)
+            .expect("provisioned key is cryptographically valid");
+        let before = bytes;
+        assert!(provision_lease_transport_key(&key).is_err());
+        assert_eq!(std::fs::read(&key).expect("unchanged key"), before);
+        assert!(!root.path().join("ledger.sqlite").exists());
+
+        let relative = PathBuf::from("relative-lease-transport.key");
+        assert!(provision_lease_transport_key(&relative).is_err());
+        assert!(!relative.exists());
+        let unsafe_parent = root.path().join("unsafe-parent");
+        std::fs::create_dir(&unsafe_parent).expect("unsafe parent");
+        std::fs::set_permissions(&unsafe_parent, std::fs::Permissions::from_mode(0o755))
+            .expect("unsafe parent mode");
+        let unsafe_key = unsafe_parent.join("lease-transport.key");
+        assert!(provision_lease_transport_key(&unsafe_key).is_err());
+        assert!(!unsafe_key.exists());
+        assert_eq!(
+            std::fs::symlink_metadata(&unsafe_parent)
+                .expect("unsafe parent metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755,
+            "refusal must not chmod an existing unsafe parent",
+        );
+    }
 
     #[test]
     fn local_v1_accepts_only_loopback_addresses() {
@@ -296,14 +312,18 @@ mod tests {
     fn lease_socket_refuses_before_startup_without_registered_peer_configuration() {
         use std::os::unix::fs::PermissionsExt;
 
-        assert!(validate_lease_transport_config(None, None)
+        assert!(admit_lease_transport(None, None, None, None)
             .expect("disabled transport")
             .is_none());
-        let error = validate_lease_transport_config(
-            Some(std::path::Path::new("/run/bullet/lease.sock")),
+        let error = match admit_lease_transport(
+            Some(std::path::PathBuf::from("/run/bullet/lease.sock")),
             None,
-        )
-        .expect_err("unregistered product transport must refuse");
+            None,
+            None,
+        ) {
+            Ok(_) => panic!("unregistered product transport must refuse"),
+            Err(error) => error,
+        };
         assert!(error.starts_with("LEASE_PEER_REGISTRY_UNAVAILABLE:"));
 
         let root = tempfile::tempdir().expect("tempdir");
@@ -312,26 +332,71 @@ mod tests {
         let socket = root.path().join("lease.sock");
         let runner = bullet_domain::RunnerId::from_seed("fixture-runner");
         let registration = format!("{}:7", runner.as_str());
-        assert!(
-            validate_lease_transport_config(Some(&socket), Some(&registration))
-                .expect("exact debug fixture")
-                .is_some()
-        );
+        let fixture = admit_lease_transport(Some(socket.clone()), None, None, Some(&registration))
+            .expect("exact debug fixture")
+            .expect("fixture launch");
+        assert!(fixture.fixture);
+        assert!(fixture.candidate_key.is_none());
         assert!(!socket.exists(), "preflight must not create the socket");
-        let relative = std::path::Path::new("relative-fixture-lease.sock");
-        assert!(validate_lease_transport_config(Some(relative), Some(&registration)).is_err());
+        let relative = std::path::PathBuf::from("relative-fixture-lease.sock");
+        assert!(
+            admit_lease_transport(Some(relative.clone()), None, None, Some(&registration)).is_err()
+        );
         assert!(
             !relative.exists(),
             "relative refusal must not create a socket"
         );
         let missing = root.path().join("missing").join("lease.sock");
-        assert!(validate_lease_transport_config(Some(&missing), Some(&registration)).is_err());
+        assert!(
+            admit_lease_transport(Some(missing.clone()), None, None, Some(&registration)).is_err()
+        );
         assert!(
             !missing.exists(),
             "missing-parent refusal must not create a socket"
         );
-        assert!(validate_lease_transport_config(Some(&socket), Some("bad:0")).is_err());
-        assert!(validate_lease_transport_config(None, Some(&registration)).is_err());
+        assert!(admit_lease_transport(Some(socket.clone()), None, None, Some("bad:0")).is_err());
+        assert!(admit_lease_transport(None, None, None, Some(&registration)).is_err());
+
+        let custody = root.path().join("custody");
+        std::fs::create_dir_all(&custody).expect("custody");
+        std::fs::set_permissions(&custody, std::fs::Permissions::from_mode(0o700)).expect("0700");
+        let key = custody.join("signing.key");
+        let registry = custody.join("peer-registry.json");
+        bullet_farmd::lease_transport_custody::write_new_signing_key(&key).expect("key");
+        let process = std::fs::metadata("/proc/self").expect("self");
+        use std::os::unix::fs::MetadataExt;
+        bullet_farmd::lease_transport_custody::write_peer_registry(
+            &registry,
+            &bullet_farmd::lease_transport_custody::DurablePeerRegistryFile {
+                farmd_uid: process.uid(),
+                socket_gid: process.gid(),
+                runners: vec![
+                    bullet_farmd::lease_transport_custody::DurableRegisteredRunner {
+                        runner_id: runner.to_string(),
+                        runner_epoch: 7,
+                        service_uid: process.uid(),
+                    },
+                ],
+            },
+        )
+        .expect("registry");
+        let durable =
+            admit_lease_transport(Some(socket.clone()), Some(&registry), Some(&key), None)
+                .expect("durable local admission");
+        let durable = durable.expect("launch");
+        assert!(!durable.fixture);
+        assert!(durable.candidate_key.is_some());
+        assert!(
+            !socket.exists(),
+            "durable preflight must not create the socket"
+        );
+        assert!(admit_lease_transport(
+            Some(socket),
+            Some(&registry),
+            Some(&key),
+            Some(&registration)
+        )
+        .is_err());
     }
 
     #[cfg(unix)]
