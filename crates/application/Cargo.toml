@@ -24,11 +24,15 @@ test-seams = []
 # not by itself prove the proxy route was absent. Pair with an offline
 # no-share-net command mode before treating a probe as containment evidence.
 live-claude = ["dep:bullet-harness-claude"]
+# Production dogfood compose path. Distinct from live-claude so live-conformance
+# does not share this feature. The `bullet` bin enables it; ordinary lib builds do not.
+dogfood-claude = ["dep:bullet-harness-claude", "dep:bullet-harness-egress"]
 
 [dependencies]
 bullet-domain.workspace = true
 bullet-harness-core.workspace = true
 bullet-harness-claude = { workspace = true, optional = true }
+bullet-harness-egress = { workspace = true, optional = true }
 blake3.workspace = true
 chrono.workspace = true
 serde.workspace = true

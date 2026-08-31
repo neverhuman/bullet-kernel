@@ -41,4 +41,8 @@ pub use proxy::{Proxy, ProxyLimits};
 pub use receipt::{EgressEvidence, EgressReceipt, SCHEMA_VERSION};
 pub use request::ConnectTarget;
 pub use sandbox::{EgressSandbox, PreparedSandbox, DECISIONS_FILE, RECEIPT_FILE};
+
+/// Typed exit when filesystem containment cannot be proven (namespaces
+/// unavailable). Never a silent pass.
+pub const CONTAINMENT_UNAVAILABLE_EXIT: u8 = 78;
 pub use tools::{ToolRecord, Tooling};

@@ -16,6 +16,7 @@ use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::Write;
 use std::net::{Ipv4Addr, TcpListener};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -195,6 +196,7 @@ impl PreparedSandbox {
         let plan = filesystem.command_plan_with_proxy(provider_args, Some(&proxy_url))?;
         let mut command = self.namespace.enter(plan.program().as_os_str());
         command.args(plan.arguments()).env_clear();
+        start_fresh_child_process_group(&mut command);
         Ok(command)
     }
 
@@ -295,6 +297,11 @@ impl Drop for PreparedSandbox {
     }
 }
 
+/// Place the next spawned child in a new process group (PGID = child pid).
+pub(crate) fn start_fresh_child_process_group(command: &mut Command) {
+    command.process_group(0);
+}
+
 fn resolve_program(program: &str, path_hint: Option<&str>) -> std::ffi::OsString {
     if program.contains('/') {
         return OsStr::new(program).to_os_string();
@@ -313,6 +320,73 @@ fn resolve_program(program: &str, path_hint: Option<&str>) -> std::ffi::OsString
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_child_process_group_is_the_kill_target() {
+        let marker = std::env::temp_dir().join(format!("bullet-pgid-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let mut command = Command::new("python3");
+        command
+            .arg("-c")
+            .arg(format!(
+                "import os, time\nchild = os.fork()\nif child == 0:\n    time.sleep(60)\n    raise SystemExit(0)\nopen(r'{marker}', 'w').write('%d %d' % (os.getpid(), child))\ntime.sleep(60)",
+                marker = marker.display()
+            ))
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        start_fresh_child_process_group(&mut command);
+        let mut child = command.spawn().expect("spawn sleeper tree");
+        let pid = child.id();
+        let started = std::time::Instant::now();
+        let pids = loop {
+            if let Ok(text) = std::fs::read_to_string(&marker) {
+                let parts: Vec<&str> = text.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    break parts
+                        .into_iter()
+                        .map(|part| part.parse::<u32>().expect("pid"))
+                        .collect::<Vec<_>>();
+                }
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "shell did not publish pids"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let shell_pid = pids[0];
+        let descendant = pids[1];
+        assert_eq!(shell_pid, pid);
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let pgid = proc_pgid(&stat);
+        assert_eq!(pgid, pid, "filesystem child must lead its own group");
+        let pgid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap())
+            .expect("child pid is a valid process group");
+        rustix::process::kill_process_group(pgid, rustix::process::Signal::KILL)
+            .expect("kill the fresh child process group");
+        let waited = child.wait();
+        let _ = std::fs::remove_file(&marker);
+        assert!(waited.is_ok(), "shell should exit after group kill");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        while std::path::Path::new(&format!("/proc/{descendant}")).exists()
+            && std::time::Instant::now() < deadline
+        {
+            let _ = rustix::process::kill_process_group(pgid, rustix::process::Signal::KILL);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            !std::path::Path::new(&format!("/proc/{descendant}")).exists(),
+            "timeout kill must reap the descendant {descendant}"
+        );
+    }
+
+    fn proc_pgid(stat: &str) -> u32 {
+        let close = stat.rfind(')').expect("comm");
+        let fields: Vec<&str> = stat[close + 2..].split_whitespace().collect();
+        fields[2].parse().expect("pgid")
+    }
 
     #[test]
     fn program_resolution_prefers_the_caller_path_and_keeps_absolute_paths() {

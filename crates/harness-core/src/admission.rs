@@ -13,7 +13,6 @@ use crate::capability::{CapabilityMatrix, CapabilityState, PromotionStage};
 use crate::error::HarnessError;
 use crate::probe::{ProbeResult, ProfileRef};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use credentials::PreparedProviderHome;
 use protocol::requirement;
 use receipt::ReceiptInput;
 use serde::{Deserialize, Serialize};
@@ -23,7 +22,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub use crate::launch_grant::environment_digest;
-pub use credentials::{CredentialGrant, CredentialReceipt};
+pub use credentials::{CredentialGrant, CredentialReceipt, PreparedProviderHome};
 pub use mutation_permit::{
     mutation_operation_audience, parse_mutation_operation, require_signed_mutation_permit,
     AuthorityAudience, MutationOperation, MutationPermitClaims, MutationPermitExpectation,

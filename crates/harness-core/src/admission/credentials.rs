@@ -99,6 +99,13 @@ impl PreparedProviderHome {
         }
     }
 
+    /// Exact staged HOME directory. Bind this path into the sandbox; do not
+    /// remount the host source.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.home
+    }
+
     /// Exact positive environment for the provider child.
     #[must_use]
     pub fn env(&self) -> &[(String, String)] {
@@ -338,5 +345,89 @@ fn io(context: &str, error: std::io::Error) -> HarnessError {
     HarnessError::Io {
         context: context.to_string(),
         reason: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CredentialGrant, PreparedProviderHome};
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    fn write_grant(root: &Path, name: &str, bytes: &[u8]) -> (PathBuf, String) {
+        let source = root.join(name);
+        std::fs::write(&source, bytes).unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let source = source.canonicalize().unwrap();
+        let digest = blake3::hash(bytes).to_hex().to_string();
+        (source, digest)
+    }
+
+    #[test]
+    fn stages_only_granted_files_and_omits_host_source() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = root.path().join("runtime");
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = runtime.canonicalize().unwrap();
+        let (source, digest) = write_grant(root.path(), "oauth.json", b"{\"token\":1}");
+        let home = PreparedProviderHome::stage(
+            &runtime,
+            &[PathBuf::from(".claude/oauth.json")],
+            &[CredentialGrant {
+                source: source.clone(),
+                target: PathBuf::from(".claude/oauth.json"),
+                expected_blake3: digest.clone(),
+            }],
+            std::iter::empty(),
+        )
+        .unwrap();
+        assert!(home.path().starts_with(&runtime));
+        assert_eq!(
+            std::fs::read(home.path().join(".claude/oauth.json")).unwrap(),
+            b"{\"token\":1}"
+        );
+        let receipt = serde_json::to_string(&home.credential_receipts()).unwrap();
+        assert!(!receipt.contains(source.to_str().unwrap()));
+        assert_eq!(home.credential_receipts()[0].blake3, digest);
+    }
+
+    #[test]
+    fn digest_mismatch_and_bounds_refuse() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = root.path().join("runtime");
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = runtime.canonicalize().unwrap();
+        let (source, _) = write_grant(root.path(), "oauth.json", b"secret");
+        let error = PreparedProviderHome::stage(
+            &runtime,
+            &[PathBuf::from("oauth.json")],
+            &[CredentialGrant {
+                source: source.clone(),
+                target: PathBuf::from("oauth.json"),
+                expected_blake3: "0".repeat(64),
+            }],
+            std::iter::empty(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("digest mismatch"));
+
+        let grants: Vec<CredentialGrant> = (0..5)
+            .map(|index| {
+                let (path, digest) = write_grant(root.path(), &format!("f{index}"), b"x");
+                CredentialGrant {
+                    source: path,
+                    target: PathBuf::from(format!("f{index}")),
+                    expected_blake3: digest,
+                }
+            })
+            .collect();
+        let targets: Vec<PathBuf> = grants.iter().map(|grant| grant.target.clone()).collect();
+        assert!(
+            PreparedProviderHome::stage(&runtime, &targets, &grants, std::iter::empty()).is_err()
+        );
     }
 }

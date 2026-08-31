@@ -93,6 +93,7 @@ pub struct FilesystemSandboxProfileV0 {
     proposal_schema: FilesystemFileV0,
     ca_bundle: FilesystemFileV0,
     credential: Option<FilesystemFileV0>,
+    prepared_home: Option<PathBuf>,
     runtime_files: Vec<FilesystemRuntimeFileV0>,
     scratch_directory: PathBuf,
     locale: String,
@@ -119,10 +120,21 @@ impl FilesystemSandboxProfileV0 {
             proposal_schema,
             ca_bundle,
             credential: None,
+            prepared_home: None,
             runtime_files,
             scratch_directory: scratch_directory.into(),
             locale: "C.UTF-8".to_string(),
         }
+    }
+
+    /// Bind an already-staged provider HOME (from `PreparedProviderHome`) as
+    /// `/home/bullet`. The directory is writable so a token refresh can rewrite
+    /// the copy; the host source is never mounted. Brokered credential files
+    /// stay refused.
+    #[must_use]
+    pub fn with_prepared_home(mut self, home: impl Into<PathBuf>) -> Self {
+        self.prepared_home = Some(home.into());
+        self
     }
 
     /// Describe an optional broker-created credential file. V0 preparation
@@ -173,6 +185,7 @@ pub struct PreparedFilesystemSandbox {
     proposal_schema: OpenedFile,
     ca_bundle: OpenedFile,
     credential: Option<OpenedFile>,
+    prepared_home: Option<OpenedDirectory>,
     runtime_files: Vec<(PathBuf, OpenedFile)>,
     scratch_directory: OpenedDirectory,
     provider_argv0: OsString,
@@ -256,6 +269,9 @@ impl PreparedFilesystemSandbox {
             &self.scratch_directory,
             SCRATCH_DESTINATION,
         );
+        if let Some(home) = &self.prepared_home {
+            bind_fd(&mut arguments, "--bind-fd", home, "/home/bullet");
+        }
         seal_structural_directories(&mut arguments, &self.runtime_files);
         set_environment(&mut arguments, "HOME", "/home/bullet");
         set_environment(&mut arguments, "TMPDIR", "/tmp");

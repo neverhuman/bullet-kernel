@@ -4,9 +4,11 @@ mod authority;
 mod contracts;
 #[path = "demo_live/mod.rs"]
 mod demo_synthetic;
+mod dogfood;
 mod maintenance;
 mod mission;
 mod provider;
+mod run;
 mod transaction;
 
 use bullet_adapters::SqliteLedger;
@@ -58,11 +60,21 @@ enum Commands {
         #[command(subcommand)]
         command: provider::ProviderCommands,
     },
+    /// Read a run receipt back: verify its digest and chain, then render it.
+    Run {
+        #[command(subcommand)]
+        command: run::RunCommands,
+    },
     /// Five-plane transaction receipt. Currently ABSENT and ineligible.
     Transaction {
         /// Emit one JSON object on stdout.
         #[arg(long)]
         json: bool,
+    },
+    /// Internal dogfood compose. Not a release profile and not live-conformance.
+    Dogfood {
+        #[command(subcommand)]
+        command: dogfood::DogfoodCommands,
     },
 }
 
@@ -167,6 +179,7 @@ fn run(command: Commands) -> Result<(), String> {
     match command {
         Commands::Provider { .. } => unreachable!("provider is handled in main"),
         Commands::Transaction { .. } => unreachable!("transaction is handled in main"),
+        Commands::Dogfood { .. } => unreachable!("dogfood is handled in main"),
         Commands::Farm { command } => match command {
             FarmCommands::Init => {
                 let dir = data_dir();
@@ -196,6 +209,7 @@ fn run(command: Commands) -> Result<(), String> {
         },
         Commands::Authority { command } => authority::run(command),
         Commands::Mission { command } => mission::run(command),
+        Commands::Run { command } => run::run(command),
     }
 }
 
@@ -237,6 +251,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Commands::Provider { command } => provider::run(command),
+        Commands::Dogfood { command } => dogfood::run(command),
         Commands::Transaction { json } => {
             if !json {
                 eprintln!("bullet: TRANSACTION_PROOF_UNAVAILABLE: --json is required");

@@ -102,6 +102,12 @@ pub(super) fn require_active_at(
 /// Structural rule for a v1alpha2 snapshot whose live admission is enabled.
 /// The caller has already enforced the immutable conservatism set.
 pub(super) fn validate_live_admission(policy: &PolicySnapshotV1) -> Result<(), HarnessError> {
+    if !policy.sandbox_policy.live_admission_enabled {
+        return Err(invalid(
+            "LIVE_ADMISSION_DISABLED",
+            "live admission cannot be satisfied by a dogfood-only or offline policy",
+        ));
+    }
     if policy.policy_generation < LIVE_ADMISSION_MIN_GENERATION {
         return Err(invalid(
             "LIVE_ADMISSION_REQUIRES_GENERATION",

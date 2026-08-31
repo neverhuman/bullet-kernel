@@ -36,9 +36,10 @@ pub use admission::{
     CredentialReceipt, EgressIsolationEvidence, EgressIsolationRecord, EgressProbe,
     EgressProbeOutcome, EvaluatedAdmission, MutationOperation, MutationPermitClaims,
     MutationPermitExpectation, MutationPermitSigningKey, MutationPermitVerificationKey,
-    ProtocolRequirement, ProviderAdmission, ProviderAdmissionPolicy, ProviderConformanceReceipt,
-    ProviderProtocol, RuntimeProbeSnapshot, SignedAuthorityRecord, SignedMutationPermit,
-    MAX_MUTATION_PERMIT_TTL_MS, MUTATION_PERMIT_IMPLICIT_ASSERTION, MUTATION_PERMIT_SCHEMA_VERSION,
+    PreparedProviderHome, ProtocolRequirement, ProviderAdmission, ProviderAdmissionPolicy,
+    ProviderConformanceReceipt, ProviderProtocol, RuntimeProbeSnapshot, SignedAuthorityRecord,
+    SignedMutationPermit, MAX_MUTATION_PERMIT_TTL_MS, MUTATION_PERMIT_IMPLICIT_ASSERTION,
+    MUTATION_PERMIT_SCHEMA_VERSION,
 };
 pub use argv::{filter_env, ArgvBuilder, InvocationBudget, PreparedInvocation};
 pub use candidate_preparation::{

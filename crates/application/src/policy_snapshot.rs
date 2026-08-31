@@ -21,6 +21,7 @@
 //! typed exit (`tests/config_generation.rs`).
 
 mod activation;
+mod dogfood;
 mod generation;
 mod keys;
 mod live;
@@ -34,6 +35,10 @@ use bullet_harness_core::launch_grant::{
 use bullet_harness_core::HarnessError;
 
 pub use activation::{AbortRecord, ActivationLedger, ActivationState};
+pub use dogfood::{
+    refuse_dogfood_binding_as_live, validate_dogfood_admission, DogfoodAudience, DogfoodBinding,
+    DogfoodOperation,
+};
 pub use generation::{
     Component, ConfigurationGeneration, GenerationBinding, GenerationContent, GenerationError,
     RecordedGeneration, CONFIGURATION_GENERATION_DOMAIN, MAX_ACTIVATION_SUBJECT_BYTES,

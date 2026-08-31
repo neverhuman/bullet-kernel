@@ -8,6 +8,7 @@
 //! contained `--version` probe from explicit inputs and never admits anything.
 
 pub mod dispatch;
+pub mod dogfood;
 mod parse;
 pub mod probe;
 mod protocol;

@@ -172,6 +172,17 @@ pub(super) fn prepare(
         MAX_CA_BYTES,
     )?;
     let credential = None;
+    let prepared_home = match &profile.prepared_home {
+        Some(path) => {
+            if overlaps(path, &profile.clone_directory)
+                || overlaps(path, &profile.scratch_directory)
+            {
+                return Err(denied("prepared HOME overlaps clone or scratch"));
+            }
+            Some(open_private_directory("prepared HOME", path, current_uid)?)
+        }
+        None => None,
+    };
     let runtime_files = profile
         .runtime_files
         .iter()
@@ -187,12 +198,16 @@ pub(super) fn prepare(
             .map(|opened| (runtime.destination.clone(), opened))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut private_dirs = vec![&profile.clone_directory, &profile.scratch_directory];
+    if let Some(home) = &profile.prepared_home {
+        private_dirs.push(home);
+    }
     reject_private_directory_sources(
         [&bubblewrap, &provider, &proposal_schema, &ca_bundle]
             .into_iter()
             .chain(credential.iter())
             .chain(runtime_files.iter().map(|(_, file)| file)),
-        [&profile.clone_directory, &profile.scratch_directory],
+        &private_dirs,
     )?;
     let provider_argv0 = profile
         .provider
@@ -208,6 +223,7 @@ pub(super) fn prepare(
         proposal_schema,
         ca_bundle,
         credential,
+        prepared_home,
         runtime_files,
         scratch_directory,
         provider_argv0,
@@ -222,6 +238,9 @@ pub(super) fn revalidate(prepared: &PreparedFilesystemSandbox) -> Result<(), Egr
     prepared.ca_bundle.revalidate()?;
     if let Some(credential) = &prepared.credential {
         credential.revalidate()?;
+    }
+    if let Some(home) = &prepared.prepared_home {
+        home.revalidate()?;
     }
     for (_, file) in &prepared.runtime_files {
         file.revalidate()?;
@@ -388,7 +407,7 @@ fn validate_destinations(profile: &FilesystemSandboxProfileV0) -> Result<(), Egr
 
 fn reject_private_directory_sources<'a>(
     files: impl Iterator<Item = &'a OpenedFile>,
-    directories: [&PathBuf; 2],
+    directories: &[&PathBuf],
 ) -> Result<(), EgressError> {
     for file in files {
         if directories

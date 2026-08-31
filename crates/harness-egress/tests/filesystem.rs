@@ -332,6 +332,50 @@ fn root_owned_static_subject_resists_post_plan_chmod_and_same_inode_rewrite() {
 }
 
 #[test]
+fn prepared_home_binds_writable_copy_and_keeps_host_source_off_the_plan() {
+    let fixture = Fixture::new();
+    let home = fixture._root.path().join("provider-home");
+    fs::create_dir(&home).unwrap();
+    set_mode(&home, 0o700);
+    let home = home.canonicalize().unwrap();
+    write_file(home.join("oauth.json"), b"copy\n", 0o600);
+    let host_source = write_file(
+        fixture._root.path().join("host-oauth.json"),
+        b"host\n",
+        0o400,
+    );
+    let prepared = fixture
+        .profile()
+        .with_prepared_home(home.clone())
+        .prepare()
+        .unwrap();
+    let plan = prepared.command_plan(&[]).unwrap();
+    let args: Vec<String> = plan
+        .arguments()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(args
+        .windows(3)
+        .any(|window| { window[0] == "--bind-fd" && window[2] == "/home/bullet" }));
+    assert!(!args
+        .iter()
+        .any(|arg| arg.contains(host_source.to_str().unwrap())));
+    assert!(!args.iter().any(|arg| arg.contains(home.to_str().unwrap())));
+}
+
+#[test]
+fn prepared_home_overlapping_clone_is_refused() {
+    let fixture = Fixture::new();
+    assert_denied(
+        fixture
+            .profile()
+            .with_prepared_home(fixture.clone_dir.clone())
+            .prepare(),
+    );
+}
+
+#[test]
 fn same_uid_credential_is_refused_pending_distinct_broker_custody() {
     let fixture = Fixture::new();
     let credential = write_file(fixture._root.path().join("credential"), b"fake\n", 0o400);
@@ -417,6 +461,10 @@ printf writable > /scratch/result || exit 22
 [ ! -e /home/ubuntu/.ssh ] || exit 24
 [ ! -e /home/ubuntu/.claude ] || exit 25
 [ ! -e "$1" ] || exit 26
+if { IFS= read -r leaked < "$1"; } 2>/dev/null; then
+  echo "host canary was readable: $leaked" >&2
+  exit 34
+fi
 shift
 for admitted_fd in "$@"; do
   if [ -e "/proc/self/fd/$admitted_fd" ]; then
@@ -472,6 +520,31 @@ fn canonical_existing(path: &str) -> Option<PathBuf> {
 
 fn required(path: &str) -> PathBuf {
     canonical_existing(path).unwrap_or_else(|| panic!("missing test subject {path}"))
+}
+
+#[test]
+fn host_canary_read_succeeds_only_outside_containment() {
+    let root = tempfile::tempdir().unwrap();
+    set_mode(root.path(), 0o700);
+    let canary = write_file(root.path().join("host-canary"), b"canary-secret\n", 0o400);
+    assert_eq!(fs::read_to_string(&canary).unwrap(), "canary-secret\n");
+}
+
+#[test]
+fn filesystem_command_composition_is_public_and_unavailable_is_typed() {
+    assert_eq!(bullet_harness_egress::CONTAINMENT_UNAVAILABLE_EXIT, 78);
+    let fixture = Fixture::new();
+    let prepared = fixture.profile().prepare().unwrap();
+    let plan = prepared.command_plan(&["--version"]).unwrap();
+    let args: Vec<String> = plan
+        .arguments()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(args.iter().any(|arg| arg == "--unshare-all"));
+    assert!(args
+        .windows(3)
+        .any(|window| { window[0] == "--ro-bind-fd" && window[2] == "/run/bullet/provider" }));
 }
 
 fn namespace_unavailable(stderr: &[u8]) -> bool {

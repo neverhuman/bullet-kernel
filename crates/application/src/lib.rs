@@ -11,6 +11,9 @@ pub mod conformance;
 pub mod conformance_effects;
 pub mod context;
 pub mod demo;
+pub mod dogfood;
+#[cfg(feature = "dogfood-claude")]
+pub mod dogfood_run;
 pub mod effect_recovery;
 pub mod effect_state;
 pub mod effects;
@@ -56,6 +59,15 @@ pub use context::{
     INITIAL_CONTEXT_CAPSULE_SCHEMA,
 };
 pub use demo::{derive_receipt, run_demo, DemoReceipt};
+pub use dogfood::{
+    write_receipt as write_dogfood_receipt, DogfoodError, DogfoodReadOnlyIntentV0,
+    DogfoodReadOnlyReceiptV0,
+};
+#[cfg(feature = "dogfood-claude")]
+pub use dogfood_run::{
+    run_dogfood_read_only, CredentialSpec, DogfoodReadOnlyOptions, DogfoodRunError,
+    DogfoodRunStatus,
+};
 pub use effect_recovery::{
     EffectRecoveryAuthority, EffectRecoveryClaim, EffectRecoveryContainmentReason,
     EffectRecoveryDisposition, EffectRecoveryError, EffectRecoveryObservation, EffectRecoveryStore,
