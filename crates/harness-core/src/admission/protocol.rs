@@ -39,6 +39,38 @@ impl ProviderProtocol {
             Self::AntigravityHeadlessStructured => "antigravity_headless_structured",
         }
     }
+
+    /// Required protocol for an exact provider wire name. CLI aliases are not
+    /// wire identities and are deliberately refused here.
+    ///
+    /// # Errors
+    ///
+    /// `ADMISSION_REFUSED` when `provider` is not one of the four frozen wire
+    /// names.
+    pub fn required_for_wire_provider(provider: &str) -> Result<Self, HarnessError> {
+        frozen_provider(provider)
+            .map(|(_, protocol)| protocol)
+            .ok_or_else(|| unknown_provider(provider))
+    }
+
+    /// Normalize a provider name only at a CLI boundary. `antigravity` is an
+    /// operator-facing alias for the canonical `agy` wire identity; it never
+    /// becomes a second serialized provider value.
+    ///
+    /// # Errors
+    ///
+    /// `ADMISSION_REFUSED` when `provider` is not a frozen wire name or the
+    /// single admitted CLI alias.
+    pub fn wire_provider_from_cli(provider: &str) -> Result<&'static str, HarnessError> {
+        let provider = if provider == "antigravity" {
+            "agy"
+        } else {
+            provider
+        };
+        frozen_provider(provider)
+            .map(|(wire, _)| wire)
+            .ok_or_else(|| unknown_provider(provider))
+    }
 }
 
 /// Frozen V1 protocol and minimum capability requirement for a provider.
@@ -71,32 +103,32 @@ const STRUCTURED_HEADLESS: &[Capability] = &[
 ///
 /// `ADMISSION_REFUSED` when `provider` is not in the frozen provider set.
 pub fn requirement(provider: &str) -> Result<ProtocolRequirement, HarnessError> {
-    let requirement = match provider {
-        "claude" => ProtocolRequirement {
-            provider: "claude",
-            protocol: ProviderProtocol::ClaudeStreamJson,
-            capabilities: STRUCTURED,
-        },
-        "codex" => ProtocolRequirement {
-            provider: "codex",
-            protocol: ProviderProtocol::CodexAppServerJsonl,
-            capabilities: STRUCTURED,
-        },
-        "cursor" => ProtocolRequirement {
-            provider: "cursor",
-            protocol: ProviderProtocol::CursorAcp,
-            capabilities: STRUCTURED,
-        },
-        "agy" => ProtocolRequirement {
-            provider: "agy",
-            protocol: ProviderProtocol::AntigravityHeadlessStructured,
-            capabilities: STRUCTURED_HEADLESS,
-        },
-        _ => {
-            return Err(HarnessError::AdmissionRefused {
-                reason: format!("provider {provider:?} has no frozen V1 protocol"),
-            });
-        }
+    let (provider, protocol) =
+        frozen_provider(provider).ok_or_else(|| unknown_provider(provider))?;
+    let capabilities = if provider == "agy" {
+        STRUCTURED_HEADLESS
+    } else {
+        STRUCTURED
     };
-    Ok(requirement)
+    Ok(ProtocolRequirement {
+        provider,
+        protocol,
+        capabilities,
+    })
+}
+
+fn frozen_provider(provider: &str) -> Option<(&'static str, ProviderProtocol)> {
+    match provider {
+        "claude" => Some(("claude", ProviderProtocol::ClaudeStreamJson)),
+        "codex" => Some(("codex", ProviderProtocol::CodexAppServerJsonl)),
+        "cursor" => Some(("cursor", ProviderProtocol::CursorAcp)),
+        "agy" => Some(("agy", ProviderProtocol::AntigravityHeadlessStructured)),
+        _ => None,
+    }
+}
+
+fn unknown_provider(provider: &str) -> HarnessError {
+    HarnessError::AdmissionRefused {
+        reason: format!("provider {provider:?} has no frozen V1 protocol"),
+    }
 }

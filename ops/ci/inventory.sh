@@ -5,7 +5,7 @@
 # shellcheck disable=SC2034 # declarations are consumed by scripts that source this library
 
 readonly EXPECTED_TOTAL_TESTS=1089
-readonly EXPECTED_STANDALONE_TESTS=1043
+readonly EXPECTED_STANDALONE_TESTS=1048
 readonly EXPECTED_EGRESS_TESTS=3
 readonly EXPECTED_CONTRACT_TESTS=34
 readonly EXPECTED_FAMILY_TESTS=9

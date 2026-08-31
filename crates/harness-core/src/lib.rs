@@ -17,6 +17,7 @@ pub mod lease_transport;
 pub mod live;
 pub mod probe;
 pub mod proposal;
+pub mod runtime_passport;
 pub mod session;
 pub mod spawnrun;
 pub mod store;
@@ -76,6 +77,13 @@ pub use live::{
 };
 pub use probe::{ExpectedProfile, ProbeResult, ProfileIdentity, ProfileRef};
 pub use proposal::{PatchMutation, PatchOperation, PatchProposal, Preimage};
+pub use runtime_passport::{
+    ProviderRuntimePassportV1, RuntimeExecutionV1, RuntimeFileRoleV1, RuntimeFileV1,
+    RuntimeLoaderV1, RuntimePassportError, MAX_RUNTIME_FILES, MAX_RUNTIME_FILE_BYTES,
+    MAX_RUNTIME_RELATIVE_PATH_BYTES, MAX_RUNTIME_TOTAL_BYTES, MAX_RUNTIME_VERSION_BYTES,
+    RUNTIME_DEPLOYMENT_PREFIX, RUNTIME_PASSPORT_DOMAIN, RUNTIME_PASSPORT_ID_PREFIX,
+    RUNTIME_PASSPORT_SCHEMA_VERSION,
+};
 pub use session::SessionState;
 pub use spawnrun::{
     kill_process_group, run_supervised, run_to_completion, PidSlot, RunOutcome, RunStop,
