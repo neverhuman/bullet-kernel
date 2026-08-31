@@ -7,13 +7,15 @@ fail-fast = true
 
 [test-groups]
 sqlite-migration-identity = { max-threads = 1 }
+command-receipt-filesystem-hostiles = { max-threads = 1 }
 
 [[profile.fast.overrides]]
 filter = '(binary_id(bullet-adapters) & test(sqlite::migrations::)) | (binary_id(bullet-adapters::candidate_preparation) & test(=schema::exact_schema_eighteen_is_refused_without_byte_mutation))'
 test-group = 'sqlite-migration-identity'
 
 [[profile.fast.overrides]]
-filter = 'binary_id(bullet-runner::bin/bullet-command-worker) & test(=receipt::tests::ledger::semantic_ledger_substitutions_refuse_without_further_mutation)'
+filter = 'binary_id(bullet-runner::bin/bullet-command-worker) & (test(=receipt::tests::candidate_identity::cleanup_target_and_every_tombstone_subject_are_exact) | test(=receipt::tests::candidate_identity::preservation_token_state_artifact_and_cleanup_substitutions_refuse) | test(=receipt::tests::ledger::semantic_ledger_substitutions_refuse_without_further_mutation) | test(=receipt::tests::provider_fixture::provider_transcript_drift_truncation_open_shape_and_symlink_refuse) | test(=receipt::tests::provider_fixture::self_consistent_provider_operation_substitutions_refuse))'
+test-group = 'command-receipt-filesystem-hostiles'
 slow-timeout = { period = "45s", terminate-after = 2 }
 
 [profile.fast.junit]
