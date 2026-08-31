@@ -12,6 +12,10 @@ sqlite-migration-identity = { max-threads = 1 }
 filter = '(binary_id(bullet-adapters) & test(sqlite::migrations::)) | (binary_id(bullet-adapters::candidate_preparation) & test(=schema::exact_schema_eighteen_is_refused_without_byte_mutation))'
 test-group = 'sqlite-migration-identity'
 
+[[profile.fast.overrides]]
+filter = 'binary_id(bullet-runner::bin/bullet-command-worker) & test(=receipt::tests::ledger::semantic_ledger_substitutions_refuse_without_further_mutation)'
+slow-timeout = { period = "45s", terminate-after = 2 }
+
 [profile.fast.junit]
 path = "junit.xml"
 
