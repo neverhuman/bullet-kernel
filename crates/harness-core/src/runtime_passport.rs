@@ -1,7 +1,6 @@
-//! Strict, provider-neutral identity for one immutable packaged CLI runtime.
-//!
-//! This module is structural only. It neither reads a filesystem nor grants
-//! authority to inspect, enroll, or launch the described runtime.
+//! Strict, provider-neutral identity and component-only filesystem inspection
+//! for one immutable packaged CLI runtime. Neither operation grants authority
+//! to enroll or launch the described runtime.
 
 use crate::admission::ProviderProtocol;
 use crate::launch_grant::canonical::MAX_CANONICAL_BYTES;
@@ -11,8 +10,14 @@ use crate::launch_grant::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod inspection;
+
+pub use inspection::{inspect_provider_runtime, InspectedProviderRuntimeV1};
+
 /// Frozen wire schema version.
 pub const RUNTIME_PASSPORT_SCHEMA_VERSION: u32 = 1;
+/// Honest evidence ceiling for an inspected runtime filesystem.
+pub const RUNTIME_INSPECTION_EVIDENCE_CLASS: &str = "COMPONENT_ONLY";
 /// Framed BLAKE3 domain for the canonical passport document.
 pub const RUNTIME_PASSPORT_DOMAIN: &str = "provider-runtime-passport.v1";
 /// Typed prefix for a passport's full-width digest.
@@ -29,6 +34,17 @@ pub const MAX_RUNTIME_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub const MAX_RUNTIME_VERSION_BYTES: usize = 64;
 /// Maximum bytes in one root-relative manifest path.
 pub const MAX_RUNTIME_RELATIVE_PATH_BYTES: usize = 512;
+
+/// Borrowed, non-serializable observation over one retained runtime subject.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeInspectionObservationV1<'a> {
+    /// Exact full-width passport subject.
+    pub passport_id: &'a str,
+    /// Exact root-relative entrypoint.
+    pub entrypoint: &'a str,
+    /// This observation proves only local component inspection.
+    pub evidence_class: &'static str,
+}
 
 /// Typed structural refusal. A valid passport is still not authority.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -49,6 +65,30 @@ pub enum RuntimePassportError {
         /// Substituted protocol wire name.
         actual: String,
     },
+    /// The caller's externally locked passport subject did not match.
+    #[error("provider runtime passport id does not match the external lock")]
+    IdMismatch,
+    /// Filesystem inspection is unavailable on this platform.
+    #[error("provider runtime passport inspection is unsupported on this platform")]
+    PlatformUnsupported,
+    /// Runtime directories or file ownership/modes violate fixed custody.
+    #[error("provider runtime passport custody invalid: {reason}")]
+    CustodyInvalid {
+        /// Non-secret refusal detail.
+        reason: String,
+    },
+    /// The filesystem does not exactly realize the closed manifest.
+    #[error("provider runtime passport manifest mismatch: {reason}")]
+    ManifestMismatch {
+        /// Non-secret refusal detail.
+        reason: String,
+    },
+    /// An already observed filesystem subject changed.
+    #[error("provider runtime passport changed: {reason}")]
+    Changed {
+        /// Non-secret refusal detail.
+        reason: String,
+    },
 }
 
 impl RuntimePassportError {
@@ -58,6 +98,11 @@ impl RuntimePassportError {
         match self {
             Self::Malformed { .. } => "RUNTIME_PASSPORT_MALFORMED",
             Self::ProtocolMismatch { .. } => "RUNTIME_PASSPORT_PROTOCOL_MISMATCH",
+            Self::IdMismatch => "RUNTIME_PASSPORT_ID_MISMATCH",
+            Self::PlatformUnsupported => "RUNTIME_PASSPORT_PLATFORM_UNSUPPORTED",
+            Self::CustodyInvalid { .. } => "RUNTIME_PASSPORT_CUSTODY_INVALID",
+            Self::ManifestMismatch { .. } => "RUNTIME_PASSPORT_MANIFEST_MISMATCH",
+            Self::Changed { .. } => "RUNTIME_PASSPORT_CHANGED",
         }
     }
 }
@@ -402,4 +447,48 @@ fn malformed(reason: &str) -> RuntimePassportError {
     RuntimePassportError::Malformed {
         reason: reason.to_string(),
     }
+}
+
+fn decode_expected_passport(
+    bytes: &[u8],
+    expected: &str,
+) -> Result<(ProviderRuntimePassportV1, String), RuntimePassportError> {
+    let passport = ProviderRuntimePassportV1::decode(bytes)?;
+    if !expected
+        .strip_prefix(RUNTIME_PASSPORT_ID_PREFIX)
+        .is_some_and(is_lower_hex_64)
+    {
+        return Err(RuntimePassportError::IdMismatch);
+    }
+    let actual = passport.passport_id()?;
+    if expected != actual {
+        return Err(RuntimePassportError::IdMismatch);
+    }
+    Ok((passport, actual))
+}
+
+#[cfg(target_os = "linux")]
+fn custody(reason: impl Into<String>) -> RuntimePassportError {
+    RuntimePassportError::CustodyInvalid {
+        reason: reason.into(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn manifest(reason: impl Into<String>) -> RuntimePassportError {
+    RuntimePassportError::ManifestMismatch {
+        reason: reason.into(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn changed(reason: impl Into<String>) -> RuntimePassportError {
+    RuntimePassportError::Changed {
+        reason: reason.into(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn as_changed(error: RuntimePassportError) -> RuntimePassportError {
+    changed(error.to_string())
 }

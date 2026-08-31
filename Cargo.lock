@@ -452,6 +452,7 @@ dependencies = [
  "hex",
  "libc",
  "pasetors",
+ "rustix",
  "serde",
  "serde_jcs",
  "serde_json",
