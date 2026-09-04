@@ -207,6 +207,54 @@ impl ArgvBuilder {
         })
     }
 
+    /// Validate and freeze one read-only dogfood invocation of an enrolled
+    /// provider executable.
+    ///
+    /// The live-provider quarantine in [`Self::build`] refuses every known
+    /// provider basename because a plain build carries no admission evidence.
+    /// This constructor demands stronger evidence than the basename check it
+    /// bypasses: the program must equal the enrolled absolute path exactly,
+    /// and the file's BLAKE3 at build time must equal the enrolled digest, so
+    /// a swapped or drifted binary refuses here even when its name matches.
+    /// Dogfood admission (policy generation, key, read-only binding) is
+    /// validated by the caller before this point; this is the argv chokepoint.
+    ///
+    /// # Errors
+    ///
+    /// `PROVIDER_KILL_ACTIVE`, `WORKTREE_FLAG_DENIED`, or
+    /// `ADMISSION_REFUSED` when the program is not the enrolled executable or
+    /// its content digest does not match the enrollment.
+    pub fn build_enrolled_dogfood(
+        self,
+        enrolled_executable: &Path,
+        enrolled_blake3: &str,
+    ) -> Result<PreparedInvocation, HarnessError> {
+        self.validate_common()?;
+        if Path::new(&self.program) != enrolled_executable {
+            return Err(HarnessError::AdmissionRefused {
+                reason: "dogfood argv executable differs from the enrolled path".into(),
+            });
+        }
+        let bytes =
+            std::fs::read(enrolled_executable).map_err(|error| HarnessError::AdmissionRefused {
+                reason: format!("enrolled executable is unreadable: {error}"),
+            })?;
+        let observed = blake3::hash(&bytes).to_hex().to_string();
+        if observed != enrolled_blake3 {
+            return Err(HarnessError::AdmissionRefused {
+                reason: "enrolled executable content digest drifted since enrollment".into(),
+            });
+        }
+        let env = filter_env(std::env::vars());
+        Ok(PreparedInvocation {
+            program: self.program,
+            args: self.args,
+            cwd: self.cwd,
+            timeout: self.timeout,
+            env,
+        })
+    }
+
     fn validate_common(&self) -> Result<(), HarnessError> {
         if kill_switch_active(std::env::var(KILL_SWITCH_VAR).ok().as_deref()) {
             return Err(HarnessError::KillSwitch);
@@ -258,6 +306,46 @@ impl PreparedInvocation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enrolled_dogfood_build_admits_only_the_exact_enrolled_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let executable = dir.path().join("claude");
+        std::fs::write(&executable, b"#!/bin/sh\nexit 0\n").expect("write stub");
+        let digest = blake3::hash(b"#!/bin/sh\nexit 0\n").to_hex().to_string();
+        let program = executable.to_string_lossy().into_owned();
+
+        // The plain build refuses the provider basename outright.
+        let plain = ArgvBuilder::new(program.clone(), dir.path()).build();
+        assert!(
+            matches!(plain, Err(HarnessError::LiveAdmissionUnavailable { .. })),
+            "plain build must keep the live-provider quarantine"
+        );
+
+        // The enrolled build admits the exact path plus exact content digest.
+        ArgvBuilder::new(program.clone(), dir.path())
+            .build_enrolled_dogfood(&executable, &digest)
+            .expect("exact enrolled identity must build");
+
+        // A different path with the same digest is refused.
+        let other = dir.path().join("other");
+        std::fs::write(&other, b"#!/bin/sh\nexit 0\n").expect("write other");
+        let refused =
+            ArgvBuilder::new(program.clone(), dir.path()).build_enrolled_dogfood(&other, &digest);
+        assert!(
+            matches!(refused, Err(HarnessError::AdmissionRefused { .. })),
+            "a path differing from the enrollment must refuse"
+        );
+
+        // Content drift after enrollment is refused at build time.
+        std::fs::write(&executable, b"#!/bin/sh\nexit 1\n").expect("drift");
+        let drifted =
+            ArgvBuilder::new(program, dir.path()).build_enrolled_dogfood(&executable, &digest);
+        assert!(
+            matches!(drifted, Err(HarnessError::AdmissionRefused { .. })),
+            "a drifted binary must refuse even at the enrolled path"
+        );
+    }
 
     #[test]
     fn worktree_and_tmux_tokens_are_denied() {

@@ -553,3 +553,88 @@ fn namespace_unavailable(stderr: &[u8]) -> bool {
         || text.contains("Creating new namespace failed")
         || text.contains("Operation not permitted")
 }
+
+#[test]
+fn runner_authored_schema_is_admitted_only_owner_private_with_exact_digest() {
+    // The proposal schema may be written by the runner itself from a
+    // compiled-in constant. Its integrity is the admitted content digest;
+    // custody demands owner-private 0600 under an unwritable ancestor chain.
+    let fixture = Fixture::new();
+    let schema = write_file(
+        fixture._root.path().join("proposal-schema.json"),
+        b"{\"type\":\"object\"}\n",
+        0o600,
+    );
+    let profile = FilesystemSandboxProfileV0::new(
+        admitted(&fixture.bwrap),
+        admitted(&fixture.provider),
+        fixture.clone_dir.clone(),
+        admitted(&schema),
+        admitted(&fixture.ca),
+        Vec::new(),
+        fixture.scratch.clone(),
+    );
+    profile
+        .prepare()
+        .expect("owner-private runner-authored schema is admitted");
+
+    // Group-readable is refused: the mode must be exactly 0600.
+    set_mode(&schema, 0o640);
+    let relaxed = FilesystemSandboxProfileV0::new(
+        admitted(&fixture.bwrap),
+        admitted(&fixture.provider),
+        fixture.clone_dir.clone(),
+        admitted(&schema),
+        admitted(&fixture.ca),
+        Vec::new(),
+        fixture.scratch.clone(),
+    );
+    assert_denied(relaxed.prepare());
+    set_mode(&schema, 0o600);
+
+    // A digest that does not match the bytes on disk is refused, so a swapped
+    // schema cannot ride in on correct custody.
+    let wrong = FilesystemFileV0::new(&schema, "1".repeat(64));
+    let swapped = FilesystemSandboxProfileV0::new(
+        admitted(&fixture.bwrap),
+        admitted(&fixture.provider),
+        fixture.clone_dir.clone(),
+        wrong,
+        admitted(&fixture.ca),
+        Vec::new(),
+        fixture.scratch.clone(),
+    );
+    assert_denied(swapped.prepare());
+
+    // A group-writable ancestor breaks the custody chain and is refused.
+    set_mode(fixture._root.path(), 0o720);
+    let loose_parent = FilesystemSandboxProfileV0::new(
+        admitted(&fixture.bwrap),
+        admitted(&fixture.provider),
+        fixture.clone_dir.clone(),
+        admitted(&schema),
+        admitted(&fixture.ca),
+        Vec::new(),
+        fixture.scratch.clone(),
+    );
+    assert_denied(loose_parent.prepare());
+    set_mode(fixture._root.path(), 0o700);
+
+    // The provider role never accepts runner custody: a runner-owned provider
+    // stays refused even at mode 0600.
+    let fake_provider = write_file(
+        fixture._root.path().join("fake-claude"),
+        b"#!/bin/sh\nexit 0\n",
+        0o600,
+    );
+    let runner_owned_provider = FilesystemSandboxProfileV0::new(
+        admitted(&fixture.bwrap),
+        admitted(&fake_provider),
+        fixture.clone_dir.clone(),
+        admitted(&schema),
+        admitted(&fixture.ca),
+        Vec::new(),
+        fixture.scratch.clone(),
+    );
+    assert_denied(runner_owned_provider.prepare());
+}

@@ -250,10 +250,15 @@ pub fn run_dogfood_read_only(
         Err(error) => return Err(error),
     };
     let schema_path = runtime_root.join("proposal-schema.json");
-    write_0600(
+    let schema_bytes = bullet_harness_core::proposal::schema_source().as_bytes();
+    write_0600(&schema_path, schema_bytes)?;
+    // The schema's integrity is the compiled-in constant, not filesystem
+    // custody: admit the digest of the constant bytes, so a swapped file is
+    // refused by content rather than trusted by ownership.
+    let schema_admitted = FilesystemFileV0::new(
         &schema_path,
-        bullet_harness_core::proposal::schema_source().as_bytes(),
-    )?;
+        blake3::hash(schema_bytes).to_hex().to_string(),
+    );
     let scratch = runtime_root.join(format!("scratch-{}", synthetic_uuid("scratch")));
     ensure_private_dir(&scratch)?;
 
@@ -261,7 +266,7 @@ pub fn run_dogfood_read_only(
         host_file(&bubblewrap)?,
         host_file(&options.executable)?,
         workdir.clone(),
-        host_file(&schema_path)?,
+        schema_admitted,
         host_file(&ca_bundle)?,
         Vec::new(),
         scratch,
@@ -311,9 +316,11 @@ pub fn run_dogfood_read_only(
     };
     let outcome = dispatch_dogfood_turn(
         &options.executable,
+        &expected_digest,
         &factory,
         &request,
         &enrolled.record().version,
+        bullet_harness_egress::filesystem::CLONE_DESTINATION,
     )
     .map_err(|error| failed("DOGFOOD_DISPATCH", error.to_string()))?;
 

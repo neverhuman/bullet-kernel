@@ -50,9 +50,11 @@ pub fn dogfood_argv(prompt: &str, schema: &str, max_budget_usd: &str) -> Vec<Str
 /// argv, a tool outside the allowlist, or a non-dogfood transcript.
 pub fn dispatch_dogfood_turn(
     executable: &Path,
+    enrolled_blake3: &str,
     factory: &CommandFactory<'_>,
     request: &LiveTurnRequest,
     enrolled_runtime_version: &str,
+    expected_child_cwd: &str,
 ) -> Result<DogfoodTurnOutcome, HarnessError> {
     if request.expected_runtime_version != enrolled_runtime_version {
         return Err(HarnessError::Protocol {
@@ -73,7 +75,12 @@ pub fn dispatch_dogfood_turn(
     for arg in &expected {
         builder = builder.arg(arg);
     }
-    let prepared = builder.timeout(request.wall_timeout).build()?;
+    // The plain `build()` quarantines every known provider basename; the
+    // dogfood path re-verifies the enrolled path and content digest instead,
+    // which is strictly stronger evidence than the basename it bypasses.
+    let prepared = builder
+        .timeout(request.wall_timeout)
+        .build_enrolled_dogfood(executable, enrolled_blake3)?;
     if prepared.args != expected {
         return Err(HarnessError::AdmissionRefused {
             reason: "dogfood argv is not the admitted closed set".into(),
@@ -82,10 +89,13 @@ pub fn dispatch_dogfood_turn(
 
     let capture = capture_turn(factory, &prepared, &request.canaries)?;
 
+    // The containment chdirs the child into its own clone destination, so the
+    // cwd the provider reports in system/init is the in-sandbox path, never
+    // the host workdir this process sees.
     let mut transcript = ClaudeStreamTranscript::new_with_profile(
         request.session_id.clone(),
         request.invocation_id.clone(),
-        &cwd,
+        expected_child_cwd,
         enrolled_runtime_version,
         request.gate_ids.clone(),
         TranscriptProfile::DogfoodReadOnlyV0,

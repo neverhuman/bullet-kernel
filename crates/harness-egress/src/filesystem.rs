@@ -16,7 +16,10 @@ const PROVIDER_DESTINATION: &str = "/run/bullet/provider";
 const SCHEMA_DESTINATION: &str = "/run/bullet/proposal-schema.json";
 const CA_DESTINATION: &str = "/etc/ssl/certs/ca-certificates.crt";
 const CREDENTIAL_DESTINATION: &str = "/run/bullet/credential";
-const CLONE_DESTINATION: &str = "/workspace";
+/// Fixed child working directory: the sandbox binds the admitted clone here
+/// and chdirs the provider into it, so transcript cwd pins must expect this
+/// path rather than the host clone path.
+pub const CLONE_DESTINATION: &str = "/workspace";
 const SCRATCH_DESTINATION: &str = "/scratch";
 
 /// An admitted ordinary file and its lowercase BLAKE3 content digest.

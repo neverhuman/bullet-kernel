@@ -39,7 +39,10 @@ pub(crate) enum DogfoodCommands {
         /// Repeatable `source,target,blake3` grants.
         #[arg(long = "credential")]
         credentials: Vec<String>,
-        /// Absolute family working directory.
+        /// Absolute owner-private snapshot directory (mode 0700) holding the
+        /// exact subject the turn may read. Never the live family root: the
+        /// filesystem validator denylists `/home/<user>/<dir>` roots including
+        /// `/home/ubuntu/bullet`, so pass a private clone or snapshot instead.
         #[arg(long)]
         workdir: Option<PathBuf>,
         /// Plan-mode prompt.

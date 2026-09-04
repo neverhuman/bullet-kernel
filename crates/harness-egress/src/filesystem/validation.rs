@@ -144,7 +144,7 @@ pub(super) fn prepare(
         &profile.bubblewrap,
         current_uid,
         true,
-        false,
+        FileOwner::Root,
         MAX_EXECUTABLE_BYTES,
     )?;
     let provider = open_file(
@@ -152,7 +152,7 @@ pub(super) fn prepare(
         &profile.provider,
         current_uid,
         true,
-        false,
+        FileOwner::Root,
         MAX_EXECUTABLE_BYTES,
     )?;
     let proposal_schema = open_file(
@@ -160,7 +160,7 @@ pub(super) fn prepare(
         &profile.proposal_schema,
         current_uid,
         false,
-        false,
+        FileOwner::RootOrRunnerAuthored,
         MAX_SCHEMA_BYTES,
     )?;
     let ca_bundle = open_file(
@@ -168,7 +168,7 @@ pub(super) fn prepare(
         &profile.ca_bundle,
         current_uid,
         false,
-        false,
+        FileOwner::Root,
         MAX_CA_BYTES,
     )?;
     let credential = None;
@@ -192,7 +192,7 @@ pub(super) fn prepare(
                 &runtime.source,
                 current_uid,
                 false,
-                false,
+                FileOwner::Root,
                 MAX_EXECUTABLE_BYTES,
             )
             .map(|opened| (runtime.destination.clone(), opened))
@@ -248,12 +248,25 @@ pub(super) fn revalidate(prepared: &PreparedFilesystemSandbox) -> Result<(), Egr
     prepared.scratch_directory.revalidate()
 }
 
+/// Who may own an admitted file. Root custody is the default for artifacts
+/// staged by the operator. `RootOrRunnerAuthored` additionally admits a file
+/// the runner itself wrote from a compiled-in constant, where integrity comes
+/// from the exact content digest rather than filesystem custody: such a file
+/// must be owned by the runner uid, owner-private (mode exactly 0600), and
+/// its ancestor chain must be unwritable by group/other and owned by root or
+/// the runner uid. Any other owner refuses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FileOwner {
+    Root,
+    RootOrRunnerAuthored,
+}
+
 fn open_file(
     role: &'static str,
     admitted: &FilesystemFileV0,
-    _current_uid: u32,
+    current_uid: u32,
     executable: bool,
-    _credential: bool,
+    owner: FileOwner,
     max_bytes: u64,
 ) -> Result<OpenedFile, EgressError> {
     validate_canonical(role, &admitted.path)?;
@@ -276,13 +289,37 @@ fn open_file(
         return Err(denied(format!("{role} size is outside the admitted bound")));
     }
     let permissions = named.mode() & 0o7777;
-    if named.uid() != 0 {
-        return Err(denied(format!("{role} owner is not root")));
+    match owner {
+        FileOwner::Root => {
+            if named.uid() != 0 {
+                return Err(denied(format!("{role} owner is not root")));
+            }
+            if permissions & 0o022 != 0 || (executable && permissions & 0o111 == 0) {
+                return Err(denied(format!("{role} mode is mutable or not executable")));
+            }
+            validate_parent_custody(role, &admitted.path)?;
+        }
+        FileOwner::RootOrRunnerAuthored if named.uid() == 0 => {
+            if permissions & 0o022 != 0 || (executable && permissions & 0o111 == 0) {
+                return Err(denied(format!("{role} mode is mutable or not executable")));
+            }
+            validate_parent_custody(role, &admitted.path)?;
+        }
+        FileOwner::RootOrRunnerAuthored => {
+            if executable {
+                return Err(denied(format!(
+                    "{role} cannot be runner-authored and executable"
+                )));
+            }
+            if named.uid() != current_uid {
+                return Err(denied(format!("{role} owner is not the runner uid")));
+            }
+            if permissions != 0o600 {
+                return Err(denied(format!("{role} mode is not owner-private 0600")));
+            }
+            validate_owner_parent_custody(role, &admitted.path, current_uid)?;
+        }
     }
-    if permissions & 0o022 != 0 || (executable && permissions & 0o111 == 0) {
-        return Err(denied(format!("{role} mode is mutable or not executable")));
-    }
-    validate_parent_custody(role, &admitted.path)?;
     let file =
         File::open(&admitted.path).map_err(|err| EgressError::io(&format!("open {role}"), &err))?;
     make_inheritable(&file, role)?;
@@ -359,6 +396,33 @@ fn validate_parent_custody(role: &str, path: &Path) -> Result<(), EgressError> {
             .map_err(|_| denied(format!("{role} parent is unavailable")))?;
         let mode = metadata.mode() & 0o777;
         if !metadata.file_type().is_dir() || metadata.uid() != 0 || mode & 0o022 != 0 {
+            return Err(denied(format!("{role} parent custody is mutable")));
+        }
+    }
+    Ok(())
+}
+
+/// Ancestor rule for a runner-authored file: every ancestor is a directory,
+/// owned by root or by the runner uid, and never group/other-writable — the
+/// chain discipline sshd applies to key files. One exemption: a root-owned
+/// world-writable directory carrying the sticky bit (the `/tmp` pattern),
+/// where only root or an entry's owner may replace it and the admitted file
+/// sits inside an owner-private directory whose digest is re-verified at open
+/// and revalidated on use.
+fn validate_owner_parent_custody(
+    role: &str,
+    path: &Path,
+    current_uid: u32,
+) -> Result<(), EgressError> {
+    for parent in path.ancestors().skip(1) {
+        let metadata = fs::symlink_metadata(parent)
+            .map_err(|_| denied(format!("{role} parent is unavailable")))?;
+        let mode = metadata.mode() & 0o7777;
+        let sticky_tmp = metadata.uid() == 0 && mode & 0o1000 != 0;
+        if !metadata.file_type().is_dir()
+            || (metadata.uid() != 0 && metadata.uid() != current_uid)
+            || (mode & 0o022 != 0 && !sticky_tmp)
+        {
             return Err(denied(format!("{role} parent custody is mutable")));
         }
     }
