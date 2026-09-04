@@ -12,8 +12,10 @@ use crate::policy_snapshot::{
 };
 use bullet_harness_claude::dogfood::dispatch_dogfood_turn;
 use bullet_harness_core::{
-    synthetic_uuid, CanarySecrets, CredentialGrant, LiveTurnRequest, PreparedProviderHome,
+    inspect_provider_runtime, synthetic_uuid, CanarySecrets, CredentialGrant, LiveTurnRequest,
+    PreparedProviderHome, ProviderRuntimePassportV1, RuntimeFileRoleV1, RUNTIME_DEPLOYMENT_PREFIX,
 };
+use bullet_harness_egress::filesystem::FilesystemRuntimeFileV0;
 use bullet_harness_egress::{
     EgressPolicy, EgressSandbox, FilesystemFileV0, FilesystemSandboxProfileV0,
     CONTAINMENT_UNAVAILABLE_EXIT,
@@ -292,18 +294,27 @@ pub fn run_dogfood_read_only(
     let scratch = runtime_root.join(format!("scratch-{}", synthetic_uuid("scratch")));
     ensure_private_dir(&scratch)?;
 
-    let filesystem = FilesystemSandboxProfileV0::new(
+    let passported = passported_runtime(&options.executable)?;
+    let (runtime_files, provider_max_bytes) = match passported {
+        Some(runtime) => (runtime.runtime_files, Some(runtime.provider_max_bytes)),
+        None => (Vec::new(), None),
+    };
+    let mut profile = FilesystemSandboxProfileV0::new(
         host_file(&bubblewrap)?,
         host_file(&options.executable)?,
         workdir.clone(),
         schema_admitted,
         host_file(&ca_bundle)?,
-        Vec::new(),
+        runtime_files,
         scratch,
     )
-    .with_prepared_home(home.path())
-    .prepare()
-    .map_err(|error| failed("DOGFOOD_FILESYSTEM", error.to_string()))?;
+    .with_prepared_home(home.path());
+    if let Some(bytes) = provider_max_bytes {
+        profile = profile.with_provider_max_bytes(bytes);
+    }
+    let filesystem = profile
+        .prepare()
+        .map_err(|error| failed("DOGFOOD_FILESYSTEM", error.to_string()))?;
 
     let egress_dir = runtime_root.join(format!("egress-{}", synthetic_uuid("egress")));
     ensure_private_dir(&egress_dir)?;
@@ -335,30 +346,52 @@ pub fn run_dogfood_read_only(
         wall_timeout: Duration::from_secs(180),
         canaries: canaries.clone(),
     };
-    let factory = |_: &str, args: &[&str], _: &[(&str, &str)]| {
-        sandbox
-            .filesystem_command(&filesystem, args)
-            .unwrap_or_else(|_| {
+    // The child environment is composed INSIDE the bubblewrap plan via
+    // --setenv (HOME=/home/bullet, PATH=/runtime/bin, TMPDIR, locale,
+    // SSL_CERT_FILE, proxy variables), so ignoring the factory's env argument
+    // is correct by design: the outer Command's env never reaches the child.
+    // What must not be silent is a composition failure or a program
+    // substitution -- record either and surface it as the typed error instead
+    // of letting a /bin/false exit masquerade as a provider failure.
+    let compose_error: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
+    let admitted_program = options.executable.to_string_lossy().into_owned();
+    let factory = |program: &str, args: &[&str], _: &[(&str, &str)]| {
+        if program != admitted_program {
+            *compose_error.borrow_mut() = Some(format!(
+                "dispatch requested {program:?} but the admitted provider is {admitted_program:?}"
+            ));
+            let mut command = Command::new("/bin/false");
+            command.env_clear();
+            return command;
+        }
+        match sandbox.filesystem_command(&filesystem, args) {
+            Ok(command) => command,
+            Err(error) => {
+                *compose_error.borrow_mut() = Some(error.to_string());
                 let mut command = Command::new("/bin/false");
                 command.env_clear();
                 command
-            })
+            }
+        }
     };
-    let outcome = dispatch_dogfood_turn(
+    let dispatched = dispatch_dogfood_turn(
         &options.executable,
         &expected_digest,
         &factory,
         &request,
         &enrolled.record().version,
         bullet_harness_egress::filesystem::CLONE_DESTINATION,
-    )
-    .map_err(|error| failed("DOGFOOD_DISPATCH", error.to_string()))?;
+    );
+    if let Some(detail) = compose_error.borrow_mut().take() {
+        return Err(failed("DOGFOOD_CONTAINMENT_COMPOSE", detail));
+    }
+    let outcome = dispatched.map_err(|error| failed("DOGFOOD_DISPATCH", error.to_string()))?;
 
     let proposal_bytes = serde_json::to_vec(&outcome.proposal)
         .map_err(|error| failed("DOGFOOD_PROPOSAL", error.to_string()))?;
     let proposal_blake3 = blake3::hash(&proposal_bytes).to_hex().to_string();
     let proposal_path = options.receipt.with_extension("proposal.json");
-    write_0600(&proposal_path, &proposal_bytes)?;
+    write_create_once_0600(&proposal_path, &proposal_bytes)?;
 
     let receipt = DogfoodReadOnlyReceiptV0 {
         schema_version: DogfoodReadOnlyReceiptV0::SCHEMA_VERSION.to_owned(),
@@ -517,9 +550,130 @@ fn read_regular_file(path: &Path) -> Result<Vec<u8>, DogfoodRunError> {
     })
 }
 
+/// Sandbox mount destinations a runtime file may bind to. Mirrors the egress
+/// destination allowlist; files outside these prefixes (licenses, SBOMs,
+/// schemas) are custody-verified by the inspector but never mounted.
+const RUNTIME_DESTINATION_PREFIXES: [&str; 4] = ["/runtime/bin", "/lib", "/lib64", "/usr/lib"];
+
+/// Facts a verified runtime passport contributes to the compose.
+#[derive(Debug)]
+struct PassportedRuntime {
+    runtime_files: Vec<FilesystemRuntimeFileV0>,
+    provider_max_bytes: u64,
+}
+
+/// When the executable lives under the frozen deployment prefix, a verified
+/// passport is mandatory: it supplies the loader/library mounts a dynamic
+/// provider needs (the bwrap base set deliberately binds no /lib or /usr) and
+/// the exact provider size bound that replaces the blanket 64 MiB ceiling.
+/// Outside the prefix nothing changes. The passport file lives beside the
+/// immutable tree at `<deployment_root>.passport.json`.
+fn passported_runtime(executable: &Path) -> Result<Option<PassportedRuntime>, DogfoodRunError> {
+    let prefix = Path::new(RUNTIME_DEPLOYMENT_PREFIX);
+    let Ok(relative) = executable.strip_prefix(prefix) else {
+        return Ok(None);
+    };
+    let mut components = relative.components();
+    let (Some(provider), Some(version)) = (components.next(), components.next()) else {
+        return Err(failed(
+            "DOGFOOD_PASSPORT_LAYOUT",
+            "deployment executable must be <prefix>/<provider>/<version>/<entrypoint>",
+        ));
+    };
+    let root = prefix.join(provider).join(version);
+    let passport_path = root.with_extension("passport.json");
+    let bytes = fs::read(&passport_path).map_err(|error| {
+        failed(
+            "DOGFOOD_PASSPORT_MISSING",
+            format!("{}: {error}", passport_path.display()),
+        )
+    })?;
+    let passport = ProviderRuntimePassportV1::decode(&bytes)
+        .map_err(|error| failed("DOGFOOD_PASSPORT_INVALID", error.to_string()))?;
+    let expected_id = passport
+        .passport_id()
+        .map_err(|error| failed("DOGFOOD_PASSPORT_INVALID", error.to_string()))?;
+    let inspected = inspect_provider_runtime(&bytes, &expected_id)
+        .map_err(|error| failed("DOGFOOD_PASSPORT_REFUSED", error.to_string()))?;
+    let entrypoint = root.join(inspected.entrypoint());
+    if entrypoint != executable {
+        return Err(failed(
+            "DOGFOOD_PASSPORT_ENTRYPOINT_MISMATCH",
+            format!(
+                "passport entrypoint {} is not the admitted executable {}",
+                entrypoint.display(),
+                executable.display()
+            ),
+        ));
+    }
+    let mut provider_max_bytes = None;
+    let mut runtime_files = Vec::new();
+    for file in &passport.files {
+        if file.path == passport.entrypoint {
+            provider_max_bytes = Some(file.size);
+            continue;
+        }
+        if matches!(
+            file.role,
+            RuntimeFileRoleV1::License
+                | RuntimeFileRoleV1::Sbom
+                | RuntimeFileRoleV1::ProtocolSchema
+        ) {
+            continue;
+        }
+        let destination = format!("/{}", file.path);
+        if !RUNTIME_DESTINATION_PREFIXES
+            .iter()
+            .any(|prefix| destination.starts_with(&format!("{prefix}/")))
+        {
+            continue;
+        }
+        runtime_files.push(FilesystemRuntimeFileV0::new(
+            FilesystemFileV0::new(root.join(&file.path), file.blake3.clone()),
+            destination,
+        ));
+    }
+    let provider_max_bytes = provider_max_bytes.ok_or_else(|| {
+        failed(
+            "DOGFOOD_PASSPORT_INVALID",
+            "passport manifest does not list its own entrypoint",
+        )
+    })?;
+    Ok(Some(PassportedRuntime {
+        runtime_files,
+        provider_max_bytes,
+    }))
+}
+
 fn write_0600(path: &Path, bytes: &[u8]) -> Result<(), DogfoodRunError> {
     fs::write(path, bytes).map_err(|error| failed("DOGFOOD_IO", error.to_string()))?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| failed("DOGFOOD_IO", error.to_string()))
+}
+
+/// Create-once 0600 write for run evidence. A rerun must never overwrite an
+/// earlier run's artifact; the receipt already refuses overwrite and every
+/// sibling artifact must hold the same line.
+fn write_create_once_0600(path: &Path, bytes: &[u8]) -> Result<(), DogfoodRunError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                failed(
+                    "DOGFOOD_ARTIFACT_EXISTS",
+                    format!("{} already exists; evidence is create-once", path.display()),
+                )
+            } else {
+                failed("DOGFOOD_IO", error.to_string())
+            }
+        })?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
         .map_err(|error| failed("DOGFOOD_IO", error.to_string()))
 }
 
@@ -599,6 +753,40 @@ mod tests {
                 run_dogfood_read_only(pending).expect_err("unimplemented provider must refuse");
             assert_eq!(error.code, "DOGFOOD_PROVIDER_UNIMPLEMENTED", "{provider}");
         }
+    }
+
+    #[test]
+    fn passported_runtime_is_none_outside_the_deployment_prefix_and_required_inside() {
+        // Outside the frozen prefix, nothing changes: no passport is consulted.
+        use std::path::Path;
+        let outside = super::passported_runtime(Path::new("/usr/bin/true"))
+            .expect("non-deployment path is fine");
+        assert!(outside.is_none());
+
+        // Inside the prefix, a missing passport is a typed refusal, never a
+        // silent fall back to the 64 MiB unpassported path.
+        let error = super::passported_runtime(Path::new(
+            "/usr/lib/bullet/providers/claude/0.0.0-test-absent/bin/claude",
+        ))
+        .expect_err("deployment path without a passport must refuse");
+        assert_eq!(error.code, "DOGFOOD_PASSPORT_MISSING");
+
+        // A malformed layout under the prefix refuses with its own code.
+        let error = super::passported_runtime(Path::new("/usr/lib/bullet/providers/claude"))
+            .expect_err("prefix with no version segment must refuse");
+        assert_eq!(error.code, "DOGFOOD_PASSPORT_LAYOUT");
+    }
+
+    #[test]
+    fn run_evidence_is_create_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("evidence.proposal.json");
+        super::write_create_once_0600(&path, b"{}").expect("first write");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "evidence must be owner-private");
+        let error = super::write_create_once_0600(&path, b"{}")
+            .expect_err("a rerun must never overwrite evidence");
+        assert_eq!(error.code, "DOGFOOD_ARTIFACT_EXISTS");
     }
 
     #[test]

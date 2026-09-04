@@ -11,6 +11,10 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 
 const MAX_EXECUTABLE_BYTES: u64 = 64 * 1024 * 1024;
+/// Ceiling for a passport-declared provider bound: the runtime-passport
+/// contract's own per-file maximum (512 MiB). A passport may admit less,
+/// never more.
+const MAX_PASSPORT_PROVIDER_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SCHEMA_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CA_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_RUNTIME_FILES: usize = 64;
@@ -147,13 +151,20 @@ pub(super) fn prepare(
         FileOwner::Root,
         MAX_EXECUTABLE_BYTES,
     )?;
+    let provider_max_bytes = match profile.provider_max_bytes {
+        // A passport-declared bound must be explicit and sane: never zero,
+        // never above the runtime contract's own per-file ceiling.
+        Some(bytes) if bytes > 0 && bytes <= MAX_PASSPORT_PROVIDER_BYTES => bytes,
+        Some(_) => return Err(denied("provider size bound is outside the admitted range")),
+        None => MAX_EXECUTABLE_BYTES,
+    };
     let provider = open_file(
         "provider",
         &profile.provider,
         current_uid,
         true,
         FileOwner::Root,
-        MAX_EXECUTABLE_BYTES,
+        provider_max_bytes,
     )?;
     let proposal_schema = open_file(
         "proposal schema",

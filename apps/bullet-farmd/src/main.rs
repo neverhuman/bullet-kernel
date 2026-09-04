@@ -142,12 +142,50 @@ async fn main() -> ExitCode {
     if worker_token.is_some() {
         tracing::info!("authenticated internal command reconciler enabled");
     }
+    let mut lease_task: Option<tokio::task::JoinHandle<Result<(), std::io::Error>>> = None;
     if let Some(launch) = lease_launch {
+        // A daemon that crashed or was killed leaves its socket file behind,
+        // and the admission path refuses to replace an existing path -- so a
+        // restart on the same path used to be impossible. Recover the one
+        // safe case ourselves: a path nothing is listening on is stale and is
+        // removed; a live listener means another daemon owns it, which is
+        // fatal here rather than a squat to bulldoze.
+        if launch.socket.exists() {
+            match std::os::unix::net::UnixStream::connect(&launch.socket) {
+                Ok(_) => {
+                    eprintln!(
+                        "bullet-farmd: lease-transport socket {} is live; another daemon owns it",
+                        launch.socket.display()
+                    );
+                    return ExitCode::FAILURE;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    if let Err(remove) = std::fs::remove_file(&launch.socket) {
+                        eprintln!(
+                            "bullet-farmd: cannot remove stale lease-transport socket {}: {remove}",
+                            launch.socket.display()
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                    tracing::warn!(
+                        "removed stale lease-transport socket {}",
+                        launch.socket.display()
+                    );
+                }
+                Err(error) => {
+                    eprintln!(
+                        "bullet-farmd: lease-transport socket {} is unusable: {error}",
+                        launch.socket.display()
+                    );
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
         let fixture = launch.fixture;
         let key_bytes = launch.key_bytes;
         let candidate_key = launch.candidate_key;
         let rpc_state = state.clone();
-        tokio::spawn(async move {
+        lease_task = Some(tokio::spawn(async move {
             let result = match candidate_key {
                 Some(key) => {
                     bullet_farmd::lease_transport_rpc::serve_with_candidate(
@@ -169,10 +207,8 @@ async fn main() -> ExitCode {
                     .await
                 }
             };
-            if let Err(error) = result {
-                tracing::error!("lease-transport socket: {error}");
-            }
-        });
+            result
+        }));
         if fixture {
             if args.kernel_authority_socket.is_some() {
                 eprintln!(
@@ -226,9 +262,41 @@ async fn main() -> ExitCode {
     // an operator's: without this tick a Variant whose runner died is freed
     // only when some successor happens to try to acquire it.
     let _tick = reaper::spawn(state.clone(), args.reap_interval_ms);
-    if let Err(err) = axum::serve(listener, app).await {
-        eprintln!("bullet-farmd: serve: {err}");
-        return ExitCode::FAILURE;
+    // The lease-transport listener is load-bearing: a runner that cannot
+    // reach it makes every attempt refuse. Its death used to be a detached
+    // log line while the HTTP surface kept reporting healthy; now it takes
+    // the daemon down with a visible error.
+    match lease_task {
+        Some(mut handle) => {
+            tokio::select! {
+                served = axum::serve(listener, app) => {
+                    if let Err(err) = served {
+                        eprintln!("bullet-farmd: serve: {err}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                lease = &mut handle => {
+                    match lease {
+                        Ok(Ok(())) => eprintln!(
+                            "bullet-farmd: lease-transport listener exited; shutting down"
+                        ),
+                        Ok(Err(error)) => eprintln!(
+                            "bullet-farmd: lease-transport socket failed: {error}"
+                        ),
+                        Err(join) => eprintln!(
+                            "bullet-farmd: lease-transport task panicked: {join}"
+                        ),
+                    }
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        None => {
+            if let Err(err) = axum::serve(listener, app).await {
+                eprintln!("bullet-farmd: serve: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
     }
     ExitCode::SUCCESS
 }

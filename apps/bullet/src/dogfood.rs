@@ -3,6 +3,9 @@
 //! Not live-conformance. Issuer/key are operator-supplied and never default
 //! to `launch-grant-alpha`. Exit 78 is designed-neutral.
 
+use bullet_application::dogfood_produce::{
+    produce_binding, produce_enrollment, produce_passport, produce_policy, EnrollmentFacts,
+};
 use bullet_application::{
     run_dogfood_read_only, CredentialSpec, DogfoodReadOnlyOptions, DogfoodRunStatus,
 };
@@ -62,6 +65,80 @@ pub(crate) enum DogfoodCommands {
         /// Emit one JSON object on stdout.
         #[arg(long)]
         json: bool,
+    },
+    /// Produce the one admitted DogfoodBindingV1 document (canonical, 0600, create-once).
+    ProduceBinding {
+        /// Absolute output path.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Produce the v1alpha2 generation-2 dogfood policy from an operator base
+    /// and the IssuerKeyV1 printed by `authority keygen`. live_admission stays false.
+    ProducePolicy {
+        /// Absolute operator-ratified base policy (v1alpha1 JSON).
+        #[arg(long)]
+        base: PathBuf,
+        /// Absolute IssuerKeyV1 JSON saved from `authority keygen`.
+        #[arg(long)]
+        issuer_key: PathBuf,
+        /// Absolute output path.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Produce `<data-dir>/policy/enrollments/<provider>.json` and prove it by
+    /// loading it through the compose's own enrollment loader.
+    ProduceEnrollment {
+        /// Absolute 0700 data directory.
+        #[arg(long)]
+        data_dir: PathBuf,
+        /// Provider name: claude, codex, cursor, or antigravity.
+        #[arg(long)]
+        provider: String,
+        /// Absolute frozen executable (the staged deployment entrypoint).
+        #[arg(long)]
+        executable: PathBuf,
+        /// Exact runtime version the operator observed and confirms.
+        #[arg(long)]
+        version: String,
+        /// Frozen protocol wire label (e.g. claude_stream_json).
+        #[arg(long)]
+        protocol: String,
+        /// Kernel profile id (`prf_` + 64 lowercase hex).
+        #[arg(long)]
+        profile_id: String,
+        /// Tightest per-turn cost cap in micro-USD.
+        #[arg(long)]
+        budget_micro_usd_max: u64,
+        /// Validity window in days from now (exclusive expiry).
+        #[arg(long, default_value_t = 90)]
+        valid_days: u64,
+        /// Free-text author label; fixture identities are refused.
+        #[arg(long)]
+        enrolled_by: String,
+    },
+    /// Produce a canonical RuntimePassportV1 describing a staged deployment tree.
+    ProducePassport {
+        /// Absolute staged tree to walk (may differ from the final root).
+        #[arg(long)]
+        staged_root: PathBuf,
+        /// Exact final immutable root (`/usr/lib/bullet/providers/<p>/<v>`).
+        #[arg(long)]
+        recorded_root: String,
+        /// Provider wire name recorded in the passport.
+        #[arg(long)]
+        provider: String,
+        /// Frozen protocol wire label.
+        #[arg(long)]
+        protocol: String,
+        /// Exact packaged version (must equal the root's version segment).
+        #[arg(long)]
+        version: String,
+        /// Root-relative entrypoint path.
+        #[arg(long)]
+        entrypoint: String,
+        /// Absolute output path (install as `<recorded_root>.passport.json`).
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
@@ -155,6 +232,54 @@ pub(crate) fn run(command: DogfoodCommands) -> ExitCode {
                 Err(error) => fail(json, error.code, &error.detail),
             }
         }
+        DogfoodCommands::ProduceBinding { out } => produced(produce_binding(&out)),
+        DogfoodCommands::ProducePolicy {
+            base,
+            issuer_key,
+            out,
+        } => produced(produce_policy(&base, &issuer_key, &out)),
+        DogfoodCommands::ProduceEnrollment {
+            data_dir,
+            provider,
+            executable,
+            version,
+            protocol,
+            profile_id,
+            budget_micro_usd_max,
+            valid_days,
+            enrolled_by,
+        } => {
+            let now = unix_ms_now();
+            let facts = EnrollmentFacts {
+                provider,
+                executable,
+                version,
+                protocol,
+                profile_id,
+                budget_micro_usd_max,
+                valid_from_unix_ms: now,
+                valid_until_unix_ms: now + valid_days * 24 * 60 * 60 * 1000,
+                enrolled_by,
+            };
+            produced(produce_enrollment(&data_dir, &facts, now))
+        }
+        DogfoodCommands::ProducePassport {
+            staged_root,
+            recorded_root,
+            provider,
+            protocol,
+            version,
+            entrypoint,
+            out,
+        } => produced(produce_passport(
+            &staged_root,
+            &recorded_root,
+            &provider,
+            &protocol,
+            &version,
+            &entrypoint,
+            &out,
+        )),
     }
 }
 
@@ -172,6 +297,28 @@ fn parse_credentials(values: &[String]) -> Result<Vec<CredentialSpec>, String> {
         });
     }
     Ok(grants)
+}
+
+fn produced(
+    result: Result<String, bullet_application::dogfood_produce::DogfoodProduceError>,
+) -> ExitCode {
+    match result {
+        Ok(digest) => {
+            println!("{digest}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn unix_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn missing(json_out: bool, fields: &[(&str, bool)]) -> Option<ExitCode> {

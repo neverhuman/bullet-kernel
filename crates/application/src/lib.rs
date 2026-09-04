@@ -12,6 +12,7 @@ pub mod conformance_effects;
 pub mod context;
 pub mod demo;
 pub mod dogfood;
+pub mod dogfood_produce;
 #[cfg(feature = "dogfood-claude")]
 pub mod dogfood_run;
 pub mod effect_recovery;

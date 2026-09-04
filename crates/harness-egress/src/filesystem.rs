@@ -100,6 +100,7 @@ pub struct FilesystemSandboxProfileV0 {
     runtime_files: Vec<FilesystemRuntimeFileV0>,
     scratch_directory: PathBuf,
     locale: String,
+    provider_max_bytes: Option<u64>,
 }
 
 impl FilesystemSandboxProfileV0 {
@@ -127,7 +128,18 @@ impl FilesystemSandboxProfileV0 {
             runtime_files,
             scratch_directory: scratch_directory.into(),
             locale: "C.UTF-8".to_string(),
+            provider_max_bytes: None,
         }
+    }
+
+    /// Admit a provider entrypoint larger than the 64 MiB default, up to the
+    /// exact bound an inspected runtime passport declares for it. The caller
+    /// is responsible for having verified that passport; this profile still
+    /// pins the entrypoint's content digest and root custody.
+    #[must_use]
+    pub fn with_provider_max_bytes(mut self, bytes: u64) -> Self {
+        self.provider_max_bytes = Some(bytes);
+        self
     }
 
     /// Bind an already-staged provider HOME (from `PreparedProviderHome`) as

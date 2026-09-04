@@ -10,7 +10,7 @@ use crate::launch_grant::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-mod inspection;
+pub mod inspection;
 
 pub use inspection::{inspect_provider_runtime, InspectedProviderRuntimeV1};
 

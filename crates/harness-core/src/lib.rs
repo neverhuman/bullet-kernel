@@ -77,6 +77,7 @@ pub use live::{
 };
 pub use probe::{ExpectedProfile, ProbeResult, ProfileIdentity, ProfileRef};
 pub use proposal::{PatchMutation, PatchOperation, PatchProposal, Preimage};
+pub use runtime_passport::inspection::{inspect_provider_runtime, InspectedProviderRuntimeV1};
 pub use runtime_passport::{
     ProviderRuntimePassportV1, RuntimeExecutionV1, RuntimeFileRoleV1, RuntimeFileV1,
     RuntimeLoaderV1, RuntimePassportError, MAX_RUNTIME_FILES, MAX_RUNTIME_FILE_BYTES,
