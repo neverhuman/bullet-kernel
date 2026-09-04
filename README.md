@@ -1,9 +1,9 @@
 # bullet-kernel
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
-Product-surface claims and the CI inventory were last reviewed 2026-08-26
+Product-surface claims and the CI inventory were last reviewed 2026-09-04
 against product subject `3fb9d8e`.
-<!-- bullet-doc-review:v1 subject=3fb9d8e450f59bf3e35531320381050357116cf2 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs -->
+<!-- bullet-doc-review:v1 subject=f8aa2b087a2fff064669ee136d25eb64ffad594e max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs -->
 Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.
@@ -26,7 +26,7 @@ Evidence classes follow
 | `crates/mcp-mock`, `crates/test-simulation` | in-process mocks and harness tapes for the contract lane |
 | `apps/bullet-farmd` | loopback-only HTTP + SSE daemon; routes in the table below |
 | `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
-| `apps/bullet` | CLI: `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`; every flag is in [`docs/cli.md`](docs/cli.md) |
+| `apps/bullet` | CLI: `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; every flag is in [`docs/cli.md`](docs/cli.md) |
 | `apps/bullet-runner` | fail-closed attempt runner; returns `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, filesystem, provider, or gitd activity |
 | `apps/bullet-verifier` | product verifier boundary; always returns the typed `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE` refusal without reading a job. The default-off `bullet-verifier-fixture` accepts unsigned fixture JSON only with `fixture-executor`; every fixture outcome is component-only, unsigned, non-independent, and transaction-gate-ineligible |
 | `apps/bullet-effects` | no-argument component demo over `LocalBareForge`; `serve <durable-queue-dir>` processes one UNKNOWN job only to `QUARANTINED`, never fabricated forge success |

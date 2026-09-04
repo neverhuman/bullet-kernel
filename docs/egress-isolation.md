@@ -5,7 +5,7 @@ Owner: Bullet Farm maintainers
 Last reviewed: 2026-08-26 against HEAD `3fb9d8e`
 Source of truth: `crates/harness-egress/src/{lib,allowlist,decisions,error,namespace,probes,proxy,receipt,request,ruleset,sandbox,tools,tunnel}.rs`;
 consumer: `crates/harness-core/src/admission/signed.rs`
-<!-- bullet-doc-review:v1 subject=3fb9d8e450f59bf3e35531320381050357116cf2 max_distance=25 paths=crates/harness-egress/src/lib.rs,crates/harness-egress/src/sandbox.rs,crates/harness-core/src/admission/signed.rs -->
+<!-- bullet-doc-review:v1 subject=f8aa2b087a2fff064669ee136d25eb64ffad594e max_distance=25 paths=crates/harness-egress/src/lib.rs,crates/harness-egress/src/sandbox.rs,crates/harness-core/src/admission/signed.rs -->
 
 `bullet-harness-egress` launches a provider CLI inside a fresh Linux user +
 network namespace whose only route out is a `slirp4netns` uplink to a

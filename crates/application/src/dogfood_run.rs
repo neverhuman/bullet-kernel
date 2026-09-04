@@ -39,16 +39,24 @@ pub struct CredentialSpec {
     pub blake3: String,
 }
 
+/// Providers the dogfood compose recognizes. Only Claude has a dispatch
+/// today; the other three refuse with a typed reason until their M2 lanes
+/// land, so `--provider codex` fails closed instead of silently running the
+/// wrong protocol.
+pub const DOGFOOD_PROVIDERS: [&str; 4] = ["claude", "codex", "cursor", "antigravity"];
+
 /// Operator inputs for one read-only dogfood compose.
 #[derive(Clone, Debug)]
 pub struct DogfoodReadOnlyOptions {
+    /// Provider name from [`DOGFOOD_PROVIDERS`].
+    pub provider: String,
     /// Absolute 0700 runtime data directory.
     pub data_dir: PathBuf,
     /// Absolute 0600 v1alpha2 policy.
     pub policy: PathBuf,
     /// Absolute `DogfoodBindingV1` JSON.
     pub binding: PathBuf,
-    /// Absolute enrollment file. Must be `<data-dir>/policy/enrollments/claude.json`.
+    /// Absolute enrollment file: `<data-dir>/policy/enrollments/<provider>.json`.
     pub enrollment: PathBuf,
     /// Operator issuer label. Never `bullet-kernel` with `launch-grant-alpha`.
     pub issuer: String,
@@ -121,6 +129,27 @@ pub fn run_dogfood_read_only(
             ));
         }
     };
+    if !DOGFOOD_PROVIDERS.contains(&options.provider.as_str()) {
+        return Err(failed(
+            "DOGFOOD_PROVIDER_UNKNOWN",
+            format!(
+                "provider {:?} is not one of {DOGFOOD_PROVIDERS:?}",
+                options.provider
+            ),
+        ));
+    }
+    if options.provider != "claude" {
+        // Fail before any policy read, staging, or spend: the per-provider
+        // dispatch (argv + transcript profile) for these lanes has not landed.
+        // See DOGFOOD-MULTI-CLI-GATES.md M2-Codex / M2-Cursor / M2-Antigravity.
+        return Err(failed(
+            "DOGFOOD_PROVIDER_UNIMPLEMENTED",
+            format!(
+                "provider {:?} has no dogfood dispatch yet; only \"claude\" is wired",
+                options.provider
+            ),
+        ));
+    }
     refuse_launch_grant_alpha(&options.issuer, &options.key_id)?;
     require_absolute("data-dir", &options.data_dir)?;
     require_absolute("policy", &options.policy)?;
@@ -156,7 +185,7 @@ pub fn run_dogfood_read_only(
     validate_dogfood_admission(loaded.snapshot(), &binding)
         .map_err(|error| failed("DOGFOOD_ADMISSION_REFUSED", error.to_string()))?;
 
-    let expected_enrollment = enrollment_path(&options.data_dir, "claude");
+    let expected_enrollment = enrollment_path(&options.data_dir, &options.provider);
     if options.enrollment != expected_enrollment {
         return Ok(neutral(
             "ENROLLMENT_PATH_MISMATCH",
@@ -164,15 +193,16 @@ pub fn run_dogfood_read_only(
         ));
     }
     let now = unix_ms();
-    let enrolled = load_provider_enrollment(&options.data_dir, "claude", now).map_err(|error| {
-        if error.reason_code() == "ENROLLMENT_MISSING" {
-            return DogfoodRunError {
-                code: "ENROLLMENT_MISSING",
-                detail: error.to_string(),
-            };
-        }
-        failed(error.reason_code(), error.to_string())
-    });
+    let enrolled =
+        load_provider_enrollment(&options.data_dir, &options.provider, now).map_err(|error| {
+            if error.reason_code() == "ENROLLMENT_MISSING" {
+                return DogfoodRunError {
+                    code: "ENROLLMENT_MISSING",
+                    detail: error.to_string(),
+                };
+            }
+            failed(error.reason_code(), error.to_string())
+        });
     let enrolled = match enrolled {
         Ok(enrolled) => enrolled,
         Err(error) if error.code == "ENROLLMENT_MISSING" => {
@@ -277,7 +307,7 @@ pub fn run_dogfood_read_only(
 
     let egress_dir = runtime_root.join(format!("egress-{}", synthetic_uuid("egress")));
     ensure_private_dir(&egress_dir)?;
-    let policy = EgressPolicy::for_provider("claude")
+    let policy = EgressPolicy::for_provider(&options.provider)
         .map_err(|error| failed("DOGFOOD_EGRESS_POLICY", error.to_string()))?;
     let sandbox = match EgressSandbox::prepare(policy, &egress_dir) {
         Ok(sandbox) => sandbox,
@@ -534,6 +564,7 @@ mod tests {
 
     fn options() -> DogfoodReadOnlyOptions {
         DogfoodReadOnlyOptions {
+            provider: "claude".to_owned(),
             data_dir: PathBuf::from("/tmp/missing-dogfood-data"),
             policy: PathBuf::from("/tmp/missing-policy.json"),
             binding: PathBuf::from("/tmp/missing-binding.json"),
@@ -546,6 +577,27 @@ mod tests {
             prompt: Some("fix a stale sentence".into()),
             max_budget_usd: Some(0.25),
             receipt: PathBuf::from("/tmp/missing-receipt.json"),
+        }
+    }
+
+    #[test]
+    fn unknown_and_unimplemented_providers_refuse_before_any_staging() {
+        // An unknown name is a typed refusal, never a silent claude fallback.
+        let mut unknown = options();
+        unknown.provider = "gemini".to_owned();
+        let error = run_dogfood_read_only(unknown).expect_err("unknown provider must refuse");
+        assert_eq!(error.code, "DOGFOOD_PROVIDER_UNKNOWN");
+
+        // A known provider with no wired dispatch refuses with its own code,
+        // before any policy read or staging: the options here point at paths
+        // that do not exist, so reaching any later step would surface a
+        // different code.
+        for provider in ["codex", "cursor", "antigravity"] {
+            let mut pending = options();
+            pending.provider = provider.to_owned();
+            let error =
+                run_dogfood_read_only(pending).expect_err("unimplemented provider must refuse");
+            assert_eq!(error.code, "DOGFOOD_PROVIDER_UNIMPLEMENTED", "{provider}");
         }
     }
 

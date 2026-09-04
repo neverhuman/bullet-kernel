@@ -5,7 +5,7 @@ Owner: Bullet Farm maintainers
 Last reviewed: 2026-08-26
 Source of truth: `apps/bullet/src/{main,transaction,authority,provider,maintenance,contracts}.rs`,
 `apps/bullet/src/authority/mint.rs`, and the process-bin `main.rs` files below.
-<!-- bullet-doc-review:v1 subject=3fb9d8e450f59bf3e35531320381050357116cf2 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs -->
+<!-- bullet-doc-review:v1 subject=f8aa2b087a2fff064669ee136d25eb64ffad594e max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs -->
 
 Every command is offline except the guarded `provider live-conformance` path.
 Every current production adapter refuses at runtime observation before it can
@@ -36,6 +36,9 @@ spawn a provider. Nothing here produces `LIVE_PROOF` or `RELEASE_PROOF`.
 | `authority keygen` | create the operator launch-grant signing key; see below |
 | `authority mint-launch-grant` | mint one signed launch grant from the durable active lease; see below |
 | `provider live-conformance` | run the guarded 13-step live path for one provider; see below |
+| `mission materialize` / `mission status` | materialize one plan revision into the local ledger (same seed + input replays the same ids; same seed + different input refuses) / print the stored graph for one mission |
+| `run show` / `run print-preimages` | verify and render one run receipt (recomputes the body digest; follows the embedded selection-receipt chain link) / emit BLAKE3 preimages for paths at an exact base commit; see below |
+| `dogfood read-only` | one contained read-only dogfood compose under ADR 0015; not a release profile, not live-conformance; see below |
 
 ## `authority keygen`
 
@@ -153,6 +156,46 @@ v1alpha2 product receipt has `POLICY=PASS`, `ADMISSION=REFUSED`, and all other
 checked early but mapped to the existing `ADMISSION` slot. The CLI opens its
 SQLite ledger before orchestration, but the refusal creates no Mission, graph,
 lease, or nonce row.
+
+## `run`
+
+`run show <receipt>` verifies before it renders: it recomputes the receipt's
+body digest over the canonical body bytes for the receipt's schema, and for an
+effect-chain receipt it decodes the embedded selection receipt and requires
+`selection_binding.receipt_body_digest` to equal that receipt's own
+`body_digest`. A flipped byte refuses with `RECEIPT_BODY_DIGEST_MISMATCH`; an
+unknown `schema_version` refuses without printing any body field; every render
+carries `eligibility 0/9 — NOT a release receipt`.
+
+`run print-preimages --repo <abs> --base-sha <sha> <path>...` prints one JSON
+line per path: `{"kind":"digest","digest":"<blake3 of git show base:path>"}`,
+or `{"kind":"absent"}` when the path does not exist at that commit. Digests
+match `b3sum --no-names` exactly.
+
+## `dogfood read-only`
+
+One contained read-only dogfood turn (ADR 0015). Clears no release gate; the
+receipt is a purpose-separated operational observation with every eligibility
+flag false, and the release registry refuses it as evidence.
+
+| Flag | Required | Default | Constraint |
+| --- | --- | --- | --- |
+| `--provider <name>` | no | `claude` | one of `claude`, `codex`, `cursor`, `antigravity`; only `claude` has a wired dispatch — the rest refuse `DOGFOOD_PROVIDER_UNIMPLEMENTED` before any staging |
+| `--data-dir <abs>` | yes | — | self-owned 0700 runtime directory |
+| `--policy <abs>` | yes | — | 0600 v1alpha2 policy, `policy_generation >= 2`, `live_admission_enabled` **false** (`true` is refused twice) |
+| `--binding <abs>` | yes | — | `DogfoodBindingV1` JSON: audience `dogfood-runner`, operation `read-only-propose` |
+| `--enrollment <abs>` | yes | — | must equal `<data-dir>/policy/enrollments/<provider>.json`; executable path and BLAKE3 must match it |
+| `--issuer <label>` / `--key-id <label>` | yes | — | fixture labels refused (`launch-grant-alpha` etc.) |
+| `--executable <abs>` | yes | — | re-hashed at the argv chokepoint; drift from the enrollment refuses |
+| `--credential source,target,blake3` | no | — | repeatable exact staged grants |
+| `--workdir <abs>` | yes | — | owner-private 0700 snapshot of the subject; the live family root is denylisted |
+| `--prompt <text>` | yes for a turn | — | absent is designed-neutral 78 |
+| `--max-budget-usd <f64>` | no | enrollment max | the enrollment cap still wins |
+| `--receipt <abs>` | yes | — | create-once 0600; overwrite refused |
+
+Exit codes: `0` a receipt was written; `78` designed-neutral (missing input,
+namespaces unavailable, containment unavailable); `1` typed refusal (live
+admission enabled, binding/enrollment mismatch, fixture key, argv drift).
 
 ## Daemons and process bins
 

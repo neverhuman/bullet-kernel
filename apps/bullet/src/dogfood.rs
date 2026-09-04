@@ -15,6 +15,11 @@ use std::process::ExitCode;
 pub(crate) enum DogfoodCommands {
     /// One contained read-only propose. Never applies.
     ReadOnly {
+        /// Provider to dispatch: claude, codex, cursor, or antigravity.
+        /// Only claude has a wired dogfood dispatch today; the rest refuse
+        /// with DOGFOOD_PROVIDER_UNIMPLEMENTED until their M2 lanes land.
+        #[arg(long, default_value = "claude")]
+        provider: String,
         /// Absolute 0700 data directory.
         #[arg(long)]
         data_dir: Option<PathBuf>,
@@ -24,7 +29,7 @@ pub(crate) enum DogfoodCommands {
         /// Absolute DogfoodBindingV1 JSON.
         #[arg(long)]
         binding: Option<PathBuf>,
-        /// Absolute enrollment; must be `<data-dir>/policy/enrollments/claude.json`.
+        /// Absolute enrollment: `<data-dir>/policy/enrollments/<provider>.json`.
         #[arg(long)]
         enrollment: Option<PathBuf>,
         /// Operator issuer. Never hardcoded.
@@ -64,6 +69,7 @@ pub(crate) enum DogfoodCommands {
 pub(crate) fn run(command: DogfoodCommands) -> ExitCode {
     match command {
         DogfoodCommands::ReadOnly {
+            provider,
             data_dir,
             policy,
             binding,
@@ -107,6 +113,7 @@ pub(crate) fn run(command: DogfoodCommands) -> ExitCode {
                 }
             };
             let options = DogfoodReadOnlyOptions {
+                provider,
                 data_dir: data_dir.expect("checked"),
                 policy: policy.expect("checked"),
                 binding: binding.expect("checked"),

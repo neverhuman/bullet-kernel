@@ -3,7 +3,7 @@
 Last reviewed: 2026-08-26 against HEAD `3fb9d8e`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
-<!-- bullet-doc-review:v1 subject=3fb9d8e450f59bf3e35531320381050357116cf2 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs -->
+<!-- bullet-doc-review:v1 subject=f8aa2b087a2fff064669ee136d25eb64ffad594e max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs -->
 
 ## Ledger core
 
