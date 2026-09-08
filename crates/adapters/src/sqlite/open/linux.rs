@@ -1,6 +1,6 @@
-use super::store;
+use super::{store, ConnectionPurpose};
 use bullet_application::LedgerError;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::Connection;
 use rustix::fs::{AtFlags, Mode, OFlags, ResolveFlags};
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
@@ -39,7 +39,10 @@ pub(super) struct Guard {
     created: bool,
 }
 
-pub(super) fn connection(path: &Path) -> Result<(Connection, Guard), LedgerError> {
+pub(super) fn connection(
+    path: &Path,
+    purpose: ConnectionPurpose,
+) -> Result<(Connection, Guard), LedgerError> {
     let absolute = normalized_absolute(path)?;
     let effective_uid = effective_uid()?;
     let boundary = walk_boundary(&absolute, effective_uid)?;
@@ -64,6 +67,9 @@ pub(super) fn connection(path: &Path) -> Result<(Connection, Guard), LedgerError
                 created: false,
             }
         }
+        None if matches!(purpose, ConnectionPurpose::BackupReadOnly) => {
+            return Err(store("SQLite backup source database does not exist"));
+        }
         None => create_database(boundary, absolute, database_name, effective_uid)?,
     };
     if let Err(error) = revalidate(&guard) {
@@ -75,13 +81,7 @@ pub(super) fn connection(path: &Path) -> Result<(Connection, Guard), LedgerError
     if let Err(error) = preflight::verify(&guard) {
         return Err(failure_with_cleanup(None, guard, error));
     }
-    let connection = match Connection::open_with_flags(
-        &guard.database_path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_CREATE
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    ) {
+    let connection = match Connection::open_with_flags(&guard.database_path, purpose.flags()) {
         Ok(connection) => connection,
         Err(error) => return Err(failure_with_cleanup(None, guard, store(error))),
     };

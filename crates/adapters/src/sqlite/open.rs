@@ -17,10 +17,39 @@ pub(super) struct AdmittedConnection {
     pub(super) guard: AdmissionGuard,
 }
 
+#[derive(Clone, Copy)]
+enum ConnectionPurpose {
+    Serving,
+    BackupReadOnly,
+}
+
+#[cfg(target_os = "linux")]
+impl ConnectionPurpose {
+    fn flags(self) -> rusqlite::OpenFlags {
+        use rusqlite::OpenFlags;
+        let access = match self {
+            Self::Serving => OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+            Self::BackupReadOnly => OpenFlags::SQLITE_OPEN_READ_ONLY,
+        };
+        access | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW
+    }
+}
+
 pub(super) fn connection(path: &Path) -> Result<AdmittedConnection, LedgerError> {
+    admitted_connection(path, ConnectionPurpose::Serving)
+}
+
+pub(super) fn backup_read_only(path: &Path) -> Result<AdmittedConnection, LedgerError> {
+    admitted_connection(path, ConnectionPurpose::BackupReadOnly)
+}
+
+fn admitted_connection(
+    path: &Path,
+    purpose: ConnectionPurpose,
+) -> Result<AdmittedConnection, LedgerError> {
     #[cfg(target_os = "linux")]
     {
-        let (connection, inner) = linux::connection(path)?;
+        let (connection, inner) = linux::connection(path, purpose)?;
         Ok(AdmittedConnection {
             connection,
             guard: AdmissionGuard { inner },
@@ -28,7 +57,7 @@ pub(super) fn connection(path: &Path) -> Result<AdmittedConnection, LedgerError>
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = path;
+        let _ = (path, purpose);
         Err(store(
             "descriptor-admitted SQLite authority storage requires Linux",
         ))

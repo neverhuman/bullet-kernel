@@ -1,6 +1,6 @@
 //! Offline, receipt-bound SQLite backup and quarantined restore.
 
-use super::migrations;
+use super::{migrations, open};
 use rusqlite::{backup::Backup, params, Connection, OpenFlags, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -117,12 +117,14 @@ fn create_backup_inner(
 ) -> Result<BackupReceipt, SqliteMaintenanceError> {
     require_unix()?;
     require_absent(destination)?;
-    let source = open_database_read_only(source)?;
-    let source_state = migrations::verify_existing(&source, false).map_err(schema_error)?;
+    let source = open::backup_read_only(source).map_err(|error| phase("OPEN", error))?;
+    let source_state =
+        migrations::verify_existing(&source.connection, false).map_err(schema_error)?;
     let mut staged = staging_file(destination, "backup")?;
     let mut snapshot = Connection::open(staged.path()).map_err(|err| phase("COPY", err))?;
     {
-        let copy = Backup::new(&source, &mut snapshot).map_err(|err| phase("COPY", err))?;
+        let copy =
+            Backup::new(&source.connection, &mut snapshot).map_err(|err| phase("COPY", err))?;
         copy.run_to_completion(128, Duration::from_millis(5), None)
             .map_err(|err| phase("COPY", err))?;
     }
@@ -160,7 +162,10 @@ fn create_backup_inner(
     };
     fail(fault, FaultPoint::AfterVerify, "VERIFY")?;
     fail(fault, FaultPoint::BeforePublish, "PUBLISH")?;
+    open::postflight(&source).map_err(|error| phase("PUBLISH", error))?;
     publish(staged, destination)?;
+    verify_published_backup(destination, &receipt)?;
+    open::postflight(&source).map_err(|error| phase("READBACK", error))?;
     Ok(receipt)
 }
 
@@ -273,18 +278,36 @@ fn validate_receipt(receipt: &BackupReceipt) -> Result<(), SqliteMaintenanceErro
     Ok(())
 }
 
-fn open_database_read_only(path: &Path) -> Result<Connection, SqliteMaintenanceError> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|err| phase("OPEN", err))?;
-    if !metadata.file_type().is_file() {
-        return Err(phase("OPEN", "source database is not a regular file"));
+fn verify_published_backup(
+    path: &Path,
+    receipt: &BackupReceipt,
+) -> Result<(), SqliteMaintenanceError> {
+    let limit = receipt
+        .snapshot_bytes
+        .checked_add(1)
+        .ok_or_else(|| receipt_mismatch("published backup length cannot be bounded"))?;
+    let mut input = open_regular_nofollow(path, receipt.snapshot_bytes)?.take(limit);
+    let mut hasher = blake3::Hasher::new();
+    let mut total = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|error| phase("READBACK", error))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        total += u64::try_from(read).map_err(|error| phase("READBACK", error))?;
     }
-    Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )
-    .map_err(|err| phase("OPEN", err))
+    if total != receipt.snapshot_bytes
+        || hasher.finalize().to_hex().as_str() != receipt.snapshot_digest
+    {
+        return Err(receipt_mismatch(
+            "published backup does not match its verified receipt",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

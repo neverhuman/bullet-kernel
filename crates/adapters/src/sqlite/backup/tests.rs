@@ -94,6 +94,74 @@ fn online_backup_includes_uncheckpointed_wal_and_restores_quarantined() {
         )
         .unwrap();
     assert_eq!(state, (1, 1, receipt.snapshot_digest));
+    drop(conn);
+    drop(ledger);
+    #[cfg(target_os = "linux")]
+    assert_backup_obeys_custody(_directory.path(), &source);
+}
+
+#[cfg(target_os = "linux")]
+fn assert_backup_obeys_custody(directory: &Path, source: &Path) {
+    use rustix::fs::{flock, FlockOperation};
+    use std::time::{Duration, Instant};
+
+    let admitted = crate::sqlite::open::backup_read_only(source).unwrap();
+    let error = admitted
+        .connection
+        .execute_batch("CREATE TABLE forbidden_backup_write (id INTEGER)")
+        .unwrap_err();
+    assert!(
+        matches!(error, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::ReadOnly)
+    );
+    drop(admitted);
+    let snapshot = || {
+        let mut files = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (entry.file_name(), fs::read(entry.path()).unwrap())
+            })
+            .collect::<Vec<_>>();
+        files.sort();
+        files
+    };
+    let output = directory.join("custody-backup.sqlite");
+    let descriptor = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(source)
+        .unwrap();
+    flock(&descriptor, FlockOperation::NonBlockingLockExclusive).unwrap();
+    let before = snapshot();
+    for _ in 0..2 {
+        let started = Instant::now();
+        let error = create_backup(source, &output).unwrap_err();
+        assert!(error.to_string().contains("SQLITE_CUSTODY_BUSY"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            snapshot(),
+            before,
+            "exclusive-custody refusal changed source or output"
+        );
+    }
+    drop(descriptor);
+    let receipt = create_backup(source, &output).expect("backup resumes after exclusive custody");
+    assert_eq!(
+        receipt.snapshot_digest,
+        blake3::hash(&fs::read(&output).unwrap()).to_hex().as_str()
+    );
+
+    let missing = directory.join("absent-source.sqlite");
+    let absent_output = directory.join("absent-source-backup.sqlite");
+    let before = snapshot();
+    for _ in 0..2 {
+        assert!(create_backup(&missing, &absent_output).is_err());
+        assert_eq!(
+            snapshot(),
+            before,
+            "read-only backup created a missing source or output"
+        );
+    }
 }
 
 #[test]
