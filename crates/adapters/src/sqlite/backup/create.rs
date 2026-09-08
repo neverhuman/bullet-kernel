@@ -1,3 +1,4 @@
+// jankurai:allow repo-rot.path.fake-versioned-source reason=live verified backup producer, not a parked tree copy owner=adapters expires=2027-03-08
 //! Verified backup production with explicit admitted-source finalization.
 //! Authentic supported prefixes may be preserved. Restores of verified receipts
 //! remain quarantined and grant no serving or upgrade authority.

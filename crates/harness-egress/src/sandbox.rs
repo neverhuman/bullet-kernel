@@ -196,7 +196,7 @@ impl PreparedSandbox {
         let plan = filesystem.command_plan_with_proxy(provider_args, Some(&proxy_url))?;
         let mut command = self.namespace.enter(plan.program().as_os_str());
         command.args(plan.arguments()).env_clear();
-        start_fresh_child_process_group(&mut command);
+        start_fresh_process_group(&mut command);
         Ok(command)
     }
 
@@ -298,7 +298,7 @@ impl Drop for PreparedSandbox {
 }
 
 /// Place the next spawned child in a new process group (PGID = child pid).
-pub(crate) fn start_fresh_child_process_group(command: &mut Command) {
+pub(crate) fn start_fresh_process_group(command: &mut Command) {
     command.process_group(0);
 }
 
@@ -322,7 +322,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fresh_child_process_group_is_the_kill_target() {
+    fn fresh_process_group_is_the_kill_target() {
         let marker = std::env::temp_dir().join(format!("bullet-pgid-{}.txt", std::process::id()));
         let _ = std::fs::remove_file(&marker);
         let mut command = Command::new("python3");
@@ -336,7 +336,7 @@ mod tests {
             .env("PATH", "/usr/bin:/bin")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        start_fresh_child_process_group(&mut command);
+        start_fresh_process_group(&mut command);
         let mut child = command.spawn().expect("spawn sleeper tree");
         let pid = child.id();
         let started = std::time::Instant::now();

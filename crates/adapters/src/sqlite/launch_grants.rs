@@ -88,6 +88,7 @@ pub(super) fn get(
 ) -> Result<Option<StoredLaunchGrantNonce>, LedgerError> {
     let row: Option<NonceRow> = conn
         .query_row(
+            // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=column list is a compile-time const, not request input owner=adapters expires=2027-03-08
             &format!("SELECT {COLUMNS} FROM launch_grant_nonces WHERE grant_nonce = ?1"),
             params![nonce],
             |row| {

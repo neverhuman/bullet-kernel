@@ -223,11 +223,19 @@
     },
     ".gitignore": {
       "command": "bash scripts/ci-local.sh fast",
-      "purpose": "ignore rules; the fast lane proves the tree still builds"
+      "purpose": "local-state exclusions; the fast lane proves the tree still builds"
     },
     "LICENSE": {
       "command": "test -s LICENSE",
       "purpose": "license text; no executable proof"
+    },
+    "CLAUDE.md": {
+      "command": "bash ops/ci/docs.sh",
+      "purpose": "thin Claude adapter; it only points at AGENTS.md"
+    },
+    "schemas/": {
+      "command": "bash ops/ci/audit.sh",
+      "purpose": "auditor artifact schemas aligned with ops/ci/audit.sh"
     },
     "agent/": {
       "command": "bash ops/ci/audit.sh",
@@ -256,6 +264,38 @@
     "db/": {
       "command": "bash scripts/ci-local.sh fast",
       "purpose": "SQLite migrations applied by the adapters tests"
+    },
+    "CHANGELOG.md": {
+      "command": "bash scripts/ci-local.sh docs",
+      "purpose": "release notes; docs lane proves repository-relative links"
+    },
+    "deny.toml": {
+      "command": "bash scripts/ci-local.sh security",
+      "purpose": "cargo-deny policy consumed by the security lane"
+    },
+    "rust-toolchain.toml": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "pinned rustc; the fast lane builds with this toolchain"
+    },
+    "tools/": {
+      "command": "bash scripts/ci-local.sh security",
+      "purpose": "canonical security-lane wrapper"
+    },
+    ".ci-artifacts/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "lane observation and junit outputs written by local CI"
+    },
+    ".bullet-family/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "local toolchain probe leftovers; not source authority"
+    },
+    "crates/harness-sim/": {
+      "command": "cargo test -p bullet-harness-core -p bullet-harness-sim",
+      "purpose": "prove adapter trait, capability matrix, and simulator conformance"
+    },
+    "crates/test-simulation/": {
+      "command": "cargo test -p bullet-test-simulation",
+      "purpose": "prove harness tapes stay non-authoritative"
     }
   }
 }

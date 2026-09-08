@@ -84,7 +84,7 @@ pub struct SupervisedCommand {
 impl SupervisedCommand {
     /// Place the spawned child in a fresh group led by its own pid.
     #[must_use]
-    pub fn child_process_group(command: Command) -> Self {
+    pub fn process_group_leader(command: Command) -> Self {
         Self {
             command,
             group: ProcessGroup::Child,

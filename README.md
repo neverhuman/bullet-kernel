@@ -1,5 +1,8 @@
 # bullet-kernel
 
+[![CI](https://img.shields.io/badge/ci-local%20required-green.svg)](docs/testing.md)
+[![Jankurai](https://img.shields.io/badge/jankurai-audit-blue.svg)](docs/testing.md)
+
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
 Product-surface claims and the CI inventory were last reviewed 2026-09-08
 against product subject `7c2dfac8`.

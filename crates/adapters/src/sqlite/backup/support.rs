@@ -1,3 +1,4 @@
+// jankurai:allow repo-rot.path.fake-versioned-source reason=live backup path helpers, not a parked tree copy owner=adapters expires=2027-03-08
 fn require_absent(path: &Path) -> Result<(), SqliteMaintenanceError> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => Err(SqliteMaintenanceError::DestinationExists(

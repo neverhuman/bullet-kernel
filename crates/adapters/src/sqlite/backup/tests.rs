@@ -1,3 +1,4 @@
+// jankurai:allow repo-rot.path.fake-versioned-source reason=backup/restore proofs, not a parked tree copy owner=adapters expires=2027-03-08
 #[cfg(unix)]
 use super::{copy_and_digest, open_regular_nofollow};
 use super::{

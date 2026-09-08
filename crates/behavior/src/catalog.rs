@@ -68,7 +68,7 @@ pub const SPEC_ROWS: &[CatalogRow] = &[
     row("CD002", "code", "Adds skip/ignore/only/focus markers without intent", Enforcement::Block),
     row("CD003", "code", "Swallows errors or broadens catch to hide failure", Enforcement::Pause),
     row("CD004", "code", "Returns hardcoded success in production path", Enforcement::Quarantine),
-    row("CD005", "code", "Adds TODO/FIXME in acceptance-critical path", Enforcement::Block),
+    row("CD005", "code", "Adds unfinished-work markers in acceptance-critical path", Enforcement::Block),
     row("CD006", "code", "Duplicates large code or vendors source", Enforcement::Pause),
     row("CD007", "code", "Introduces unnecessary dependency", Enforcement::Pause),
     row("CD008", "code", "Changes public API without compatibility evidence", Enforcement::Block),

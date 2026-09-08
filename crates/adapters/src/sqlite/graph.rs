@@ -272,6 +272,7 @@ pub(super) fn get_attempt(
 ) -> Result<Option<Attempt>, LedgerError> {
     let row = conn
         .query_row(
+            // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=column list is a compile-time const, not request input owner=adapters expires=2027-03-08
             &format!("SELECT {ATTEMPT_COLUMNS} FROM attempts WHERE id = ?1"),
             params![id.to_string()],
             attempt_row,
@@ -414,6 +415,7 @@ pub(super) fn put_json_row<T: serde::Serialize>(
     }
     let existing: String = conn
         .query_row(
+            // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=table name is a compile-time ledger ident, not request input owner=adapters expires=2027-03-08
             &format!("SELECT body FROM {table} WHERE id = ?1"),
             params![id],
             |row| row.get(0),
@@ -433,6 +435,7 @@ pub(super) fn get_json_row<T: serde::de::DeserializeOwned>(
 ) -> Result<Option<T>, LedgerError> {
     let body = conn
         .query_row(
+            // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=table name is a compile-time ledger ident, not request input owner=adapters expires=2027-03-08
             &format!("SELECT body FROM {table} WHERE id = ?1"),
             params![id],
             |row| row.get::<_, String>(0),

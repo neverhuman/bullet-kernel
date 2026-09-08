@@ -43,7 +43,7 @@ allowed_truth_paths = []
 [queues]
 adapter_paths = []
 event_contract_paths = []
-generated_type_paths = ["contracts/generated", "crates/domain/src/schema_bundle.rs"]
+generated_type_paths = ["contracts/generated", "crates/domain/src/generated/schema_bundle.rs"]
 client_markers = []
 
 # Durable truth is an embedded SQLite database. The schema is exact and

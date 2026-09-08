@@ -112,6 +112,7 @@ try {
   assert.match(await text(page.getByTestId("phase")), /PENDING/u);
 
   const duplicate = await page.evaluate(async (body) => {
+    // jankurai:allow websec.storage.token reason=CSRF nonce must be JS-readable; farmd session cookie stays HttpOnly owner=ops expires=2027-03-08
     const csrf = globalThis.sessionStorage.getItem("bullet-farm.csrf.v1");
     const response = await fetch("/api/v1/commands", {
       method: "POST",

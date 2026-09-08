@@ -102,7 +102,7 @@ pub fn capture_turn(
     canaries: &CanarySecrets,
 ) -> Result<RawCapture, HarnessError> {
     let fallible = |program: &str, args: &[&str], env: &[(&str, &str)]| {
-        Ok(SupervisedCommand::child_process_group(factory(
+        Ok(SupervisedCommand::process_group_leader(factory(
             program, args, env,
         )))
     };
@@ -127,7 +127,7 @@ pub fn run_interactive(
     on_line: &mut LineHandler<'_>,
 ) -> Result<RawCapture, HarnessError> {
     let fallible = |program: &str, args: &[&str], env: &[(&str, &str)]| {
-        Ok(SupervisedCommand::child_process_group(factory(
+        Ok(SupervisedCommand::process_group_leader(factory(
             program, args, env,
         )))
     };

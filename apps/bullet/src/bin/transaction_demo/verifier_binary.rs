@@ -46,7 +46,7 @@ impl AdmittedVerifierFixture {
 
 #[cfg(target_os = "linux")]
 pub(super) fn verifier_fixture_binary() -> Result<AdmittedVerifierFixture, String> {
-    configured_for_build(
+    configured_demo_fixture(
         cfg!(debug_assertions),
         std::env::var_os(FD_ENV),
         std::env::var_os(DIGEST_ENV),
@@ -64,7 +64,7 @@ fn non_linux_refusal() -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn configured_for_build(
+fn configured_demo_fixture(
     fixture_enabled: bool,
     fd_value: Option<OsString>,
     digest_value: Option<OsString>,
@@ -203,7 +203,7 @@ fn admit_inherited_fd_with_hook(
     .map_err(|error| refusal(format!("create sealed fixture image failed: {error}")))?;
     let mut sealed_file = File::from(sealed_fd);
     let (actual_sha256, copied_length) =
-        copy_native_elf_and_hash(&mut source_file, &mut sealed_file)?;
+        copy_demo_elf_and_hash(&mut source_file, &mut sealed_file)?;
     let after = source_file
         .metadata()
         .map_err(|error| refusal(format!("post-hash fixture metadata failed: {error}")))?;
@@ -257,7 +257,7 @@ fn admit_source_metadata(metadata: &Metadata, identity: SourceIdentity) -> Resul
 }
 
 #[cfg(target_os = "linux")]
-fn copy_native_elf_and_hash(
+fn copy_demo_elf_and_hash(
     source: &mut File,
     destination: &mut File,
 ) -> Result<(String, u64), String> {
@@ -374,15 +374,15 @@ mod tests {
 
     #[test]
     fn missing_malformed_and_release_subjects_refuse() {
-        let unavailable = configured_for_build(false, None, None).unwrap_err();
+        let unavailable = configured_demo_fixture(false, None, None).unwrap_err();
         assert!(unavailable.contains("ADMISSION_REFUSED"));
         let missing_fd =
-            configured_for_build(true, None, Some(OsString::from("0".repeat(64)))).unwrap_err();
+            configured_demo_fixture(true, None, Some(OsString::from("0".repeat(64)))).unwrap_err();
         assert!(missing_fd.contains(FD_ENV));
         let missing_digest =
-            configured_for_build(true, Some(OsString::from("3")), None).unwrap_err();
+            configured_demo_fixture(true, Some(OsString::from("3")), None).unwrap_err();
         assert!(missing_digest.contains(DIGEST_ENV));
-        let malformed = configured_for_build(
+        let malformed = configured_demo_fixture(
             true,
             Some(OsString::from("3")),
             Some(OsString::from("A".repeat(64))),
@@ -390,7 +390,7 @@ mod tests {
         .unwrap_err();
         assert!(malformed.contains("64 lowercase hexadecimal"));
         for invalid in ["/bin/false", "03", "-1", "2", "2147483648"] {
-            let error = configured_for_build(
+            let error = configured_demo_fixture(
                 true,
                 Some(OsString::from(invalid)),
                 Some(OsString::from("0".repeat(64))),
@@ -462,7 +462,7 @@ mod tests {
         inherited
             .seek(SeekFrom::End(0))
             .expect("advance inherited source offset");
-        let admitted = configured_for_build(
+        let admitted = configured_demo_fixture(
             true,
             Some(OsString::from(inherited.as_raw_fd().to_string())),
             Some(OsString::from(digest)),

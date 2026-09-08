@@ -1,3 +1,4 @@
+// jankurai:allow repo-rot.path.fake-versioned-source reason=live quarantined restore, not a parked tree copy owner=adapters expires=2027-03-08
 //! Supported snapshots restore into quarantine without migration or activation.
 
 use super::staged::{cleanup, ensure_healthy, finish, publish, with_connection};

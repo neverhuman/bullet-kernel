@@ -70,6 +70,7 @@ fn collect(
 pub(super) fn list_events(conn: &Connection) -> Result<Vec<LedgerEvent>, LedgerError> {
     collect(
         conn,
+        // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=column list is a compile-time const, not request input owner=adapters expires=2027-03-08
         &format!("SELECT {EVENT_COLUMNS} FROM events ORDER BY seq"),
         &[],
     )
@@ -84,6 +85,7 @@ pub(super) fn list_events_after(
     let limit = i64::try_from(limit).map_err(store)?;
     collect(
         conn,
+        // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=column list is a compile-time const, not request input owner=adapters expires=2027-03-08
         &format!("SELECT {EVENT_COLUMNS} FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?2"),
         &[&after, &limit],
     )

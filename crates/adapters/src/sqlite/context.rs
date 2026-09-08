@@ -59,6 +59,7 @@ pub(super) fn insert_initial_set(
 pub(super) fn list_all(conn: &Connection) -> Result<Vec<ContextCapsule>, LedgerError> {
     let capsules = read_many(
         conn,
+        // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=column list is a compile-time const, not request input owner=adapters expires=2027-03-08
         &format!("SELECT {COLUMNS} FROM context_capsules ORDER BY work_package_id, revision"),
         [],
     )?;

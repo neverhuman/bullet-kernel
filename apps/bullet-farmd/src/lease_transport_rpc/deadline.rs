@@ -232,13 +232,13 @@ pub(super) async fn read_frame(
     bounds: TransportBounds,
     max: usize,
 ) -> Result<Vec<u8>, Error> {
-    match timeout(bounds.read_deadline, read_frame_unbounded(reader, max)).await {
+    match timeout(bounds.read_deadline, read_frame_without_deadline(reader, max)).await {
         Ok(frame) => frame,
         Err(_) => Err(TransportRefusal::ReadDeadline(bounds.read_deadline).into()),
     }
 }
 
-async fn read_frame_unbounded(reader: &mut FrameReader<'_>, max: usize) -> Result<Vec<u8>, Error> {
+async fn read_frame_without_deadline(reader: &mut FrameReader<'_>, max: usize) -> Result<Vec<u8>, Error> {
     let cap = max.saturating_add(1);
     let mut buf = Vec::new();
     let mut capped = reader.take(cap as u64);

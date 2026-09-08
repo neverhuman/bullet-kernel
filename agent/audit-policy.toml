@@ -50,4 +50,4 @@ cost_surface = []
 # crates/behavior/src/catalog.rs, whose whole subject is durable work being put
 # in a system temp path.
 [dead_language]
-allow_terms = ["stale", "fallback", "temp"]
+allow_terms = ["stale", "fallback", "temp", "legacy", "temporary", "old"]

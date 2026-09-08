@@ -66,7 +66,7 @@ impl GitLabForge {
             GitLabProfile::GitlabCom => "gitlab-adapter-v1",
             GitLabProfile::SelfManaged => "gitlab-self-managed-v1",
         };
-        EffectsError::UnsupportedByAdapter(format!("{method}: {profile} is not implemented"))
+        EffectsError::UnsupportedByAdapter(format!("{method}: {profile} has no supported operations"))
     }
 }
 

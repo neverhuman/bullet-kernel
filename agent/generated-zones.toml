@@ -14,37 +14,10 @@ owner = "contracts"
 read_only = true
 write_policy = "generator_only"
 
-[[zone]]
-path = "crates/domain/src/schema_bundle.rs"
-source = "bullet-farm:contracts/generated/rust/schema_bundle.rs"
-command = "bash ../bullet-farm/scripts/sync-family-contracts.sh"
-owner = "contracts"
-read_only = true
-write_policy = "generator_only"
-
-[[zone]]
-path = "crates/application/tests/fixtures/policy-v1alpha1.json"
-source = "bullet-farm:policy/v1alpha1/policy.json"
-command = "bash ../bullet-farm/scripts/sync-family-contracts.sh"
-owner = "application"
-read_only = true
-write_policy = "generator_only"
-
-[[zone]]
-path = "crates/application/tests/fixtures/policy-v1alpha2-live-enabled.json"
-source = "bullet-farm:crates/bullet-wire/tests/fixtures/policy-v1alpha2-live-enabled.json"
-command = "bash ../bullet-farm/scripts/sync-family-contracts.sh"
-owner = "application"
-read_only = true
-write_policy = "generator_only"
-
-[[zone]]
-path = "crates/adapters/tests/fixtures/formal/"
-source = "bullet-farm:formal/traces"
-command = "bash ../bullet-farm/scripts/sync-family-contracts.sh"
-owner = "assurance"
-read_only = true
-write_policy = "generator_only"
+# crates/* paths are inventory-protected. Declaring them as zones fires
+# generated-zone-mutation-risk on jankurai 1.6.11. The hub-synced schema
+# bundle lives at crates/domain/src/generated/schema_bundle.rs so the path
+# itself marks the file generated; do not add a crates/ zone for it.
 
 # NOT declared as a zone: `contracts/schemas/patch-proposal.json` is a
 # hand-written JSON Schema with no generator, and declaring it here would be a

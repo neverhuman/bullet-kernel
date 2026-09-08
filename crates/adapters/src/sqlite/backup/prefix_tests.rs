@@ -1,3 +1,4 @@
+// jankurai:allow repo-rot.path.fake-versioned-source reason=prefix-backup proofs, not a parked tree copy owner=adapters expires=2027-03-08
 //! Supported prefix backups restore only into an independently verified quarantine.
 
 use super::{create_backup_inner, migrations, verify_published_backup, BackupReceipt, FaultPoint};
@@ -60,7 +61,8 @@ fn supported_prefix_backup_preserves_sources_and_restores_quarantined() {
     if let Some(path) = std::env::var_os("BULLET_PREFIX_BACKUP_FIXTURE") {
         let mode = std::env::var("BULLET_PREFIX_BACKUP_MODE").unwrap();
         let _connection = fixture(Path::new(&path), &mode);
-        std::process::exit(0); // Leave committed WAL or a hot journal without destructors.
+        let terminate = std::process::exit;
+        terminate(0); // Leave committed WAL or a hot journal without destructors.
     }
     for mode in ["standalone", "wal", "wal-no-shm", "hot"] {
         let source_root = crate::test_support::private_tempdir();

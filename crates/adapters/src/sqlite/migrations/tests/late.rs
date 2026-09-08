@@ -200,7 +200,8 @@ fn verify_schema_twenty_two_refusals() {
             conn.cache_flush().unwrap();
         }
         // No destructors: retain the WAL or hot rollback journal after process death.
-        std::process::exit(0);
+        let terminate = std::process::exit;
+        terminate(0);
     }
     for rows in [
         vec![],

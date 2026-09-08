@@ -14,6 +14,13 @@
 # The lane also proves the RustSec advisory database is present, readable and
 # newer than 14 days before it trusts `cargo deny check`, because cargo-deny
 # 0.19.8 reports a failed `git fetch` as success.
+#   cargo audit                    (not a second lane: cargo deny advisories
+#     already consumes the RustSec DB)
+#   npm audit                      (not applicable: this repo has no product
+#     package.json graph)
+#   sbom                           (not published: there is no kernel release
+#     artifact)
+# This wrapper is tools/security-lane.sh.
 #
 # Declared in agent/security-policy.toml. Do not add `|| true` to any step.
 set -euo pipefail

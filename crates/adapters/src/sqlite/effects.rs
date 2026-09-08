@@ -128,6 +128,7 @@ fn select_by_id(
     id: &EffectId,
 ) -> Result<Option<EffectIntentRecord>, LedgerError> {
     conn.query_row(
+        // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=column list is a compile-time const, not request input owner=adapters expires=2027-03-08
         &format!("SELECT {INTENT_COLUMNS} FROM effect_intents WHERE id = ?1"),
         params![id.to_string()],
         intent_row,
@@ -342,6 +343,7 @@ pub(super) fn record_effect_receipt(
     }
     let existing = tx
         .query_row(
+            // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=column list is a compile-time const, not request input owner=adapters expires=2027-03-08
             &format!("SELECT {RECEIPT_COLUMNS} FROM effect_receipts WHERE id = ?1"),
             params![receipt.id.as_str()],
             receipt_row,

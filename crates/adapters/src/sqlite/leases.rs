@@ -134,6 +134,7 @@ pub(super) fn get_lease(
 ) -> Result<Option<ActiveLease>, LedgerError> {
     let row = conn
         .query_row(
+            // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=column list is a compile-time const, not request input owner=adapters expires=2027-03-08
             &format!("SELECT {LEASE_COLUMNS} FROM active_leases WHERE variant_id = ?1"),
             params![variant.to_string()],
             read_lease,

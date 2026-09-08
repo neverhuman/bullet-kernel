@@ -1,3 +1,4 @@
+// jankurai:allow repo-rot.path.fake-versioned-source reason=live backup/restore staging, not a parked tree copy owner=adapters expires=2027-03-08
 //! Shared ownership for real backup and restore staging operations.
 
 use super::{

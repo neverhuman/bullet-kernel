@@ -21,7 +21,7 @@ contracts, SQLite adapters. The machine-readable half of this binding is
 
 ## Generated zones
 
-Do not hand-edit a `generator_only` zone. `crates/domain/src/schema_bundle.rs`
+Do not hand-edit a `generator_only` zone. `crates/domain/src/generated/schema_bundle.rs`
 and `crates/adapters/tests/fixtures/formal/` are hub-synced;
 `contracts/generated/` is emitted from `contracts/openapi.yaml`. Repair them
 from the source with the `command` recorded next to the zone in

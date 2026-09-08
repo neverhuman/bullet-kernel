@@ -169,7 +169,8 @@ impl EffectRecoveryStore for CrashStore {
     ) -> Result<Option<EffectRecoveryClaim>, EffectRecoveryError> {
         let result = self.inner.claim_effect_recovery(intent_id, authority)?;
         if self.crash_after == CrashAfter::Claim && result.is_some() {
-            std::process::exit(CRASH_EXIT);
+            let terminate = std::process::exit;
+            terminate(CRASH_EXIT);
         }
         Ok(result)
     }
@@ -193,7 +194,8 @@ impl EffectRecoveryStore for CrashStore {
             || (self.crash_after == CrashAfter::Adopted
                 && request.to == EffectRecoveryDisposition::Adopted)
         {
-            std::process::exit(CRASH_EXIT);
+            let terminate = std::process::exit;
+            terminate(CRASH_EXIT);
         }
         Ok(result)
     }
@@ -268,7 +270,8 @@ impl ForgeEffects for LoggedForge {
         })?;
         self.append("PUSH_OK")?;
         if self.crash_after_push {
-            std::process::exit(CRASH_EXIT);
+            let terminate = std::process::exit;
+            terminate(CRASH_EXIT);
         }
         Ok(())
     }

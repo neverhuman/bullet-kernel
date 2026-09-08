@@ -47,6 +47,20 @@ demo:
 audit:
     bash scripts/ci-local.sh audit
 
+score:
+    mkdir -p .jankurai
+    rm -f .jankurai/repo-score.json .jankurai/repo-score.md .jankurai/repair-queue.jsonl
+    jankurai audit . --full --no-score-history --json .jankurai/repo-score.json --md .jankurai/repo-score.md
+
+nextest-fast:
+    cargo nextest run --locked --workspace
+
+check-types:
+    cargo check -p bullet-domain
+
+nextest-types:
+    cargo nextest run -p bullet-domain
+
 egress:
     bash scripts/ci-local.sh egress
 

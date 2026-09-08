@@ -38,7 +38,7 @@ fn child_group_factory(
     for (key, value) in env {
         command.env(key, value);
     }
-    Ok(SupervisedCommand::child_process_group(command))
+    Ok(SupervisedCommand::process_group_leader(command))
 }
 
 fn read_pid(path: &Path) -> u32 {

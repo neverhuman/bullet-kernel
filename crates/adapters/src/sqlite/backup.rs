@@ -1,3 +1,4 @@
+// jankurai:allow repo-rot.path.fake-versioned-source reason=live receipt-bound sqlite backup/restore, not a parked tree copy owner=adapters expires=2027-03-08
 //! Offline, receipt-bound SQLite backup and quarantined restore.
 
 use super::{migrations, open};

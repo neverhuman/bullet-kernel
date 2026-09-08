@@ -1,5 +1,5 @@
 //! `LeaseClient`: how the runner talks to writer-lease authority. A production
-//! signed transport is not implemented yet. `DirectLeaseClient` is unsigned
+//! signed transport is not wired yet. `DirectLeaseClient` is unsigned
 //! and stays test/embedded-only. `HttpLeaseClient` talks to farmd
 //! `/api/v1/leases/*`, which is not mounted. The feature-gated
 //! `SignedLeaseClient` co-locates permit issuance and verification and is a

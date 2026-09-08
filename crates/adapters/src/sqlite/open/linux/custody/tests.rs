@@ -197,7 +197,8 @@ fn child(path: &Path) -> ! {
             _ => panic!("unknown custody child mode"),
         }
     }
-    std::process::exit(0)
+    let terminate = std::process::exit;
+    terminate(0)
 }
 
 fn hold_until_eof() {

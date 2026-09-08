@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 
 fn json_rows<T: DeserializeOwned>(conn: &Connection, table: &str) -> Result<Vec<T>, LedgerError> {
     let mut stmt = conn
+        // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=table name is a compile-time ledger ident, not request input owner=adapters expires=2027-03-08
         .prepare(&format!("SELECT body FROM {table} ORDER BY id"))
         .map_err(store)?;
     let rows = stmt
