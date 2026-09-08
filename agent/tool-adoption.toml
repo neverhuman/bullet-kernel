@@ -58,7 +58,7 @@ notes = "db/migrations/meta.toml carries the ownership, timeout, rollback and ve
 [[tools]]
 id = "contract-drift"
 mode = "auto"
-notes = "contracts/generated is regenerated from contracts/openapi.yaml and proved by bash ops/ci/contract.sh"
+notes = "OpenAPI client regeneration: cargo run --locked -p bullet --bin bullet -- contracts generate; read-only drift check: cargo run --locked -p bullet --bin bullet -- contracts check. The separate offline contract lane tests protocol behavior."
 
 [[tools]]
 id = "rust-witness"
