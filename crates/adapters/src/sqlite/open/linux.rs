@@ -163,6 +163,41 @@ pub(super) fn postflight(guard: &Guard) -> Result<(), LedgerError> {
     revalidate(guard)
 }
 
+pub(super) fn finish_snapshot(guard: Guard) -> Result<(), LedgerError> {
+    revalidate(&guard)?;
+    if inspect_sidecars(
+        parent(&guard.boundary),
+        &guard.database_name,
+        guard.effective_uid,
+    )?
+    .iter()
+    .any(|present| *present)
+    {
+        return Err(store(
+            "SQLite quiescent close left a sidecar; preserve it for recovery",
+        ));
+    }
+    guard.database.sync_all().map_err(store)?;
+    parent(&guard.boundary)
+        .descriptor
+        .sync_all()
+        .map_err(store)?;
+    revalidate(&guard)?;
+    if inspect_sidecars(
+        parent(&guard.boundary),
+        &guard.database_name,
+        guard.effective_uid,
+    )?
+    .iter()
+    .any(|present| *present)
+    {
+        return Err(store(
+            "SQLite sidecar appeared during snapshot finalization",
+        ));
+    }
+    Ok(())
+}
+
 fn revalidate(guard: &Guard) -> Result<(), LedgerError> {
     revalidate_boundary(&guard.boundary, guard.effective_uid)?;
     let observed = admit_file(

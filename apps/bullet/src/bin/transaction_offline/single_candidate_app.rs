@@ -274,10 +274,15 @@ pub(crate) async fn run() -> Result<(), String> {
         Some(path) => PathBuf::from(path),
         None => data.join("COMPONENT_PROOF.receipt.json"),
     };
+    // Stop the owned writer before checkpointing; immutable receipt readers must
+    // never silently omit committed state that is still present only in the WAL.
+    farmd.stop()?;
+    SqliteLedger::open(&db)
+        .and_then(SqliteLedger::close_quiescent)
+        .map_err(|error| fail(format!("finalize retained component ledger: {error}")))?;
     fs::write(&proof_path, &proof_json).map_err(|error| fail(error.to_string()))?;
     println!("{proof_json}");
     println!("COMPONENT_PROOF: {}", proof_path.display());
-    farmd.stop()?;
     scratch_guard.finish()?;
     Ok(())
 }

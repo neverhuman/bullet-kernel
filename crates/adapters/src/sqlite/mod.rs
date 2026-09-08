@@ -91,6 +91,19 @@ pub struct SqliteLedger {
 }
 
 impl SqliteLedger {
+    /// Checkpoint and close a ledger after its owner has stopped every other writer.
+    ///
+    /// This prepares a sidecar-free main file for immutable component receipt reads;
+    /// it does not establish maintenance custody or authorize a backup/restore.
+    /// # Errors
+    /// Refuses a busy checkpoint, failed close, substituted path, or remaining sidecar.
+    pub fn close_quiescent(self) -> Result<(), LedgerError> {
+        open::close_quiescent(open::AdmittedConnection {
+            connection: self.conn,
+            guard: self._database_guard,
+        })
+    }
+
     /// Open or create a database with foreign keys, WAL, bounded waits, and exact schema.
     /// # Errors
     /// Returns `UNSUPPORTED_SCHEMA` before mutating legacy or unrecognized databases.
@@ -260,5 +273,59 @@ mod tests {
             .expect("snapshot");
         assert_eq!((count, last_kind, sequence), (0, None, 0));
         assert_eq!(primary.latest_event_sequence().expect("latest"), 1);
+        // A retained connection cannot be mistaken for a quiescent snapshot.
+        assert!(primary.close_quiescent().is_err());
+        let reader = SqliteLedger::open(&path).expect("pinned reader");
+        reader.conn.execute_batch("BEGIN").expect("begin read");
+        assert_eq!(reader.latest_event_sequence().expect("pin snapshot"), 1);
+        concurrent
+            .append_event("later", "after pinned read")
+            .expect("append");
+        concurrent
+            .conn
+            .busy_timeout(std::time::Duration::from_millis(50))
+            .unwrap();
+        let error = concurrent
+            .close_quiescent()
+            .expect_err("reader blocks checkpoint");
+        assert!(error.to_string().contains("quiescent checkpoint refused"));
+        assert!(
+            std::fs::metadata(dir.path().join("snapshot.sqlite-wal"))
+                .unwrap()
+                .len()
+                > 0
+        );
+        assert_eq!(
+            reader
+                .latest_event_sequence()
+                .expect("old snapshot retained"),
+            1
+        );
+        reader
+            .conn
+            .execute_batch("COMMIT")
+            .expect("release snapshot");
+        assert_eq!(
+            reader
+                .latest_event_sequence()
+                .expect("latest event retained"),
+            2
+        );
+        reader.close_quiescent().expect("last connection closes");
+        for suffix in ["-wal", "-shm", "-journal"] {
+            assert!(!dir.path().join(format!("snapshot.sqlite{suffix}")).exists());
+        }
+        let immutable = Connection::open_with_flags(
+            format!("file:{}?mode=ro&immutable=1", path.display()),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .expect("immutable snapshot");
+        assert_eq!(
+            immutable
+                .query_row("SELECT count(*) FROM events", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("latest committed event survives checkpoint"),
+            2
+        );
     }
 }

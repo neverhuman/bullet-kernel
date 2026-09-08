@@ -67,6 +67,33 @@ pub(super) fn postflight(admitted: &AdmittedConnection) -> Result<(), LedgerErro
     }
 }
 
+pub(super) fn close_quiescent(admitted: AdmittedConnection) -> Result<(), LedgerError> {
+    postflight(&admitted)?;
+    let checkpoint: (i64, i64, i64) = admitted
+        .connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .map_err(store)?;
+    if checkpoint != (0, 0, 0) {
+        return Err(store(format!(
+            "SQLite quiescent checkpoint refused: {checkpoint:?}"
+        )));
+    }
+    postflight(&admitted)?;
+    let AdmittedConnection { connection, guard } = admitted;
+    connection.close().map_err(|(_, error)| store(error))?;
+    #[cfg(target_os = "linux")]
+    {
+        linux::finish_snapshot(guard.inner)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = guard;
+        Err(store("quiescent SQLite snapshots require Linux admission"))
+    }
+}
+
 pub(super) fn cleanup_after_failure(
     admitted: AdmittedConnection,
     original: LedgerError,
