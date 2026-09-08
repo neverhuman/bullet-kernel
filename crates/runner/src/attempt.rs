@@ -360,74 +360,78 @@ pub async fn run_attempt(
             return Err(error);
         }
     };
-    let mut ws = match gitd
-        .clone_workspace(
-            &config.source_repo,
-            &config.base_sha,
-            &config.workspace_root,
-            &config.scope_prefixes,
-        )
-        .await
-    {
-        Ok(workspace) => workspace,
-        Err(error) => {
-            heartbeat.abort();
-            cleanup_before_session(
-                client.as_ref(),
-                &grant,
-                journal.as_ref(),
-                "workspace_refused",
-                &error,
+    let outcome = async {
+        let mut ws = match gitd
+            .clone_workspace(
+                &config.source_repo,
+                &config.base_sha,
+                &config.workspace_root,
+                &config.scope_prefixes,
             )
-            .await;
-            return Err(error);
-        }
-    };
-    if let Err(error) = ws.validate_initial(
-        &config.workspace_root,
-        &config.base_sha,
-        &grant.authority_token,
-    ) {
-        heartbeat.abort();
-        cleanup_before_session(
-            client.as_ref(),
-            &grant,
-            journal.as_ref(),
-            "workspace_identity_refused",
-            &error,
-        )
-        .await;
-        return Err(error);
-    }
-    journal.record("workspace_cloned", &ws.repo_dir.display().to_string());
-    let mut generation_guard =
-        match root_guard.bind(&grant.authority_token, ws.active_generation.generation) {
-            Ok(guard) => guard,
+            .await
+        {
+            Ok(workspace) => workspace,
             Err(error) => {
                 heartbeat.abort();
                 cleanup_before_session(
                     client.as_ref(),
                     &grant,
                     journal.as_ref(),
-                    "workspace_descriptor_refused",
+                    "workspace_refused",
                     &error,
                 )
                 .await;
                 return Err(error);
             }
         };
-    run_cloned_attempt_guarded(
-        client,
-        adapter,
-        journal,
-        &grant,
-        config,
-        &mut gitd,
-        &mut ws,
-        &mut generation_guard,
-        heartbeat,
-    )
-    .await
+        if let Err(error) = ws.validate_initial(
+            &config.workspace_root,
+            &config.base_sha,
+            &grant.authority_token,
+        ) {
+            heartbeat.abort();
+            cleanup_before_session(
+                client.as_ref(),
+                &grant,
+                journal.as_ref(),
+                "workspace_identity_refused",
+                &error,
+            )
+            .await;
+            return Err(error);
+        }
+        journal.record("workspace_cloned", &ws.repo_dir.display().to_string());
+        let mut generation_guard =
+            match root_guard.bind(&grant.authority_token, ws.active_generation.generation) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    heartbeat.abort();
+                    cleanup_before_session(
+                        client.as_ref(),
+                        &grant,
+                        journal.as_ref(),
+                        "workspace_descriptor_refused",
+                        &error,
+                    )
+                    .await;
+                    return Err(error);
+                }
+            };
+        run_cloned_attempt_guarded(
+            client,
+            adapter,
+            journal,
+            &grant,
+            config,
+            &mut gitd,
+            &mut ws,
+            &mut generation_guard,
+            heartbeat,
+        )
+        .await
+    }
+    .await;
+    gitd.finish(outcome).await
 }
 
 #[allow(clippy::too_many_arguments)]

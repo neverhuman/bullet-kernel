@@ -114,6 +114,15 @@ pub enum RunnerError {
     /// A wire response violated its protocol.
     #[error("protocol violation: {0}")]
     Protocol(String),
+    /// The original refusal was followed by a failed daemon shutdown.
+    #[error("{primary}; gitd shutdown also failed: {cleanup}")]
+    Shutdown {
+        /// Original refusal, which retains its stable classification.
+        #[source]
+        primary: Box<RunnerError>,
+        /// Shutdown failure retained alongside the original refusal.
+        cleanup: Box<RunnerError>,
+    },
 }
 
 impl RunnerError {
@@ -139,13 +148,17 @@ impl RunnerError {
             Self::NoProposal(_) => "NO_PROPOSAL",
             Self::Io { .. } => "IO_FAILED",
             Self::Protocol(_) => "PROTOCOL_ERROR",
+            Self::Shutdown { primary, .. } => primary.reason_code(),
         }
     }
 
     /// True when the failure means this incarnation's authority is gone.
     #[must_use]
     pub fn is_stale(&self) -> bool {
-        matches!(self, Self::StaleAuthority(_))
+        match self {
+            Self::Shutdown { primary, .. } => primary.is_stale(),
+            _ => matches!(self, Self::StaleAuthority(_)),
+        }
     }
 
     /// The daemon detail when this is the repairable `PATH_ABSENT` refusal
@@ -154,6 +167,7 @@ impl RunnerError {
     pub fn path_absent_detail(&self) -> Option<&str> {
         match self {
             Self::Gitd { code, message, .. } if code == "PATH_ABSENT" => Some(message),
+            Self::Shutdown { primary, .. } => primary.path_absent_detail(),
             _ => None,
         }
     }
@@ -161,7 +175,10 @@ impl RunnerError {
     /// True for the freeze class: stale authority or the self-kill deadline.
     #[must_use]
     pub fn is_frozen(&self) -> bool {
-        matches!(self, Self::StaleAuthority(_) | Self::SelfKill { .. })
+        match self {
+            Self::Shutdown { primary, .. } => primary.is_frozen(),
+            _ => matches!(self, Self::StaleAuthority(_) | Self::SelfKill { .. }),
+        }
     }
 }
 
@@ -186,6 +203,29 @@ mod tests {
         assert!(RunnerError::StaleAuthority("x".into()).is_frozen());
         assert!(RunnerError::SelfKill { elapsed_ms: 1 }.is_frozen());
         assert!(!RunnerError::CapsExhausted { rounds: 2 }.is_frozen());
+        for primary in [
+            RunnerError::StaleAuthority("original refusal".into()),
+            RunnerError::SelfKill { elapsed_ms: 1 },
+            RunnerError::CapsExhausted { rounds: 2 },
+        ] {
+            let (reason, stale, frozen) = (
+                primary.reason_code(),
+                primary.is_stale(),
+                primary.is_frozen(),
+            );
+            let refused = RunnerError::Shutdown {
+                primary: Box::new(primary),
+                cleanup: Box::new(RunnerError::Io {
+                    context: "gitd wait".into(),
+                    reason: "fixture cleanup failure".into(),
+                }),
+            };
+            assert_eq!(refused.reason_code(), reason);
+            assert_eq!(refused.is_stale(), stale);
+            assert_eq!(refused.is_frozen(), frozen);
+            assert!(refused.to_string().contains("fixture cleanup failure"));
+            assert!(std::error::Error::source(&refused).is_some());
+        }
         assert_eq!(
             RunnerError::AuthorityContractUnavailable {
                 method: "clone".into(),
@@ -238,6 +278,14 @@ mod tests {
             method: "apply_proposal".into(),
             code: "PATH_ABSENT".into(),
             message: "no regular file to delete at: z".into(),
+        };
+        assert_eq!(
+            refused.path_absent_detail(),
+            Some("no regular file to delete at: z")
+        );
+        let refused = RunnerError::Shutdown {
+            primary: Box::new(refused),
+            cleanup: Box::new(RunnerError::Protocol("cleanup failed".into())),
         };
         assert_eq!(
             refused.path_absent_detail(),

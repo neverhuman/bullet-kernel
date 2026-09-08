@@ -19,6 +19,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[cfg(all(test, target_os = "linux"))]
+mod shutdown_tests;
 
 /// One spawned daemon serving one workspace session.
 pub struct GitdSession {
@@ -133,6 +137,25 @@ impl GitdSession {
             .await
             .map(|_| ())
             .map_err(|err| io_err("gitd wait", err))
+    }
+
+    /// Complete the attempt only after this owner has killed and reaped Gitd.
+    /// A shutdown refusal cannot turn the original failure into success.
+    pub(crate) async fn finish<T>(
+        &mut self,
+        outcome: Result<T, RunnerError>,
+    ) -> Result<T, RunnerError> {
+        let shutdown = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.kill())
+            .await
+            .unwrap_or_else(|_| Err(io_err("gitd wait", "shutdown deadline exceeded")));
+        match (outcome, shutdown) {
+            (outcome, Ok(())) => outcome,
+            (Ok(_), Err(cleanup)) => Err(cleanup),
+            (Err(primary), Err(cleanup)) => Err(RunnerError::Shutdown {
+                primary: Box::new(primary),
+                cleanup: Box::new(cleanup),
+            }),
+        }
     }
 
     /// Preserve the workspace to a destination that must not already exist.
