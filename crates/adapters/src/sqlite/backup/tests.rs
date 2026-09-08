@@ -34,6 +34,11 @@ fn receipt_for_bytes(path: &Path, template: &BackupReceipt) -> BackupReceipt {
 
 #[test]
 fn online_backup_includes_uncheckpointed_wal_and_restores_quarantined() {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("BULLET_BACKUP_SNAPSHOT_FIXTURE").is_some() {
+        crate::sqlite::open::assert_snapshot_sources();
+        return;
+    }
     let (_directory, source, backup, restored) = paths();
     let mut ledger = SqliteLedger::open(&source).unwrap();
     ledger.append_event("wal_subject", "exact-row").unwrap();
@@ -97,70 +102,9 @@ fn online_backup_includes_uncheckpointed_wal_and_restores_quarantined() {
     drop(conn);
     drop(ledger);
     #[cfg(target_os = "linux")]
-    assert_backup_obeys_custody(_directory.path(), &source);
-}
-
-#[cfg(target_os = "linux")]
-fn assert_backup_obeys_custody(directory: &Path, source: &Path) {
-    use rustix::fs::{flock, FlockOperation};
-    use std::time::{Duration, Instant};
-
-    let admitted = crate::sqlite::open::backup_read_only(source).unwrap();
-    let error = admitted
-        .connection
-        .execute_batch("CREATE TABLE forbidden_backup_write (id INTEGER)")
-        .unwrap_err();
-    assert!(
-        matches!(error, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::ReadOnly)
-    );
-    crate::sqlite::open::close_backup(admitted).unwrap();
-    let snapshot = || {
-        let mut files = fs::read_dir(directory)
-            .unwrap()
-            .map(|entry| {
-                let entry = entry.unwrap();
-                (entry.file_name(), fs::read(entry.path()).unwrap())
-            })
-            .collect::<Vec<_>>();
-        files.sort();
-        files
-    };
-    let output = directory.join("custody-backup.sqlite");
-    let descriptor = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(source)
-        .unwrap();
-    flock(&descriptor, FlockOperation::NonBlockingLockExclusive).unwrap();
-    let before = snapshot();
-    for _ in 0..2 {
-        let started = Instant::now();
-        let error = create_backup(source, &output).unwrap_err();
-        assert!(error.to_string().contains("SQLITE_CUSTODY_BUSY"), "{error}");
-        assert!(started.elapsed() < Duration::from_secs(2));
-        assert_eq!(
-            snapshot(),
-            before,
-            "exclusive-custody refusal changed source or output"
-        );
-    }
-    drop(descriptor);
-    let receipt = create_backup(source, &output).expect("backup resumes after exclusive custody");
-    assert_eq!(
-        receipt.snapshot_digest,
-        blake3::hash(&fs::read(&output).unwrap()).to_hex().as_str()
-    );
-
-    let missing = directory.join("absent-source.sqlite");
-    let absent_output = directory.join("absent-source-backup.sqlite");
-    let before = snapshot();
-    for _ in 0..2 {
-        assert!(create_backup(&missing, &absent_output).is_err());
-        assert_eq!(
-            snapshot(),
-            before,
-            "read-only backup created a missing source or output"
-        );
+    {
+        crate::sqlite::open::assert_backup_obeys_custody(_directory.path(), &source);
+        crate::sqlite::open::assert_snapshot_sources();
     }
 }
 
@@ -382,7 +326,7 @@ fn assert_close_contract() {
             let _ = self.0.wait();
         }
     }
-    for primary in [false, true] {
+    for (primary, preflight) in [(false, false), (true, false), (false, true), (true, true)] {
         let (directory, source, _, _) = paths();
         drop(SqliteLedger::open(&source).unwrap());
         let before = fs::metadata(&source).unwrap();
@@ -397,6 +341,10 @@ fn assert_close_contract() {
                 .env(
                     "BULLET_BACKUP_CLOSE_PRIMARY",
                     if primary { "yes" } else { "no" },
+                )
+                .env(
+                    "BULLET_BACKUP_PREFLIGHT_CLOSE",
+                    if preflight { "yes" } else { "no" },
                 )
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
@@ -426,6 +374,12 @@ fn assert_close_contract() {
         drop(exclusive(&source).expect("process death released retained custody"));
         let after = fs::metadata(&source).unwrap();
         assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+        if preflight && primary {
+            Connection::open(&source)
+                .unwrap()
+                .execute_batch("PRAGMA user_version=0")
+                .unwrap();
+        }
         drop(SqliteLedger::open(&source).expect("same source reopens after failed process exits"));
     }
     let (_directory, source, backup, _) = paths();
@@ -447,6 +401,35 @@ fn assert_close_contract() {
     drop(exclusive(&source).expect("confirmed close releases custody despite postflight failure"));
     create_backup(&source, &backup).expect("postflight error did not poison admission");
     drop(exclusive(&source).expect("successful backup explicitly closed and released custody"));
+    let (directory, source, backup, _) = paths();
+    drop(SqliteLedger::open(&source).unwrap());
+    let moved = directory.path().join("retained-private");
+    let recorded = directory.path().join("registered-path");
+    let marker = recorded.clone();
+    let error = super::create::with_before_close(
+        move |admitted| {
+            let path = Path::new(admitted.connection.path().unwrap())
+                .parent()
+                .unwrap();
+            fs::write(marker, path.as_os_str().as_encoded_bytes()).unwrap();
+            fs::rename(path, moved).unwrap();
+            fs::create_dir(path).unwrap();
+            fs::write(path.join("peer"), b"preserve-peer").unwrap();
+        },
+        || create_backup_inner(&source, &backup, Some(FaultPoint::AfterCopy)),
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("SQLITE_PREFLIGHT_CLEANUP_FAILED"));
+    assert!(error.to_string().contains("injected maintenance failure"));
+    assert!(!error.to_string().contains("SQLITE_CLOSE_RESTART_REQUIRED"));
+    let registered = PathBuf::from(fs::read_to_string(recorded).unwrap());
+    assert!(error.to_string().contains(registered.to_str().unwrap()));
+    assert_eq!(fs::read(registered.join("peer")).unwrap(), b"preserve-peer");
+    fs::remove_dir_all(registered).unwrap();
+    drop(exclusive(&source).unwrap());
+    create_backup(&source, &backup).expect("cleanup failure did not poison admission");
 }
 
 #[cfg(target_os = "linux")]
@@ -455,6 +438,13 @@ fn failed_close_child(root: &Path) {
     let source = root.join("source.sqlite");
     let output = root.join("close.sqlite");
     let primary = std::env::var("BULLET_BACKUP_CLOSE_PRIMARY").unwrap() == "yes";
+    let preflight = std::env::var("BULLET_BACKUP_PREFLIGHT_CLOSE").unwrap() == "yes";
+    if preflight && primary {
+        Connection::open(&source)
+            .unwrap()
+            .execute_batch("PRAGMA user_version=999")
+            .unwrap();
+    }
     let error = super::create::with_before_close(
         |source| {
             // A real outstanding sqlite3_stmt makes sqlite3_close return SQLITE_BUSY.
@@ -466,8 +456,27 @@ fn failed_close_child(root: &Path) {
     let detail = error.to_string();
     assert!(detail.contains("SQLITE_CLOSE_RESTART_REQUIRED"), "{detail}");
     assert!(detail.contains("unfinalized statements"), "{detail}");
-    assert_eq!(detail.contains("injected maintenance failure"), primary);
-    assert_eq!(output.exists(), !primary);
+    assert_eq!(
+        detail.contains("injected maintenance failure"),
+        primary && !preflight
+    );
+    assert_eq!(output.exists(), !primary && !preflight);
+    if preflight && primary {
+        assert!(detail.contains("user_version"), "{detail}");
+    }
+    let retained = fs::read_dir(root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("bullet-sqlite-preflight-")
+        })
+        .unwrap()
+        .path();
+    assert!(detail.contains(retained.to_str().unwrap()), "{detail}");
+    assert!(retained.join("source.sqlite").exists());
     for _ in 0..2 {
         let absent = root.join("must-not-create.sqlite");
         let error = crate::sqlite::open::connection(&absent).err().unwrap();

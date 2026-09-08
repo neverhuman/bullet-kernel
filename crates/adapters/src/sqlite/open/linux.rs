@@ -1,4 +1,4 @@
-use super::{store, ConnectionPurpose};
+use super::{store, AdmissionGuard, AdmittedConnection, ConnectionPurpose};
 use bullet_application::LedgerError;
 use rusqlite::Connection;
 use rustix::fs::{AtFlags, Mode, OFlags, ResolveFlags};
@@ -9,7 +9,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
 mod custody;
-mod preflight;
+pub(super) mod preflight;
 
 const MAX_COMPONENTS: usize = 64;
 const SIDECARS: [&str; 3] = ["-journal", "-wal", "-shm"];
@@ -42,7 +42,7 @@ pub(super) struct Guard {
 pub(super) fn connection(
     path: &Path,
     purpose: ConnectionPurpose,
-) -> Result<(Connection, Guard), LedgerError> {
+) -> Result<AdmittedConnection, LedgerError> {
     let absolute = normalized_absolute(path)?;
     let effective_uid = effective_uid()?;
     let boundary = walk_boundary(&absolute, effective_uid)?;
@@ -78,17 +78,13 @@ pub(super) fn connection(
     // Without custody, even a newly created empty inode may belong to a peer.
     // Preserve it on acquisition failure; cleanup requires our shared lock.
     custody::acquire_shared(&guard.database)?;
-    if let Err(error) = preflight::verify(&guard) {
-        return Err(failure_with_cleanup(None, guard, error));
-    }
-    let connection = match Connection::open_with_flags(&guard.database_path, purpose.flags()) {
-        Ok(connection) => connection,
-        Err(error) => return Err(failure_with_cleanup(None, guard, store(error))),
-    };
-    if let Err(error) = revalidate(&guard) {
-        return Err(failure_with_cleanup(Some(connection), guard, error));
-    }
-    Ok((connection, guard))
+    preflight::connection(
+        AdmissionGuard {
+            inner: guard,
+            snapshot: None,
+        },
+        purpose,
+    )
 }
 
 fn effective_uid() -> Result<u32, LedgerError> {
