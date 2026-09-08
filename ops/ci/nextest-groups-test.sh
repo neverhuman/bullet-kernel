@@ -31,7 +31,8 @@ validate_timeout_config() {
     -v receipt_timeout="$receipt_timeout" '
     function close_section() {
       if (section == "fast") {
-        if (section_entries != 2 || section_fast_timeouts != 1 || section_fast_fail != 1) invalid = 1
+        if (section_entries != 3 || section_fast_timeouts != 1 ||
+            section_fast_fail != 1 || section_fast_threads != 1) invalid = 1
       } else if (section == "test_groups") {
         if (section_entries != 2 || section_migration_group_lines != 1 ||
             section_receipt_group_lines != 1) invalid = 1
@@ -50,6 +51,7 @@ validate_timeout_config() {
       section_entries = 0
       section_fast_timeouts = 0
       section_fast_fail = 0
+      section_fast_threads = 0
       section_migration_group_lines = 0
       section_receipt_group_lines = 0
       section_receipt_filters = 0
@@ -88,6 +90,7 @@ validate_timeout_config() {
         else invalid = 1
       }
       if ($0 == "fail-fast = true") section_fast_fail++
+      if ($0 == "test-threads = 4") section_fast_threads++
       next
     }
     section == "test_groups" {
@@ -175,6 +178,19 @@ reject_hostile_config() {
     exit 1
   fi
 }
+
+# The bound belongs to profile.fast; moving or duplicating it cannot satisfy it.
+for threads in 'test-threads = 8' 'test-threads = "num-cpus"' 'test-threads = 0'; do
+  rewrite_exact_line 'test-threads = 4' "$threads" "$test_root/fast-threads-changed.toml"
+  reject_hostile_config "$test_root/fast-threads-changed.toml" 'changed fast concurrency was accepted'
+done
+remove_exact_line 'test-threads = 4' "$test_root/fast-threads-removed.toml"
+reject_hostile_config "$test_root/fast-threads-removed.toml" 'missing fast concurrency was accepted'
+printf '\ntest-threads = 4\n' >>"$test_root/fast-threads-removed.toml"
+reject_hostile_config "$test_root/fast-threads-removed.toml" 'displaced fast concurrency was accepted'
+rewrite_exact_line 'test-threads = 4' $'test-threads = 4\ntest-threads = 4' \
+  "$test_root/fast-threads-duplicate.toml"
+reject_hostile_config "$test_root/fast-threads-duplicate.toml" 'duplicate fast concurrency was accepted'
 
 readonly receipt_filter_line="filter = '$receipt_filter'"
 readonly receipt_filter_display="${receipt_filter//\//\\/}"
