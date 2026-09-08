@@ -97,8 +97,10 @@ The current implementation supports the ext2/ext3/ext4 filesystem family and
 refuses other filesystems or exclusive-custody contention. Startup inspects a
 private snapshot, with a 1 GiB input/recovery bound, before writable SQLite can
 recover source journals. Authentic schema 22 returns `UPGRADE_REQUIRED`; it is
-never migrated during serving startup. Exclusive upgrades, backup participation
-in custody, and external authority high-water enforcement remain unimplemented.
+never migrated during serving startup. Online backups use a read-only SQLite
+connection under the same shared custody, retained through publication and exact
+receipt read-back. Exclusive upgrades, prefix-aware upgrade backups, and external
+authority high-water enforcement remain unimplemented.
 
 ## Offline maintenance
 
