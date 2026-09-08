@@ -56,7 +56,18 @@ pub async fn run_phase(
         idempotency_key: format!("demo-synthetic-runner:{}", graph.mission.id),
         ttl_seconds: 15,
     };
-    let workspace_root = data_dir.join("runner");
+    let runner_data_dir = std::fs::canonicalize(data_dir)
+        .map_err(|err| format!("canonicalize runner data directory: {err}"))?;
+    let workspace_root = runner_data_dir.join("runner");
+    let root_builder = &mut std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        root_builder.mode(0o700);
+    }
+    root_builder
+        .create(&workspace_root)
+        .map_err(|err| format!("create private runner root: {err}"))?;
     let mut config = AttemptConfig::new(
         fixture.origin.clone(),
         fixture.base_sha.clone(),
@@ -64,7 +75,8 @@ pub async fn run_phase(
         OBJECTIVE.to_string(),
         vec!["PONG.txt".into()],
         fixture.writer_gate_ids.clone(),
-    );
+    )
+    .with_preservation_destination(runner_data_dir.join("preserved-candidate"));
     config.turn_timeout = Duration::from_secs(240);
     let started = Instant::now();
     let outcome = run_attempt(

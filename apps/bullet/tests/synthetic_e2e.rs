@@ -75,6 +75,15 @@ fn synthetic_scaffold_records_typed_authority_refusal_without_evidence() {
             .as_str()
             .is_some_and(|text| text.contains("RUNNER:AUTHORITY_CONTRACT_UNAVAILABLE"))
     }));
-    assert!(!data.path().join("runner").exists());
+    let runner_root = data.path().join("runner");
+    let metadata = std::fs::symlink_metadata(&runner_root).expect("allocated runner root");
+    assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+    #[cfg(target_os = "linux")]
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+    assert_eq!(
+        std::fs::read_dir(runner_root).expect("inert root").count(),
+        0
+    );
+    assert!(!data.path().join("preserved-candidate").exists());
     assert!(stdout.contains("\"transaction_gate_eligible\": false"));
 }
