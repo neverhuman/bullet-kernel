@@ -10,7 +10,7 @@ mod linux;
 
 // A failed SQLite close leaves a live handle. Retain its custody until process
 // exit and reject new admissions, bounding retention to already in-flight work.
-static CLOSE_FAILED: AtomicBool = AtomicBool::new(false);
+pub(super) static CLOSE_FAILED: AtomicBool = AtomicBool::new(false);
 
 pub(super) struct AdmissionGuard {
     #[cfg(target_os = "linux")]

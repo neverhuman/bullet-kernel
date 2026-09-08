@@ -1,7 +1,7 @@
 //! Offline, receipt-bound SQLite backup and quarantined restore.
 
 use super::{migrations, open};
-use rusqlite::{params, Connection, TransactionBehavior};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -10,7 +10,9 @@ use tempfile::{Builder, NamedTempFile};
 use thiserror::Error;
 
 mod create;
+mod restore;
 use create::create_backup_inner;
+use restore::restore_backup_inner;
 
 const FORMAT_VERSION: u32 = 1;
 const INTEGRITY_PASS: &str = "PASS";
@@ -81,6 +83,9 @@ enum FaultPoint {
     AfterSync,
     AfterVerify,
     BeforePublish,
+    AfterTransition,
+    AfterPublish,
+    AfterReadback,
 }
 
 /// Create a WAL-consistent, standalone SQLite backup at an absent path.
@@ -112,97 +117,6 @@ pub fn restore_backup(
     restore_backup_inner(backup.as_ref(), receipt, destination.as_ref(), None)
 }
 
-fn restore_backup_inner(
-    backup: &Path,
-    receipt: &BackupReceipt,
-    destination: &Path,
-    fault: Option<FaultPoint>,
-) -> Result<RestoreReceipt, SqliteMaintenanceError> {
-    require_unix()?;
-    validate_receipt(receipt)?;
-    require_absent(destination)?;
-    let mut input = open_regular_nofollow(backup, receipt.snapshot_bytes)?;
-    let mut staged = staging_file(destination, "restore")?;
-    let copied_digest = copy_and_digest(&mut input, staged.as_file_mut(), receipt.snapshot_bytes)?;
-    fail(fault, FaultPoint::AfterCopy, "COPY")?;
-    if copied_digest != receipt.snapshot_digest {
-        return Err(receipt_mismatch(
-            "backup bytes do not match the retained receipt",
-        ));
-    }
-
-    staged
-        .as_file()
-        .sync_all()
-        .map_err(|err| phase("SYNC", err))?;
-    fail(fault, FaultPoint::AfterSync, "SYNC")?;
-
-    let mut restored = Connection::open(staged.path()).map_err(|err| phase("VERIFY", err))?;
-    let prior = migrations::verify_existing(&restored, false).map_err(schema_error)?;
-    verify_integrity(&restored)?;
-    if prior.epoch != receipt.restore_epoch {
-        return Err(receipt_mismatch(
-            "backup restore epoch does not match the retained receipt",
-        ));
-    }
-    force_single_file(&restored)?;
-    let next_epoch = prior
-        .epoch
-        .checked_add(1)
-        .ok_or_else(|| receipt_mismatch("restore epoch cannot advance"))?;
-    let next_epoch_i64 = i64::try_from(next_epoch)
-        .map_err(|_| receipt_mismatch("restore epoch exceeds SQLite range"))?;
-    let transaction = restored
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|err| phase("VERIFY", err))?;
-    let changed = transaction
-        .execute(
-            "UPDATE restore_state
-             SET restore_epoch = ?1, pending_admission = 1,
-                 source_snapshot_digest = ?2,
-                 restored_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-             WHERE singleton = 1 AND restore_epoch = ?3 AND pending_admission = 0",
-            params![
-                next_epoch_i64,
-                receipt.snapshot_digest,
-                i64::try_from(prior.epoch)
-                    .map_err(|_| receipt_mismatch("backup restore epoch exceeds SQLite range"))?
-            ],
-        )
-        .map_err(|err| phase("VERIFY", err))?;
-    if changed != 1 {
-        return Err(receipt_mismatch(
-            "restore epoch transition matched zero rows",
-        ));
-    }
-    transaction.commit().map_err(|err| phase("VERIFY", err))?;
-    let state = migrations::verify_existing(&restored, true).map_err(schema_error)?;
-    verify_integrity(&restored)?;
-    if state.epoch != next_epoch || !state.pending_admission {
-        return Err(receipt_mismatch(
-            "restored database did not enter quarantine at the next epoch",
-        ));
-    }
-    drop(restored);
-    staged
-        .as_file()
-        .sync_all()
-        .map_err(|err| phase("SYNC", err))?;
-    let (restored_digest, restored_bytes) = digest_file(staged.as_file_mut())?;
-    fail(fault, FaultPoint::AfterVerify, "VERIFY")?;
-    fail(fault, FaultPoint::BeforePublish, "PUBLISH")?;
-    publish(staged, destination)?;
-    Ok(RestoreReceipt {
-        backup: receipt.clone(),
-        restored_digest,
-        restored_bytes,
-        previous_restore_epoch: prior.epoch,
-        restore_epoch: next_epoch,
-        pending_authority_admission: true,
-        integrity: INTEGRITY_PASS.into(),
-    })
-}
-
 fn validate_receipt(receipt: &BackupReceipt) -> Result<(), SqliteMaintenanceError> {
     if receipt.format_version != FORMAT_VERSION {
         return Err(receipt_mismatch("unsupported or future receipt format"));
@@ -210,12 +124,15 @@ fn validate_receipt(receipt: &BackupReceipt) -> Result<(), SqliteMaintenanceErro
     if receipt.integrity != INTEGRITY_PASS {
         return Err(receipt_mismatch("receipt has no passing integrity result"));
     }
-    if receipt.schema_digest != migrations::schema_contract_digest() {
+    if !is_digest(&receipt.schema_digest) {
         return Err(receipt_mismatch(
-            "receipt schema contract is not owned by this binary",
+            "receipt schema contract digest is malformed",
         ));
     }
-    if !is_digest(&receipt.snapshot_digest) || receipt.snapshot_bytes == 0 {
+    if !is_digest(&receipt.snapshot_digest)
+        || receipt.snapshot_bytes == 0
+        || receipt.snapshot_bytes > 1024 * 1024 * 1024
+    {
         return Err(receipt_mismatch("receipt snapshot subject is malformed"));
     }
     Ok(())
