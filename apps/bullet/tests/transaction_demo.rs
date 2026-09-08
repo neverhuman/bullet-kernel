@@ -8,6 +8,8 @@ use bullet_harness_core::transaction_proof::{
 };
 use bullet_runner_core::{gitd_binary, GitdSession};
 use serde_json::json;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 const TRANSACTION_DEMO_ROOT_SOURCE: &str = include_str!("../src/bin/transaction_demo.rs");
@@ -60,6 +62,7 @@ fn signed_transaction_component_roundtrip() {
     assert!(TRANSACTION_DEMO_SOURCE.contains("fs::Permissions::from_mode(0o710)"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("fs::metadata(\"/proc/self\")"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("SignedLeaseRpcClient::new_admitted("));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains(".with_recovery_file(recovery)"));
     assert!(!TRANSACTION_DEMO_SUPPORT_SOURCE.contains("SignedLeaseRpcClient::new("));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("struct LeaseHeartbeatGuard"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("Duration::from_secs(3)"));
@@ -104,12 +107,51 @@ fn signed_transaction_component_roundtrip() {
     assert!(TRANSACTION_DEMO_SOURCE.contains("farmd.stop()?"));
 
     let missing = "/definitely/missing/bullet-farmd";
+    let data = tempfile::tempdir().expect("private demo data");
     let refused = Command::new(env!("CARGO_BIN_EXE_transaction_demo"))
         .env("BULLET_FARMD_BIN", missing)
+        .env("BULLET_DATA_DIR", data.path())
         .output()
         .expect("run transaction demo with exact override");
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains(missing));
+    assert!(!data.path().join("runner-recovery.json").exists());
+
+    for (mode, reason) in [
+        (0o600, "LEASE_RECOVERY_CORRUPT"),
+        (0o644, "LEASE_RECOVERY_RECORD"),
+    ] {
+        let data = tempfile::tempdir().expect("isolated hostile recovery data");
+        let recovery = data.path().join("runner-recovery.json");
+        let retained = b"malformed retained recovery must never be replaced";
+        fs::write(&recovery, retained).expect("write retained fixture");
+        fs::set_permissions(&recovery, fs::Permissions::from_mode(mode))
+            .expect("set exact record mode");
+        let refused = Command::new(env!("CARGO_BIN_EXE_transaction_demo"))
+            .env("BULLET_FARMD_BIN", missing)
+            .env("BULLET_DATA_DIR", data.path())
+            .output()
+            .expect("run demo recovery admission before farmd");
+        assert!(!refused.status.success());
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.contains(reason), "{stderr}");
+        assert!(
+            !stderr.contains(missing),
+            "farmd must not be reached: {stderr}"
+        );
+        assert_eq!(
+            fs::read(&recovery).expect("read retained fixture"),
+            retained
+        );
+        assert_eq!(
+            fs::metadata(&recovery)
+                .expect("record mode")
+                .permissions()
+                .mode()
+                & 0o777,
+            mode
+        );
+    }
 }
 
 #[test]

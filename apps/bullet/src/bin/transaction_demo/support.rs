@@ -227,18 +227,18 @@ pub(super) fn spawn_farmd(
 
 pub(super) fn admitted_lease_client(
     socket: PathBuf,
+    recovery: PathBuf,
     runner: &RunnerId,
     runner_epoch: u64,
 ) -> Result<Arc<SignedLeaseRpcClient>, String> {
     let process = fs::metadata("/proc/self")
         .map_err(|err| fail(format!("inspect transaction demo identity: {err}")))?;
     let expected_server = ExpectedLeaseServer::new(process.uid(), process.gid());
-    Ok(Arc::new(SignedLeaseRpcClient::new_admitted(
-        socket,
-        runner.clone(),
-        runner_epoch,
-        expected_server,
-    )))
+    Ok(Arc::new(
+        SignedLeaseRpcClient::new_admitted(socket, runner.clone(), runner_epoch, expected_server)
+            .with_recovery_file(recovery)
+            .map_err(|error| fail(error.to_string()))?,
+    ))
 }
 
 pub(super) fn run_verifier(

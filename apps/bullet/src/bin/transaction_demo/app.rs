@@ -79,10 +79,15 @@ async fn run() -> Result<(), String> {
         .map_err(|err| fail(format!("canonicalize {}: {err}", lease_runtime.display())))?;
     let socket = lease_runtime.join("lease-transport.sock");
     let runner = RunnerId::from_seed("txn-demo-runner");
+    let client = admitted_lease_client(
+        socket.clone(),
+        data.join("runner-recovery.json"),
+        &runner,
+        1,
+    )?;
     let farmd = spawn_farmd(&data, &socket, &runner, 1)?;
     wait_for(&socket, 80)?;
 
-    let client = admitted_lease_client(socket, &runner, 1)?;
     let first = match client
         .acquire(&AcquireRequest {
             work_package_id: package.id.clone(),
