@@ -28,14 +28,18 @@ async fn unavailable_authority_stops_before_running_and_heartbeat() {
         idempotency_key: key.into(),
         ttl_seconds: 15,
     };
+    let workspace_root = dir.path().join("farm");
+    std::fs::create_dir(&workspace_root).expect("new empty workspace root");
+    let preservation_destination = dir.path().join("preserved");
     let mut config = AttemptConfig::new(
         origin,
         base_sha,
-        dir.path().join("farm"),
+        workspace_root.clone(),
         "must not run".into(),
         vec!["PONG.txt".into()],
         vec![bullet_runner_core::REPOSITORY_GATE_ID.into()],
-    );
+    )
+    .with_preservation_destination(preservation_destination.clone());
     config.heartbeat = HeartbeatConfig {
         interval: Duration::from_millis(1),
     };
@@ -59,6 +63,11 @@ async fn unavailable_authority_stops_before_running_and_heartbeat() {
             "workspace_cloned" | "turn_finished" | "patch_applied"
         )
     }));
+    assert!(std::fs::read_dir(&workspace_root)
+        .expect("workspace root remains")
+        .next()
+        .is_none());
+    assert!(!preservation_destination.exists());
 
     let ledger: std::sync::MutexGuard<'_, MemoryLedger> = ledger.lock().expect("ledger");
     let attempt = ledger

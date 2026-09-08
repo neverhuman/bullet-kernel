@@ -47,6 +47,8 @@ async fn production_authority_refusal_is_typed_and_repository_inert() {
         ttl_seconds: 15,
     };
     let workspace_root = dir.path().join("farm");
+    std::fs::create_dir(&workspace_root).expect("new empty workspace root");
+    let preservation_destination = dir.path().join("preserved");
     let config = AttemptConfig::new(
         origin.clone(),
         base_sha,
@@ -54,7 +56,8 @@ async fn production_authority_refusal_is_typed_and_repository_inert() {
         "must not run".into(),
         vec!["PONG.txt".into()],
         vec![bullet_runner_core::REPOSITORY_GATE_ID.into()],
-    );
+    )
+    .with_preservation_destination(preservation_destination.clone());
 
     let error = run_attempt(
         client,
@@ -73,7 +76,11 @@ async fn production_authority_refusal_is_typed_and_repository_inert() {
     assert_eq!(error.reason_code(), "AUTHORITY_CONTRACT_UNAVAILABLE");
     assert_eq!(git(&origin, &["rev-parse", "HEAD^{tree}"]), before_tree);
     assert!(git(&origin, &["status", "--porcelain"]).is_empty());
-    assert!(!workspace_root.exists(), "refusal created a workspace");
+    assert!(std::fs::read_dir(&workspace_root)
+        .expect("workspace root remains")
+        .next()
+        .is_none());
+    assert!(!preservation_destination.exists());
     assert!(adapter.prompts().is_empty(), "provider was started");
     assert_eq!(
         journal.stages(),
