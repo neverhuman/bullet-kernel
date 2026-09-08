@@ -19,7 +19,7 @@ use bullet_harness_core::transaction_proof::{
 };
 use bullet_runner_core::lease::{AcquireRequest, HeartbeatCall, LeaseClient, ReleaseCall};
 use bullet_runner_core::{gitd_fixture_binary, GitdSession};
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -39,7 +39,8 @@ async fn run() -> Result<(), String> {
     };
     let db = data.join("ledger.sqlite");
     let mut ledger = SqliteLedger::open(&db).map_err(|err| fail(err.to_string()))?;
-    let now = Utc::now().to_rfc3339();
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    admit_fixture_scope(&mut ledger, &now)?;
     let graph = materialize_plan(
         &mut ledger,
         "txn-proof-demo",
@@ -191,63 +192,32 @@ async fn run() -> Result<(), String> {
         Err(error) => return Err(fail(error.to_string())),
     };
 
+    let request = prepare_candidate_request(
+        &farmd, &client, &first, &workspace, &applied.checkpoint,
+    ).await?;
     let prepare = match gitd
-        .invoke(
-            "prepare_candidate",
-            json!({
-                "change": {
-                    "id": format!("chg_{}", Digest::of(b"txn-demo-change").to_hex()),
-                    "mission": "txn-proof-demo",
-                    "acceptance_root": Digest::of(b"acc").to_hex()
-                },
-                "provenance": {
-                    "schema_version": 1,
-                    "repository_id": first.authority_token.repository_id.to_string(),
-                    "producing_attempt_id": first.attempt.id.to_string(),
-                    "attempt_fence": first.attempt.fence,
-                    "work_package_id": package.id.to_string(),
-                    "variant_id": first.authority_token.variant_id.to_string(),
-                    "plan_revision_id": first.authority_token.plan_revision_id.to_string(),
-                    "graph_revision_id": format!("grf_{}", Digest::of(b"txn-demo-graph").to_hex()),
-                    "base_checkpoint_id": applied.checkpoint.id,
-                    "base_commit": workspace.base_sha,
-                    "parent_candidate_ids": [],
-                    "granted_scope": ["src"],
-                    "context_capsule_id": content_id("ctx"),
-                    "configuration_snapshot_id": content_id("cfg"),
-                    "policy_snapshot_id": content_id("pol"),
-                    "routing_snapshot_id": content_id("rte"),
-                    "environment_digest": Digest::of(b"env").to_hex(),
-                    "toolchain_digest": Digest::of(b"tool").to_hex()
-                }
-            }),
-        )
+        .prepare_candidate(&request)
         .await
     {
         Ok(prepare) => prepare,
         Err(error) => return Err(fail(format!("prepare_candidate: {error}"))),
     };
-    let candidate_id = prepare
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| fail(format!("candidate id missing: {prepare}")))?
-        .to_string();
-    let head = prepare
-        .get("head_commit")
-        .or_else(|| prepare.pointer("/manifest/head_commit"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| fail(format!("head missing: {prepare}")))?
-        .to_string();
-    let tree = prepare
-        .get("tree_hash")
-        .or_else(|| prepare.get("tree_oid"))
-        .or_else(|| prepare.pointer("/manifest/tree_oid"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| fail(format!("tree missing: {prepare}")))?
-        .to_string();
+    let candidate_id = prepare.id;
+    let head = prepare.head_commit;
+    let tree = prepare.tree_hash;
+    let preserve_to = scratch.join("preserve");
+    let preservation = gitd.preserve(&preserve_to).await
+        .map_err(|error| fail(format!("preserve: {error}")))?;
+    if preservation.destination != preserve_to || prepare.base_commit != workspace.base_sha {
+        return Err(fail("prepared Candidate or preservation subject differs"));
+    }
+    let verifier_repo = preserve_to.join("generation/repo");
+    if !verifier_repo.is_dir() {
+        return Err(fail("preserved Candidate repository is absent"));
+    }
 
     let (writer_code, writer_body) = run_verifier(
-        &workspace.repo_dir,
+        &verifier_repo,
         strip_oid(&workspace.base_sha),
         strip_oid(&head),
         strip_oid(&tree),
@@ -260,7 +230,7 @@ async fn run() -> Result<(), String> {
             .and_then(Value::as_str)
             .is_some_and(|code| code == "VERIFIER_IS_AUTHOR");
     let (verifier_code, verifier_body) = run_verifier(
-        &workspace.repo_dir,
+        &verifier_repo,
         strip_oid(&workspace.base_sha),
         strip_oid(&head),
         strip_oid(&tree),
@@ -353,10 +323,6 @@ async fn run() -> Result<(), String> {
         .map(|record| record.state)
         .ok_or_else(|| fail("settled intent missing"))?;
 
-    let preserve_to = scratch.join("preserve");
-    if let Err(error) = gitd.preserve(&preserve_to).await {
-        return Err(fail(format!("preserve: {error}")));
-    }
     Ok((
         candidate_id,
         verifier_outcome,

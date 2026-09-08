@@ -13,6 +13,9 @@ use std::time::Duration;
 
 use super::verifier_binary::verifier_fixture_binary;
 
+mod candidate;
+pub(super) use candidate::{admit_fixture_scope, prepare_candidate_request, spawn_farmd};
+
 pub(super) const FIXTURE_KEY: [u8; 32] = [0x5a; 32];
 #[derive(Serialize)]
 pub(super) struct FixturePermitClaims {
@@ -182,6 +185,7 @@ pub(super) fn init_source(root: &Path) -> Result<(PathBuf, String), String> {
     fs::create_dir_all(src.join("src")).map_err(|err| fail(err.to_string()))?;
     fs::write(src.join("src").join("lib.rs"), "pub fn seed() {}\n")
         .map_err(|err| fail(err.to_string()))?;
+    fs::write(src.join("PONG.txt"), "PONG\n").map_err(|err| fail(err.to_string()))?;
     sh(
         &src,
         "git init -q -b main . && git config user.name bullet && git config user.email bullet@test && git add . && git commit -qm seed",
@@ -193,36 +197,6 @@ pub(super) fn init_source(root: &Path) -> Result<(PathBuf, String), String> {
         .map_err(|err| fail(err.to_string()))?;
     let hex = String::from_utf8_lossy(&out.stdout).trim().to_string();
     Ok((src, format!("sha1:{hex}")))
-}
-
-pub(super) fn spawn_farmd(
-    data: &Path,
-    socket: &Path,
-    runner: &RunnerId,
-    runner_epoch: u64,
-) -> Result<FarmdGuard, String> {
-    let bin = kernel_bin("bullet-farmd");
-    if !bin.is_file() {
-        return Err(fail(format!(
-            "bullet-farmd missing at {} (build -p bullet-farmd)",
-            bin.display()
-        )));
-    }
-    let child = Command::new(bin)
-        .arg("--data-dir")
-        .arg(data)
-        .arg("--bind")
-        .arg("127.0.0.1:0")
-        .arg("--lease-transport-socket")
-        .arg(socket)
-        .arg("--fixture-lease-peer-registration")
-        .arg(format!("{}:{runner_epoch}", runner.as_str()))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|err| fail(format!("spawn farmd: {err}")))?;
-    Ok(FarmdGuard::new(child))
 }
 
 pub(super) fn admitted_lease_client(

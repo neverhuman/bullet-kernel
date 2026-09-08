@@ -16,6 +16,8 @@ const TRANSACTION_DEMO_ROOT_SOURCE: &str = include_str!("../src/bin/transaction_
 const TRANSACTION_DEMO_SOURCE: &str = include_str!("../src/bin/transaction_demo/app.rs");
 const TRANSACTION_DEMO_SUPPORT_SOURCE: &str =
     include_str!("../src/bin/transaction_demo/support.rs");
+const CANDIDATE_FIXTURE_SOURCE: &str =
+    include_str!("../src/bin/transaction_demo/support/candidate.rs");
 const VERIFIER_BINARY_SOURCE: &str = include_str!("../src/bin/transaction_demo/verifier_binary.rs");
 
 fn subject() -> TransactionComponentSubject {
@@ -57,8 +59,27 @@ fn signed_transaction_component_roundtrip() {
     assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("mod verifier_binary;"));
     assert!(TRANSACTION_DEMO_ROOT_SOURCE.contains("app::main_entry()"));
     assert!(!TRANSACTION_DEMO_ROOT_SOURCE.contains("#[path"));
-    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains(".arg(\"127.0.0.1:0\")"));
-    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains(".arg(\"--fixture-lease-peer-registration\")"));
+    assert!(CANDIDATE_FIXTURE_SOURCE.contains(".arg(\"127.0.0.1:0\")"));
+    assert!(CANDIDATE_FIXTURE_SOURCE.contains(".arg(\"--lease-peer-registry\")"));
+    assert!(CANDIDATE_FIXTURE_SOURCE.contains(".arg(\"--lease-transport-key\")"));
+    assert!(!CANDIDATE_FIXTURE_SOURCE.contains("--fixture-lease-peer-registration"));
+    assert!(CANDIDATE_FIXTURE_SOURCE.contains("candidate_readback(&response)"));
+    assert!(CANDIDATE_FIXTURE_SOURCE.contains("authenticate_candidate_preparation_grant("));
+    assert!(TRANSACTION_DEMO_SOURCE.contains(".prepare_candidate(&request)"));
+    assert!(!TRANSACTION_DEMO_SOURCE.contains("prepare.pointer("));
+    assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("src.join(\"PONG.txt\"), \"PONG\\n\""));
+    assert!(
+        TRANSACTION_DEMO_SOURCE
+            .find("gitd.preserve(&preserve_to)")
+            .unwrap()
+            < TRANSACTION_DEMO_SOURCE
+                .find("let (writer_code, writer_body)")
+                .unwrap()
+    );
+    assert_eq!(
+        TRANSACTION_DEMO_SOURCE.matches("&verifier_repo,").count(),
+        2
+    );
     assert!(TRANSACTION_DEMO_SOURCE.contains("fs::Permissions::from_mode(0o710)"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("fs::metadata(\"/proc/self\")"));
     assert!(TRANSACTION_DEMO_SUPPORT_SOURCE.contains("SignedLeaseRpcClient::new_admitted("));
@@ -114,7 +135,8 @@ fn signed_transaction_component_roundtrip() {
         .output()
         .expect("run transaction demo with exact override");
     assert!(!refused.status.success());
-    assert!(String::from_utf8_lossy(&refused.stderr).contains(missing));
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains(missing), "{stderr}");
     assert!(!data.path().join("runner-recovery.json").exists());
 
     for (mode, reason) in [
@@ -152,6 +174,29 @@ fn signed_transaction_component_roundtrip() {
             mode
         );
     }
+    let data = tempfile::tempdir().expect("isolated custody collision data");
+    let custody = data.path().join("candidate-fixture-custody");
+    fs::create_dir(&custody).expect("retained custody");
+    fs::set_permissions(&custody, fs::Permissions::from_mode(0o700)).expect("custody mode");
+    let key = custody.join("signing.key");
+    let retained = b"retained fixture custody must never be replaced";
+    fs::write(&key, retained).expect("retained fixture bytes");
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).expect("retained key mode");
+    let refused = Command::new(env!("CARGO_BIN_EXE_transaction_demo"))
+        .env("BULLET_FARMD_BIN", "/usr/bin/false")
+        .env("BULLET_DATA_DIR", data.path())
+        .output()
+        .expect("refuse existing custody before spawning fixture daemon");
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("create new Candidate fixture custody")
+    );
+    assert_eq!(fs::read(&key).expect("retained fixture readback"), retained);
+    assert_eq!(
+        fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!custody.join("peer-registry.json").exists());
 }
 
 #[test]
