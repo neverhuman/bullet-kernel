@@ -92,6 +92,14 @@ recorded as an unknown outcome rather than a success.
 
 The portal is a projection of this API. It is never an authority source.
 
+Serving ledger opens retain a shared lock on the admitted database descriptor.
+The current implementation supports the ext2/ext3/ext4 filesystem family and
+refuses other filesystems or exclusive-custody contention. Startup inspects a
+private snapshot, with a 1 GiB input/recovery bound, before writable SQLite can
+recover source journals. Authentic schema 22 returns `UPGRADE_REQUIRED`; it is
+never migrated during serving startup. Exclusive upgrades, backup participation
+in custody, and external authority high-water enforcement remain unimplemented.
+
 ## Offline maintenance
 
 ```bash
