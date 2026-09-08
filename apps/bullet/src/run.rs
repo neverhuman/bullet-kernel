@@ -395,7 +395,7 @@ fn short(value: &str) -> String {
 }
 
 fn hex_decode(text: &str) -> Result<Vec<u8>, String> {
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return Err("CHAIN_BROKEN: embedded receipt hex has odd length".to_owned());
     }
     let bytes = text.as_bytes();
