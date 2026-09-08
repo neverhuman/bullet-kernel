@@ -16,6 +16,7 @@ bullet-harness-core.workspace = true
 bullet-harness-sim.workspace = true
 bullet-runner-core.workspace = true
 bullet-verifier-core.workspace = true
+chrono.workspace = true
 clap.workspace = true
 hex.workspace = true
 rustix.workspace = true

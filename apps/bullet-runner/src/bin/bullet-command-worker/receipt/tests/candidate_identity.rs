@@ -123,6 +123,37 @@ async fn retained_state_and_artifact_byte_substitutions_refuse() {
 
 #[tokio::test]
 async fn cleanup_target_and_every_tombstone_subject_are_exact() {
+    for (deleted_at, accepted) in [
+        ("2026-08-28T08:01:00.000Z".to_string(), true),
+        ("2026-09-08T01:40:33.972667162+00:00".into(), true),
+        ("2026-09-08T01:40:33+00:00".into(), true),
+        ("not-a-timeZ".into(), false),
+        ("2026-02-30T01:40:33Z".into(), false),
+        ("2026-09-08T01:40:33+01:00".into(), false),
+        ("2026-09-08T01:40:33-00:00".into(), false),
+        ("2026-09-08T01:40:33\nZ".into(), false),
+        ("".into(), false),
+        (format!("{}Z", "0".repeat(64)), false),
+    ] {
+        let fixture = Fixture::new(false).await;
+        let attempt = fixture.value["attempt_first"].as_str().unwrap();
+        let path = preservation_fixture::tombstone_path(&fixture.run, attempt);
+        let mut tombstone: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        tombstone["deleted_at"] = serde_json::Value::String(deleted_at.clone());
+        std::fs::write(&path, serde_json::to_vec(&tombstone).unwrap()).unwrap();
+        let admitted = fixture.admit();
+        if accepted {
+            admitted.unwrap_or_else(|error| panic!("refused UTC timestamp {deleted_at}: {error}"));
+        } else {
+            assert_eq!(
+                admitted.unwrap_err().code(),
+                "COMMAND_RECEIPT_INVALID",
+                "accepted invalid cleanup time {deleted_at:?}"
+            );
+        }
+    }
+
     let fixture = Fixture::new(false).await;
     let attempt = fixture.value["attempt_first"].as_str().unwrap();
     private_dir(

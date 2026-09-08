@@ -561,6 +561,7 @@ dependencies = [
  "bullet-harness-sim",
  "bullet-runner-core",
  "bullet-verifier-core",
+ "chrono",
  "clap",
  "hex",
  "rusqlite",

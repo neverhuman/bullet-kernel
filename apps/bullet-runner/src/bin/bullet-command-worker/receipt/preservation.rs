@@ -311,12 +311,7 @@ fn validate_tombstone(
         && tombstone.attempt_id == workspace.attempt_id
         && tombstone.variant_id == workspace.variant_id
         && tombstone.nonce_hex == subject.workspace_nonce_hex
-        && tombstone.deleted_at.len() <= 64
-        && tombstone.deleted_at.ends_with('Z')
-        && tombstone
-            .deleted_at
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic())
+        && valid_cleanup_time(&tombstone.deleted_at)
         && tombstone.preservation_receipt_digest == preservation.receipt.digest
         && tombstone.preservation_receipt_digest
             == Digest::of(preservation.receipt.token.as_bytes()).to_hex()
@@ -325,6 +320,16 @@ fn validate_tombstone(
     fixed.then_some(()).ok_or_else(|| {
         invalid("daemon cleanup tombstone differs from the exact preservation receipt")
     })
+}
+
+fn valid_cleanup_time(value: &str) -> bool {
+    value.len() <= 64
+        && value.bytes().all(|byte| byte.is_ascii_graphic())
+        // The producer uses +00:00; retained fixtures also use Z. Unknown
+        // local offset (-00:00) is not an assertion of UTC custody time.
+        && (value.ends_with('Z') || value.ends_with("+00:00"))
+        && chrono::DateTime::parse_from_rfc3339(value)
+            .is_ok_and(|time| time.offset().local_minus_utc() == 0)
 }
 
 fn require_private_dir(path: &Path) -> Result<(), WorkerError> {
