@@ -8,7 +8,7 @@ use bullet_application::{
 use bullet_domain::{EFFECT_RECEIPT_IDENTITY_FORMAT_VERSION, IDENTITY_FORMAT_VERSION};
 use rusqlite::{types::Value, Connection};
 
-pub(super) fn verify(conn: &Connection) -> Result<(), LedgerError> {
+pub(super) fn verify(conn: &Connection, schema_version: i64) -> Result<(), LedgerError> {
     verify_marker(
         conn,
         "SELECT singleton, identity_format FROM identity_contract ORDER BY singleton",
@@ -29,7 +29,10 @@ pub(super) fn verify(conn: &Connection) -> Result<(), LedgerError> {
         "command_dispatch_claim_identity_contract",
         COMMAND_DISPATCH_CLAIM_SCHEMA,
     )?;
-    verify_effect_recovery_marker(conn)
+    if schema_version >= 23 {
+        verify_effect_recovery_marker(conn)?;
+    }
+    Ok(())
 }
 
 fn verify_marker(

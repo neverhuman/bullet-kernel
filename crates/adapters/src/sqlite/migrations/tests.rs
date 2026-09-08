@@ -389,16 +389,7 @@ fn schema_twenty_without_command_dispatch_claims_is_refused_byte_for_byte() {
 
 #[test]
 fn schema_twenty_two_without_effect_recovery_claims_is_refused_byte_for_byte() {
-    let (_directory, path) = database();
-    let conn = sqlite_fixture(&path);
-    install_legacy_migrations(&conn, &MIGRATIONS[..22]);
-    drop(conn);
-
-    let bytes_before = std::fs::read(&path).unwrap();
-    unsupported(SqliteLedger::open(&path));
-    assert_eq!(std::fs::read(&path).unwrap(), bytes_before);
-    assert!(!sidecar(&path, "-wal").exists());
-    assert!(!sidecar(&path, "-journal").exists());
+    verify_schema_twenty_two_refusals();
 }
 
 #[test]

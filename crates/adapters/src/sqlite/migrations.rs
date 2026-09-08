@@ -1,4 +1,4 @@
-//! Exact, disposable pre-1.0 SQLite schema authority.
+//! Exact SQLite schema authority; supported predecessors require supervised upgrade.
 
 use super::store;
 use bullet_application::LedgerError;
@@ -21,6 +21,12 @@ const CREATE_METADATA: &str = "CREATE TABLE schema_version (
     checksum TEXT NOT NULL,
     applied_at TEXT NOT NULL
 );";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SchemaState {
+    Current,
+    UpgradeRequired { from: i64, to: i64 },
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct RestoreState {
@@ -90,17 +96,42 @@ pub(super) fn verify_existing(
         ));
     }
     verify_metadata_schema(conn)?;
-    verify_applied_migrations(conn)?;
-    verify_product_schema(conn)?;
+    let schema = verify_applied_migrations(conn)?;
+    let applied = match schema {
+        SchemaState::Current => MIGRATIONS,
+        SchemaState::UpgradeRequired { .. } => &MIGRATIONS[..22],
+    };
+    verify_product_schema(conn, applied)?;
     verify_foreign_key_integrity(conn)?;
-    identity::verify(conn)?;
-    super::authority::current(conn)?;
+    identity::verify(
+        conn,
+        applied.last().expect("verified nonempty prefix").version,
+    )?;
+    super::authority::current(conn).map_err(|error| match schema {
+        SchemaState::Current => error,
+        SchemaState::UpgradeRequired { .. } => unsupported(error.to_string()),
+    })?;
     let state = read_restore_state(conn)?;
     if state.pending_admission && !allow_pending_restore {
         return Err(store(
             "RESTORE_ADMISSION_REQUIRED: this physically restored database is quarantined; \
              no production authority-admission operation exists in V1",
         ));
+    }
+    if let SchemaState::UpgradeRequired { from, to } = schema {
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(store)?;
+        if integrity != "ok" {
+            return Err(unsupported(format!(
+                "SQLite integrity check failed: {integrity}"
+            )));
+        }
+        return Err(store(format!(
+            "UPGRADE_REQUIRED: recognized schema {from} requires supervised upgrade to {to}; \
+             stop serving and retain this database for verified backup and supervised migration; \
+             this binary does not yet provide the upgrade operation"
+        )));
     }
     Ok(state)
 }
@@ -197,7 +228,7 @@ fn verify_metadata_schema(conn: &Connection) -> Result<(), LedgerError> {
     Ok(())
 }
 
-fn verify_applied_migrations(conn: &Connection) -> Result<(), LedgerError> {
+fn verify_applied_migrations(conn: &Connection) -> Result<SchemaState, LedgerError> {
     let mut statement = conn
         .prepare(
             "SELECT version, name, checksum, applied_at
@@ -216,11 +247,15 @@ fn verify_applied_migrations(conn: &Connection) -> Result<(), LedgerError> {
         .map_err(store)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(store)?;
-    if rows.len() != MIGRATIONS.len() {
-        return Err(unsupported(
-            "schema_version is partial or contains a future migration",
-        ));
-    }
+    let schema = match rows.len() {
+        count if count == MIGRATIONS.len() => SchemaState::Current,
+        22 if MIGRATIONS.len() == 23 => SchemaState::UpgradeRequired { from: 22, to: 23 },
+        _ => {
+            return Err(unsupported(
+                "schema_version is partial or contains a future migration",
+            ))
+        }
+    };
     for (row, migration) in rows.iter().zip(MIGRATIONS) {
         let version = integer(&row.0, "version")?;
         let name = text(&row.1, "name")?;
@@ -237,14 +272,18 @@ fn verify_applied_migrations(conn: &Connection) -> Result<(), LedgerError> {
         if applied_at.is_empty() {
             return Err(unsupported("stored migration applied_at is empty"));
         }
+        if matches!(schema, SchemaState::UpgradeRequired { .. }) {
+            DateTime::parse_from_rfc3339(applied_at)
+                .map_err(|_| unsupported("stored migration applied_at is not RFC 3339"))?;
+        }
     }
-    Ok(())
+    Ok(schema)
 }
 
-fn verify_product_schema(conn: &Connection) -> Result<(), LedgerError> {
+fn verify_product_schema(conn: &Connection, applied: &[Migration]) -> Result<(), LedgerError> {
     let expected_connection = Connection::open_in_memory().map_err(store)?;
     let mut expected_connection = expected_connection;
-    initialize_fresh(&mut expected_connection)?;
+    initialize_prefix(&mut expected_connection, applied)?;
     if schema_objects(conn)? != schema_objects(&expected_connection)? {
         return Err(unsupported(
             "product sqlite_schema does not match the applied migration authority",
@@ -345,11 +384,15 @@ fn schema_objects(conn: &Connection) -> Result<Vec<SchemaObject>, LedgerError> {
 }
 
 fn initialize_fresh(conn: &mut Connection) -> Result<(), LedgerError> {
+    initialize_prefix(conn, MIGRATIONS)
+}
+
+fn initialize_prefix(conn: &mut Connection, applied: &[Migration]) -> Result<(), LedgerError> {
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store)?;
     tx.execute_batch(CREATE_METADATA).map_err(store)?;
-    for migration in MIGRATIONS {
+    for migration in applied {
         tx.execute_batch(migration.sql).map_err(store)?;
         tx.execute(
             "INSERT INTO schema_version (version, name, checksum, applied_at)

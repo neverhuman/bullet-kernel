@@ -8,6 +8,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
+mod preflight;
+
 const MAX_COMPONENTS: usize = 64;
 const SIDECARS: [&str; 3] = ["-journal", "-wal", "-shm"];
 const RESOLVE: ResolveFlags = ResolveFlags::BENEATH
@@ -64,6 +66,9 @@ pub(super) fn connection(path: &Path) -> Result<(Connection, Guard), LedgerError
         None => create_database(boundary, absolute, database_name, effective_uid)?,
     };
     if let Err(error) = revalidate(&guard) {
+        return Err(failure_with_cleanup(None, guard, error));
+    }
+    if let Err(error) = preflight::verify(&guard) {
         return Err(failure_with_cleanup(None, guard, error));
     }
     let connection = match Connection::open_with_flags(
