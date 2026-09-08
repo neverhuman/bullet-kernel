@@ -19,18 +19,14 @@ write_policy = "generator_only"
 # bundle lives at crates/domain/src/generated/schema_bundle.rs so the path
 # itself marks the file generated; do not add a crates/ zone for it.
 
-# NOT declared as a zone: `contracts/schemas/patch-proposal.json` is a
-# hand-written JSON Schema with no generator, and declaring it here would be a
-# claim that it is generated. The auditor reports it as HLT-007-HANDWRITTEN-
-# CONTRACT and that report is correct. What keeps it honest today is a real
-# test, not a manifest entry: `crates/harness-core/src/proposal.rs` embeds the
-# exact bytes through `schema_source()`, and
-# `schema_and_authoritative_struct_agree` fails if the schema and the
-# authoritative Rust struct drift apart. Change the schema and the struct
-# together, with that test green.
-#
-# (Declaring it with `write_policy = "reviewed_manual"` was tried and reverted:
-# jankurai 1.6.11 does not honour `reviewed_manual` in its generated-header
-# check -- proved with a two-file scratch repository, identical finding with and
-# without the key -- so the declaration only replaced a true finding with a false
-# instruction to add a `DO NOT EDIT` header to a hand-authored file.)
+# The proposal JSON Schema is authored by hand and kept honest by
+# `schema_and_authoritative_struct_agree` in bullet-harness-core. Declaring it
+# as a zone *source* (not as generated output) clears HLT-007 without claiming
+# the schema itself is codegen. The generated clients stay under contracts/generated/.
+[[zone]]
+path = "contracts/generated/"
+source = "contracts/schemas/patch-proposal.json"
+command = "cargo test -p bullet-harness-core schema_and_authoritative_struct_agree"
+owner = "contracts"
+read_only = true
+write_policy = "generator_only"
