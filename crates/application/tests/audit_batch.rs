@@ -15,7 +15,7 @@ fn event(seq: u64) -> LedgerEvent {
     LedgerEvent {
         seq,
         at: format!("2026-08-26T00:00:{:02}.000Z", seq % 60),
-        kind: if seq % 2 == 0 {
+        kind: if seq.is_multiple_of(2) {
             "lease_granted"
         } else {
             "command_reconciled"
@@ -27,7 +27,7 @@ fn event(seq: u64) -> LedgerEvent {
         sequence: Some(seq),
         causation_id: None,
         correlation_id: Some("corr".into()),
-        authority_token_hash: (seq % 2 == 0).then(|| Digest::of(b"tok").to_hex()),
+        authority_token_hash: seq.is_multiple_of(2).then(|| Digest::of(b"tok").to_hex()),
     }
 }
 

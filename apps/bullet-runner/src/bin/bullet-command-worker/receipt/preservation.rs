@@ -217,7 +217,7 @@ fn decode_sealed_receipt(
 ) -> Result<ReceiptPayloadView, WorkerError> {
     let token = &preservation.receipt.token;
     if token.len() > 64 * 1024
-        || token.len() % 2 != 0
+        || !token.len().is_multiple_of(2)
         || !token
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))

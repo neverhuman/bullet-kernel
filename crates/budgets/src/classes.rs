@@ -312,7 +312,7 @@ impl BudgetPolicyError {
 pub const fn floor_units(percent: u8, opening: u64) -> u64 {
     let percent = if percent > 100 { 100 } else { percent } as u128;
     let scaled = opening as u128 * percent;
-    let ceil = scaled / 100 + if scaled % 100 == 0 { 0 } else { 1 };
+    let ceil = scaled.div_ceil(100);
     // `ceil <= opening` because `percent <= 100`; the cast cannot truncate.
     ceil as u64
 }

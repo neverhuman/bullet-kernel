@@ -163,7 +163,7 @@ impl MerkleTree {
         let mut siblings = Vec::with_capacity(self.levels.len());
         let mut position = index;
         for level in &self.levels[..self.levels.len() - 1] {
-            let sibling = if position % 2 == 0 {
+            let sibling = if position.is_multiple_of(2) {
                 level.get(position + 1).unwrap_or(&level[position])
             } else {
                 &level[position - 1]
@@ -210,7 +210,7 @@ pub fn verify_inclusion(
     let mut current = *leaf;
     let mut position = proof.leaf_index;
     for sibling in &proof.siblings {
-        current = if position % 2 == 0 {
+        current = if position.is_multiple_of(2) {
             node_hash(&current, sibling)
         } else {
             node_hash(sibling, &current)
