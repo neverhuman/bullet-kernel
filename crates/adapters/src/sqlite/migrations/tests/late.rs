@@ -202,6 +202,21 @@ fn verify_schema_twenty_two_refusals() {
         // No destructors: retain the WAL or hot rollback journal after process death.
         std::process::exit(0);
     }
+    for rows in [
+        vec![],
+        vec!["ok", "ok"],
+        vec!["ok", "corrupt"],
+        vec!["corrupt", "ok"],
+    ] {
+        let rows: Vec<_> = rows.into_iter().map(String::from).collect();
+        assert_eq!(
+            super::inspection::verify_integrity_rows(&rows)
+                .unwrap_err()
+                .reason_code(),
+            "UNSUPPORTED_SCHEMA"
+        );
+    }
+    super::inspection::verify_integrity_rows(&["ok".into()]).unwrap();
     for (statement, expected) in [
         ("", "UPGRADE_REQUIRED"),
         ("missing-authority", "UNSUPPORTED_SCHEMA"),
@@ -239,6 +254,8 @@ fn verify_schema_twenty_two_refusals() {
             conn.execute_batch(statement).unwrap();
         }
         conn.execute_batch("COMMIT").unwrap();
+        conn.pragma_update(None, "ignore_check_constraints", "OFF").unwrap();
+        assert_typed_prefix_inspection(&conn, &path, expected);
         drop(conn);
         let bytes_before = std::fs::read(&path).unwrap();
         // Repeat the exact startup after refusal: neither attempt may migrate or clean truth.
@@ -275,6 +292,52 @@ fn verify_schema_twenty_two_refusals() {
     };
     assert!(error.to_string().contains("SQLITE_PREFLIGHT_TOO_LARGE"));
     assert_eq!(file.metadata().unwrap().len(), length);
+}
+
+fn assert_typed_prefix_inspection(
+    conn: &rusqlite::Connection,
+    path: &std::path::Path,
+    expected: &str,
+) {
+    let before = std::fs::read(path).unwrap();
+    let inspected = super::inspect_existing(conn, false);
+    if expected == "UPGRADE_REQUIRED" {
+        let schema = inspected.expect("authentic prefix produces a typed inspection");
+        assert_eq!(
+            schema.schema_state(),
+            super::SchemaState::UpgradeRequired { from: 22, to: 23 }
+        );
+        assert!(super::valid_digest(schema.schema_digest()));
+        assert_ne!(schema.schema_digest(), super::schema_contract_digest());
+        assert_eq!(schema.restore_state().epoch, 0);
+        assert!(!schema.restore_state().pending_admission);
+        assert_eq!(
+            schema.authority(),
+            &bullet_application::NormalizedAuthority::genesis()
+        );
+        assert!(schema
+            .require_current()
+            .unwrap_err()
+            .to_string()
+            .contains("UPGRADE_REQUIRED"));
+    } else {
+        let error = inspected.unwrap_err();
+        if expected == "UNSUPPORTED_SCHEMA" {
+            assert_eq!(error.reason_code(), expected);
+        } else {
+            assert!(error.to_string().contains("RESTORE_ADMISSION_REQUIRED"));
+            assert!(!error.to_string().contains("UPGRADE_REQUIRED"));
+            let quarantined = super::inspect_existing(conn, true).unwrap();
+            assert!(quarantined.restore_state().pending_admission);
+            assert_eq!(quarantined.restore_state().epoch, 1);
+            assert!(quarantined.require_current().is_err());
+        }
+    }
+    assert_eq!(
+        std::fs::read(path).unwrap(),
+        before,
+        "typed inspection changed source bytes"
+    );
 }
 
 fn verify_schema_twenty_two_wal_refusal() {

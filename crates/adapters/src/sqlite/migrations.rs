@@ -9,10 +9,12 @@ use rusqlite::{params, Connection, TransactionBehavior};
 
 mod catalog;
 mod identity;
+mod inspection;
 
 pub(super) use catalog::{
     valid_digest, valid_mutation_contract, validate_mutation_row, Migration, MIGRATIONS,
 };
+pub(super) use inspection::{inspect_existing, VerifiedSchema};
 
 const CHECKSUM_DOMAIN: &[u8] = b"bullet-kernel.sqlite-migration.v1";
 const CREATE_METADATA: &str = "CREATE TABLE schema_version (
@@ -23,7 +25,7 @@ const CREATE_METADATA: &str = "CREATE TABLE schema_version (
 );";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SchemaState {
+pub(super) enum SchemaState {
     Current,
     UpgradeRequired { from: i64, to: i64 },
 }
@@ -89,57 +91,19 @@ pub(super) fn verify_existing(
     conn: &Connection,
     allow_pending_restore: bool,
 ) -> Result<RestoreState, LedgerError> {
-    verify_unclaimed_pragmas(conn)?;
-    if !metadata_table_exists(conn)? {
-        return Err(unsupported(
-            "database has no checksummed schema_version authority",
-        ));
-    }
-    verify_metadata_schema(conn)?;
-    let schema = verify_applied_migrations(conn)?;
-    let applied = match schema {
-        SchemaState::Current => MIGRATIONS,
-        SchemaState::UpgradeRequired { .. } => &MIGRATIONS[..22],
-    };
-    verify_product_schema(conn, applied)?;
-    verify_foreign_key_integrity(conn)?;
-    identity::verify(
-        conn,
-        applied.last().expect("verified nonempty prefix").version,
-    )?;
-    super::authority::current(conn).map_err(|error| match schema {
-        SchemaState::Current => error,
-        SchemaState::UpgradeRequired { .. } => unsupported(error.to_string()),
-    })?;
-    let state = read_restore_state(conn)?;
-    if state.pending_admission && !allow_pending_restore {
-        return Err(store(
-            "RESTORE_ADMISSION_REQUIRED: this physically restored database is quarantined; \
-             no production authority-admission operation exists in V1",
-        ));
-    }
-    if let SchemaState::UpgradeRequired { from, to } = schema {
-        let integrity: String = conn
-            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
-            .map_err(store)?;
-        if integrity != "ok" {
-            return Err(unsupported(format!(
-                "SQLite integrity check failed: {integrity}"
-            )));
-        }
-        return Err(store(format!(
-            "UPGRADE_REQUIRED: recognized schema {from} requires supervised upgrade to {to}; \
-             stop serving and retain this database for verified backup and supervised migration; \
-             this binary does not yet provide the upgrade operation"
-        )));
-    }
-    Ok(state)
+    let inspected: VerifiedSchema = inspect_existing(conn, allow_pending_restore)?;
+    inspected.require_current()?;
+    Ok(inspected.into_restore_state())
 }
 
 pub(super) fn schema_contract_digest() -> String {
+    schema_contract_digest_for(MIGRATIONS)
+}
+
+fn schema_contract_digest_for(applied: &[Migration]) -> String {
     let mut bytes = Vec::new();
     frame(&mut bytes, b"bullet-kernel.sqlite-schema.v1");
-    for migration in MIGRATIONS {
+    for migration in applied {
         frame(&mut bytes, &migration.version.to_le_bytes());
         frame(&mut bytes, migration.name.as_bytes());
         frame(&mut bytes, migration_checksum(migration).as_bytes());

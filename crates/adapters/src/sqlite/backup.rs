@@ -118,8 +118,9 @@ fn create_backup_inner(
     require_unix()?;
     require_absent(destination)?;
     let source = open::backup_read_only(source).map_err(|error| phase("OPEN", error))?;
-    let source_state =
-        migrations::verify_existing(&source.connection, false).map_err(schema_error)?;
+    let source_schema =
+        migrations::inspect_existing(&source.connection, false).map_err(schema_error)?;
+    source_schema.require_current().map_err(schema_error)?;
     let mut staged = staging_file(destination, "backup")?;
     let mut snapshot = Connection::open(staged.path()).map_err(|err| phase("COPY", err))?;
     {
@@ -143,11 +144,14 @@ fn create_backup_inner(
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|err| phase("VERIFY", err))?;
-    let copied_state = migrations::verify_existing(&verified, false).map_err(schema_error)?;
+    let copied_schema = migrations::inspect_existing(&verified, false).map_err(schema_error)?;
+    copied_schema.require_current().map_err(schema_error)?;
     verify_integrity(&verified)?;
-    if copied_state != source_state {
+    if copied_schema.restore_state() != source_schema.restore_state()
+        || copied_schema.schema_digest() != source_schema.schema_digest()
+    {
         return Err(receipt_mismatch(
-            "restore epoch changed during online backup",
+            "schema or restore state changed during online backup",
         ));
     }
     drop(verified);
@@ -156,8 +160,8 @@ fn create_backup_inner(
         format_version: FORMAT_VERSION,
         snapshot_digest,
         snapshot_bytes,
-        schema_digest: migrations::schema_contract_digest(),
-        restore_epoch: copied_state.epoch,
+        schema_digest: copied_schema.schema_digest().to_owned(),
+        restore_epoch: copied_schema.restore_state().epoch,
         integrity: INTEGRITY_PASS.into(),
     };
     fail(fault, FaultPoint::AfterVerify, "VERIFY")?;
