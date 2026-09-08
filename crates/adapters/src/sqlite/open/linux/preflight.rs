@@ -189,7 +189,7 @@ fn inspect_once(
         match purpose {
             ConnectionPurpose::Serving => migrations::verify_or_initialize(&mut copy)?,
             ConnectionPurpose::BackupReadOnly => {
-                migrations::inspect_existing(&copy, false)?.require_current()?;
+                migrations::inspect_existing(&copy, false)?;
                 let mode: String = copy
                     .query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))
                     .map_err(store)?;

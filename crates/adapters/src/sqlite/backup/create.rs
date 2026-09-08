@@ -1,4 +1,6 @@
 //! Verified backup production with explicit admitted-source finalization.
+//! Authentic supported prefixes may be preserved. Their receipts do not grant
+//! serving or upgrade authority; ordinary restore still requires current schema.
 
 use super::{
     digest_file, fail, force_single_file, migrations, open, phase, publish, receipt_mismatch,
@@ -37,7 +39,6 @@ fn copy_snapshot(
 ) -> Result<BackupReceipt, SqliteMaintenanceError> {
     let source_schema =
         migrations::inspect_existing(&source.connection, false).map_err(schema_error)?;
-    source_schema.require_current().map_err(schema_error)?;
     let mut staged = staging_file(destination, "backup")?;
     let mut snapshot = Connection::open(staged.path()).map_err(|err| phase("COPY", err))?;
     {
@@ -62,9 +63,9 @@ fn copy_snapshot(
     )
     .map_err(|err| phase("VERIFY", err))?;
     let copied_schema = migrations::inspect_existing(&verified, false).map_err(schema_error)?;
-    copied_schema.require_current().map_err(schema_error)?;
     verify_integrity(&verified)?;
-    if copied_schema.restore_state() != source_schema.restore_state()
+    if copied_schema.schema_state() != source_schema.schema_state()
+        || copied_schema.restore_state() != source_schema.restore_state()
         || copied_schema.schema_digest() != source_schema.schema_digest()
     {
         return Err(receipt_mismatch(
@@ -112,3 +113,7 @@ pub(super) fn with_before_close<T>(
     let _reset = Reset(BEFORE_CLOSE.with(|slot| slot.replace(Some(Box::new(hook)))));
     operation()
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "prefix_tests.rs"]
+mod prefix_tests;

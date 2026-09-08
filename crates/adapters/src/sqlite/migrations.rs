@@ -421,3 +421,8 @@ fn unsupported(detail: impl Into<String>) -> LedgerError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+pub(super) fn initialize_backup_prefix_fixture(conn: &mut Connection) -> Result<(), LedgerError> {
+    initialize_prefix(conn, &MIGRATIONS[..22])
+}
