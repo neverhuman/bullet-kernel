@@ -2,13 +2,14 @@
 //! Authentic supported prefixes may be preserved. Restores of verified receipts
 //! remain quarantined and grant no serving or upgrade authority.
 
+use super::staged::{cleanup, ensure_healthy, finish, publish, with_connection};
 use super::{
-    digest_file, fail, force_single_file, migrations, open, phase, publish, receipt_mismatch,
+    digest_file, fail, force_single_file, migrations, open, phase, receipt_mismatch,
     require_absent, require_unix, schema_error, staging_file, verify_integrity,
     verify_published_backup, BackupReceipt, FaultPoint, SqliteMaintenanceError, FORMAT_VERSION,
     INTEGRITY_PASS,
 };
-use rusqlite::{backup::Backup, Connection, OpenFlags};
+use rusqlite::backup::Backup;
 use std::{path::Path, time::Duration};
 
 pub(super) fn create_backup_inner(
@@ -16,6 +17,7 @@ pub(super) fn create_backup_inner(
     destination: &Path,
     fault: Option<FaultPoint>,
 ) -> Result<BackupReceipt, SqliteMaintenanceError> {
+    ensure_healthy()?;
     require_unix()?;
     require_absent(destination)?;
     let source = open::backup_read_only(source).map_err(|error| phase("OPEN", error))?;
@@ -39,52 +41,69 @@ fn copy_snapshot(
 ) -> Result<BackupReceipt, SqliteMaintenanceError> {
     let source_schema =
         migrations::inspect_existing(&source.connection, false).map_err(schema_error)?;
-    let mut staged = staging_file(destination, "backup")?;
-    let mut snapshot = Connection::open(staged.path()).map_err(|err| phase("COPY", err))?;
-    {
-        let copy =
-            Backup::new(&source.connection, &mut snapshot).map_err(|err| phase("COPY", err))?;
-        copy.run_to_completion(128, Duration::from_millis(5), None)
-            .map_err(|err| phase("COPY", err))?;
-    }
-    force_single_file(&snapshot)?;
-    drop(snapshot);
-    fail(fault, FaultPoint::AfterCopy, "COPY")?;
-
-    staged
+    let staged = staging_file(destination, "backup")?;
+    let (staged, ()) = with_connection(
+        staged,
+        false,
+        "COPY",
+        fault,
+        FaultPoint::AfterCopy,
+        |snapshot| {
+            {
+                let copy =
+                    Backup::new(&source.connection, snapshot).map_err(|err| phase("COPY", err))?;
+                copy.run_to_completion(128, Duration::from_millis(5), None)
+                    .map_err(|err| phase("COPY", err))?;
+            } // No Backup object may outlive either connection's finalization.
+            force_single_file(snapshot)
+        },
+    )?;
+    let synced = staged
         .as_file()
         .sync_all()
-        .map_err(|err| phase("SYNC", err))?;
-    fail(fault, FaultPoint::AfterSync, "SYNC")?;
-
-    let verified = Connection::open_with_flags(
-        staged.path(),
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|err| phase("VERIFY", err))?;
-    let copied_schema = migrations::inspect_existing(&verified, false).map_err(schema_error)?;
-    verify_integrity(&verified)?;
-    if copied_schema.schema_state() != source_schema.schema_state()
-        || copied_schema.restore_state() != source_schema.restore_state()
-        || copied_schema.schema_digest() != source_schema.schema_digest()
-    {
-        return Err(receipt_mismatch(
-            "schema or restore state changed during online backup",
-        ));
+        .map_err(|err| phase("SYNC", err))
+        .and_then(|()| fail(fault, FaultPoint::AfterSync, "SYNC"));
+    if let Err(error) = synced {
+        return finish(Err(error), cleanup(staged));
     }
-    drop(verified);
-    let (snapshot_digest, snapshot_bytes) = digest_file(staged.as_file_mut())?;
-    let receipt = BackupReceipt {
-        format_version: FORMAT_VERSION,
-        snapshot_digest,
-        snapshot_bytes,
-        schema_digest: copied_schema.schema_digest().to_owned(),
-        restore_epoch: copied_schema.restore_state().epoch,
-        integrity: INTEGRITY_PASS.into(),
+    let (mut staged, copied_schema) = with_connection(
+        staged,
+        true,
+        "VERIFY",
+        fault,
+        FaultPoint::AfterVerify,
+        |verified| {
+            let copied = migrations::inspect_existing(verified, false).map_err(schema_error)?;
+            verify_integrity(verified)?;
+            if copied.schema_state() != source_schema.schema_state()
+                || copied.restore_state() != source_schema.restore_state()
+                || copied.schema_digest() != source_schema.schema_digest()
+            {
+                return Err(receipt_mismatch(
+                    "schema or restore state changed during online backup",
+                ));
+            }
+            Ok(copied)
+        },
+    )?;
+    let prepared = (|| {
+        let (snapshot_digest, snapshot_bytes) = digest_file(staged.as_file_mut())?;
+        let receipt = BackupReceipt {
+            format_version: FORMAT_VERSION,
+            snapshot_digest,
+            snapshot_bytes,
+            schema_digest: copied_schema.schema_digest().to_owned(),
+            restore_epoch: copied_schema.restore_state().epoch,
+            integrity: INTEGRITY_PASS.into(),
+        };
+        fail(fault, FaultPoint::BeforePublish, "PUBLISH")?;
+        open::postflight(source).map_err(|error| phase("PUBLISH", error))?;
+        Ok(receipt)
+    })();
+    let receipt = match prepared {
+        Ok(receipt) => receipt,
+        Err(error) => return finish(Err(error), cleanup(staged)),
     };
-    fail(fault, FaultPoint::AfterVerify, "VERIFY")?;
-    fail(fault, FaultPoint::BeforePublish, "PUBLISH")?;
-    open::postflight(source).map_err(|error| phase("PUBLISH", error))?;
     publish(staged, destination)?;
     verify_published_backup(destination, &receipt)?;
     open::postflight(source).map_err(|error| phase("READBACK", error))?;

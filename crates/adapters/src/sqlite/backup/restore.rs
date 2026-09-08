@@ -1,13 +1,15 @@
 //! Supported snapshots restore into quarantine without migration or activation.
 
+use super::staged::{cleanup, ensure_healthy, finish, publish, with_connection};
+#[cfg(test)]
+pub(super) use super::staged::{hook, with_hook};
 use super::{
-    copy_and_digest, digest_file, fail, force_single_file, migrations, open, open_regular_nofollow,
+    copy_and_digest, digest_file, fail, force_single_file, migrations, open_regular_nofollow,
     phase, receipt_mismatch, require_absent, require_unix, schema_error, staging_file,
     validate_receipt, verify_integrity, verify_published_backup, BackupReceipt, Connection,
-    FaultPoint, File, NamedTempFile, Path, RestoreReceipt, SqliteMaintenanceError, INTEGRITY_PASS,
+    FaultPoint, NamedTempFile, Path, RestoreReceipt, SqliteMaintenanceError, INTEGRITY_PASS,
 };
-use rusqlite::{params, OpenFlags, TransactionBehavior};
-use std::sync::atomic::Ordering;
+use rusqlite::{params, TransactionBehavior};
 
 type Result<T> = std::result::Result<T, SqliteMaintenanceError>;
 
@@ -22,13 +24,7 @@ pub(super) fn restore_backup_inner(
     destination: &Path,
     fault: Option<FaultPoint>,
 ) -> Result<RestoreReceipt> {
-    // Shares admission poison with serving and backup. In-flight calls are not revoked.
-    if open::CLOSE_FAILED.load(Ordering::Acquire) {
-        return Err(phase(
-            "OPEN",
-            "SQLITE_CLOSE_RESTART_REQUIRED: a prior SQLite handle failed to close",
-        ));
-    }
+    ensure_healthy()?;
     require_unix()?;
     validate_receipt(receipt)?;
     require_absent(destination)?;
@@ -210,147 +206,4 @@ fn verify_quarantine(
         ));
     }
     Ok(())
-}
-
-fn with_connection<T>(
-    staged: NamedTempFile,
-    readonly: bool,
-    phase_name: &'static str,
-    fault: Option<FaultPoint>,
-    close_fault: FaultPoint,
-    operation: impl FnOnce(&mut Connection) -> Result<T>,
-) -> Result<(NamedTempFile, T)> {
-    let access = if readonly {
-        OpenFlags::SQLITE_OPEN_READ_ONLY
-    } else {
-        OpenFlags::SQLITE_OPEN_READ_WRITE
-    };
-    let opened = Connection::open_with_flags(
-        staged.path(),
-        access | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    );
-    let mut connection = match opened {
-        Ok(connection) => connection,
-        Err(error) => return finish(Err(phase(phase_name, error)), cleanup(staged)),
-    };
-    let result = operation(&mut connection).and_then(|value| {
-        fail(fault, close_fault, phase_name)?;
-        Ok(value)
-    });
-    #[cfg(test)]
-    hook(phase_name, Some(&connection), staged.path());
-    if let Err((connection, error)) = connection.close() {
-        open::CLOSE_FAILED.store(true, Ordering::Release);
-        let failure = phase(
-            "CLOSE",
-            format!(
-                "SQLITE_CLOSE_RESTART_REQUIRED: {phase_name} handle retained at {}: {error}",
-                staged.path().display(),
-            ),
-        );
-        // rusqlite Drop retries and discards SQLITE_BUSY. Retain both owners until
-        // process death instead; future admissions fail before filesystem effects.
-        std::mem::forget((connection, staged));
-        return Err(match result {
-            Ok(_) => failure,
-            Err(primary) => phase("FINALIZE", format!("{primary}; additionally {failure}")),
-        });
-    }
-    match result {
-        Ok(value) => Ok((staged, value)),
-        Err(error) => finish(Err(error), cleanup(staged)),
-    }
-}
-
-fn finish<T>(primary: Result<T>, cleanup: Result<()>) -> Result<T> {
-    match (primary, cleanup) {
-        (result, Ok(())) => result,
-        (Ok(_), Err(error)) => Err(error),
-        (Err(primary), Err(cleanup)) => Err(phase(
-            "FINALIZE",
-            format!("{primary}; additionally {cleanup}"),
-        )),
-    }
-}
-
-fn cleanup(mut staged: NamedTempFile) -> Result<()> {
-    #[cfg(test)]
-    hook("CLEANUP", None, staged.path());
-    let path = staged.path().to_path_buf();
-    let checked = same_file(&staged);
-    if let Err(error) = checked {
-        // Sampled same-UID substitution refusal, not atomic hostile path custody.
-        staged.disable_cleanup(true);
-        return Err(phase(
-            "CLEANUP",
-            format!("retained {}: {error}", path.display()),
-        ));
-    }
-    staged
-        .close()
-        .map_err(|error| phase("CLEANUP", format!("retained {}: {error}", path.display())))
-}
-
-#[cfg(unix)]
-fn same_file(staged: &NamedTempFile) -> std::io::Result<()> {
-    use std::os::unix::fs::MetadataExt;
-    let held = staged.as_file().metadata()?;
-    let named = std::fs::symlink_metadata(staged.path())?;
-    if !named.is_file() || (held.dev(), held.ino()) != (named.dev(), named.ino()) {
-        return Err(std::io::Error::other(
-            "staging path no longer identifies the held file",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn same_file(_staged: &NamedTempFile) -> std::io::Result<()> {
-    Err(std::io::Error::other("unsupported publication platform"))
-}
-
-fn publish(staged: NamedTempFile, destination: &Path) -> Result<()> {
-    let file = match staged.persist_noclobber(destination) {
-        Ok(file) => file,
-        Err(error) => {
-            let primary = if error.error.kind() == std::io::ErrorKind::AlreadyExists {
-                SqliteMaintenanceError::DestinationExists(destination.to_path_buf())
-            } else {
-                phase("PUBLISH", error.error)
-            };
-            return finish(Err(primary), cleanup(error.file));
-        }
-    };
-    file.sync_all().map_err(|error| phase("PUBLISH", error))?;
-    let parent = destination
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| phase("PUBLISH", error))
-}
-
-#[cfg(test)]
-type Hook = Box<dyn FnMut(&str, Option<&Connection>, &Path)>;
-#[cfg(test)]
-thread_local! { static HOOK: std::cell::RefCell<Option<Hook>> = const { std::cell::RefCell::new(None) }; }
-#[cfg(test)]
-fn hook(phase: &str, connection: Option<&Connection>, path: &Path) {
-    HOOK.with(|slot| {
-        if let Some(hook) = slot.borrow_mut().as_mut() {
-            hook(phase, connection, path);
-        }
-    });
-}
-#[cfg(test)]
-pub(super) fn with_hook<T>(hook: Hook, operation: impl FnOnce() -> T) -> T {
-    struct Reset(Option<Hook>);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            HOOK.with(|slot| *slot.borrow_mut() = self.0.take());
-        }
-    }
-    let _reset = Reset(HOOK.with(|slot| slot.replace(Some(hook))));
-    operation()
 }

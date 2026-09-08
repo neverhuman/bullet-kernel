@@ -11,6 +11,7 @@ use thiserror::Error;
 
 mod create;
 mod restore;
+mod staged;
 use create::create_backup_inner;
 use restore::restore_backup_inner;
 
@@ -309,24 +310,6 @@ fn digest_file(file: &mut File) -> Result<(String, u64), SqliteMaintenanceError>
             .ok_or_else(|| phase("VERIFY", "backup size overflow"))?;
     }
     Ok((hasher.finalize().to_hex().to_string(), total))
-}
-
-fn publish(staged: NamedTempFile, destination: &Path) -> Result<(), SqliteMaintenanceError> {
-    let file = staged.persist_noclobber(destination).map_err(|error| {
-        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
-            SqliteMaintenanceError::DestinationExists(destination.to_path_buf())
-        } else {
-            phase("PUBLISH", error.error)
-        }
-    })?;
-    file.sync_all().map_err(|err| phase("PUBLISH", err))?;
-    let parent = destination
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|err| phase("PUBLISH", err))
 }
 
 include!("backup/support.rs");
