@@ -2,10 +2,15 @@ use super::{migrations, store};
 use bullet_application::LedgerError;
 use rusqlite::Connection;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 mod linux;
+
+// A failed SQLite close leaves a live handle. Retain its custody until process
+// exit and reject new admissions, bounding retention to already in-flight work.
+static CLOSE_FAILED: AtomicBool = AtomicBool::new(false);
 
 pub(super) struct AdmissionGuard {
     #[cfg(target_os = "linux")]
@@ -47,6 +52,11 @@ fn admitted_connection(
     path: &Path,
     purpose: ConnectionPurpose,
 ) -> Result<AdmittedConnection, LedgerError> {
+    if CLOSE_FAILED.load(Ordering::Acquire) {
+        return Err(store(
+            "SQLITE_CLOSE_RESTART_REQUIRED: an unclosed SQLite connection and its custody are retained until process exit; new admission is refused",
+        ));
+    }
     #[cfg(target_os = "linux")]
     {
         let (connection, inner) = linux::connection(path, purpose)?;
@@ -83,16 +93,63 @@ pub(super) fn initialized(path: &Path) -> Result<AdmittedConnection, LedgerError
 }
 
 pub(super) fn postflight(admitted: &AdmittedConnection) -> Result<(), LedgerError> {
+    postflight_guard(&admitted.guard)
+}
+
+fn postflight_guard(guard: &AdmissionGuard) -> Result<(), LedgerError> {
     #[cfg(target_os = "linux")]
     {
-        linux::postflight(&admitted.guard.inner)
+        linux::postflight(&guard.inner)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = admitted;
+        let _ = guard;
         Err(store(
             "descriptor-admitted SQLite authority storage requires Linux",
         ))
+    }
+}
+
+/// Finalize a backup source while retaining custody through confirmed close.
+/// A close error must not drop the returned handle: rusqlite's Drop ignores a
+/// repeated SQLITE_BUSY and could leave SQLite alive after custody is released.
+pub(super) fn close_backup(admitted: AdmittedConnection) -> Result<(), LedgerError> {
+    let before = postflight(&admitted);
+    let AdmittedConnection { connection, guard } = admitted;
+    if let Err((connection, error)) = connection.close() {
+        CLOSE_FAILED.store(true, Ordering::Release);
+        std::mem::forget(AdmittedConnection { connection, guard });
+        let prior = before
+            .err()
+            .map(|error| format!("; pre-close admission: {error}"));
+        return Err(store(format!(
+            "SQLITE_CLOSE_RESTART_REQUIRED: SQLite close failed: {error}; connection and custody retained until process exit{}",
+            prior.unwrap_or_default()
+        )));
+    }
+    let after = postflight_guard(&guard);
+    #[cfg(target_os = "linux")]
+    let cleanup = linux::cleanup(guard.inner);
+    #[cfg(not(target_os = "linux"))]
+    let cleanup = {
+        let _ = guard;
+        Err(store("backup finalization requires Linux admission"))
+    };
+    let errors = [
+        ("pre-close admission", before),
+        ("post-close admission", after),
+        ("cleanup", cleanup),
+    ]
+    .into_iter()
+    .filter_map(|(phase, result)| result.err().map(|error| format!("{phase}: {error}")))
+    .collect::<Vec<_>>();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(store(format!(
+            "SQLITE_CLOSE_FINALIZATION_FAILED: {}",
+            errors.join("; ")
+        )))
     }
 }
 
