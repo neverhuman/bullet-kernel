@@ -138,7 +138,7 @@ pub(super) fn assert_hostile_contract(directory: &Path, database: &Path) {
     use super::SqliteLedger;
     use std::os::unix::fs::{symlink, PermissionsExt};
 
-    linux::assert_policy_contract();
+    linux::assert_policy_contract(directory);
     let protected = directory.join("protected.sqlite3");
     let protected_bytes = b"preserve-authority-truth";
     std::fs::write(&protected, protected_bytes).unwrap();

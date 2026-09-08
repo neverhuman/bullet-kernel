@@ -8,6 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
+mod custody;
 mod preflight;
 
 const MAX_COMPONENTS: usize = 64;
@@ -68,6 +69,9 @@ pub(super) fn connection(path: &Path) -> Result<(Connection, Guard), LedgerError
     if let Err(error) = revalidate(&guard) {
         return Err(failure_with_cleanup(None, guard, error));
     }
+    // Without custody, even a newly created empty inode may belong to a peer.
+    // Preserve it on acquisition failure; cleanup requires our shared lock.
+    custody::acquire_shared(&guard.database)?;
     if let Err(error) = preflight::verify(&guard) {
         return Err(failure_with_cleanup(None, guard, error));
     }
@@ -479,7 +483,7 @@ pub(super) fn was_created(guard: &Guard) -> bool {
 }
 
 #[cfg(test)]
-pub(super) fn assert_policy_contract() {
+pub(super) fn assert_policy_contract(directory: &Path) {
     let euid = 1000;
     assert!(directory_policy(0, 0o755, false, euid));
     assert!(directory_policy(euid, 0o700, true, euid));
@@ -487,4 +491,5 @@ pub(super) fn assert_policy_contract() {
     assert!(!directory_policy(euid, 0o770, false, euid));
     assert!(!directory_policy(2000, 0o700, false, euid));
     assert!(!directory_policy(0, 0o700, true, euid));
+    custody::tests::assert_contract(directory);
 }
