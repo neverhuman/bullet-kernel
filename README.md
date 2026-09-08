@@ -1,9 +1,9 @@
 # bullet-kernel
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
-Product-surface claims and the CI inventory were last reviewed 2026-09-04
-against product subject `3fb9d8e`.
-<!-- bullet-doc-review:v1 subject=f8aa2b087a2fff064669ee136d25eb64ffad594e max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs -->
+Product-surface claims and the CI inventory were last reviewed 2026-09-08
+against product subject `7c2dfac8`.
+<!-- bullet-doc-review:v1 subject=7c2dfac8a6d55a4f5a94caf09a05b5484d160958 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,ops/ci/inventory.sh -->
 Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.
@@ -19,15 +19,15 @@ Evidence classes follow
 | `crates/harness-core`, `crates/harness-sim` | adapter trait, provider admission with two evidence-cleared blockers (`admission/`), PASETO v4.public launch-grant verifier (`launch_grant/`), lease-transport permit contract (`lease_transport.rs`), live-turn dispatch ports (`live/`), checkpoint-bound `PatchProposal` (`proposal.rs`), event envelope, argv/supervision gate, deterministic simulator |
 | `crates/harness-egress` | Linux user+net namespace, `slirp4netns` uplink, in-namespace nftables default-drop, host CONNECT proxy, sealed `EgressReceipt`; see [`docs/egress-isolation.md`](docs/egress-isolation.md) |
 | `crates/harness-{claude,codex,cursor,antigravity}` | fail-closed provider contract crates with bounded offline transcript/result subsets and one `LiveDispatcher` each |
-| `crates/runner` | component-testable attempt loop; the product CLI refuses before dispatch because no workload lease transport is admitted (see [`docs/architecture.md`](docs/architecture.md#runner--farmd-lease-admission-refusal)) |
+| `crates/runner` | component-testable attempt loop; the CLI requires explicit durable UDS lease and Candidate admission and selects only the simulator (see [`docs/architecture.md`](docs/architecture.md#runner--farmd-lease-admission-refusal)) |
 | `crates/verifier` | clean-room reconstruction and typed gate outcomes |
 | `crates/effects` | effect broker and state machine over `LocalBareForge`, plus a bounded durable `PENDING` → `OUTCOME_UNKNOWN` → `QUARANTINED` queue; the Jeryu adapter is a typed quarantine |
 | `crates/router`, `fusion`, `behavior`, `projections` | non-authoritative scaffolds: routing fallback, fusion, behaviour catalog, spec §25 `View`/`Surface` types; the served §25 projections live in `apps/bullet-farmd/src/projections/` |
 | `crates/mcp-mock`, `crates/test-simulation` | in-process mocks and harness tapes for the contract lane |
 | `apps/bullet-farmd` | loopback-only HTTP + SSE daemon; routes in the table below |
 | `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
-| `apps/bullet` | CLI: `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; every flag is in [`docs/cli.md`](docs/cli.md) |
-| `apps/bullet-runner` | fail-closed attempt runner; returns `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, filesystem, provider, or gitd activity |
+| `apps/bullet` | CLI: `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; command details are in [`docs/cli.md`](docs/cli.md) |
+| `apps/bullet-runner` | attempt runner with explicit peer/recovery and Candidate inputs; missing lease admission refuses, and the only selectable provider is `sim` |
 | `apps/bullet-verifier` | product verifier boundary; always returns the typed `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE` refusal without reading a job. The default-off `bullet-verifier-fixture` accepts unsigned fixture JSON only with `fixture-executor`; every fixture outcome is component-only, unsigned, non-independent, and transaction-gate-ineligible |
 | `apps/bullet-effects` | no-argument component demo over `LocalBareForge`; `serve <durable-queue-dir>` processes one UNKNOWN job only to `QUARANTINED`, never fabricated forge success |
 
@@ -70,10 +70,11 @@ gates the generated client against the complete OpenAPI document.
 <!-- bullet-farmd-route-table:v1:end -->
 
 No `/api/v1/leases/*` or `/api/v1/attempts/advance` route is mounted. Runner mutation
-RPC stays off the browser API. A signed UDS transport exists only behind farmd's
-debug-only fixture peer registration; the product `bullet-runner` still refuses
-with `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before farmd, workspace, provider,
-or Gitd activity because no durable workload peer registry is admitted.
+RPC stays off the browser API. farmd can load a protected durable peer registry
+and signing key; Runner pins the farmd UID and socket GID and retains acquire
+recovery in an explicit file. Missing lease inputs refuse with
+`LEASE_TRANSPORT_ADMISSION_UNAVAILABLE`. Candidate admission is also required,
+and serving dispatch selects only `sim`; no subscription Runner is qualified.
 
 ## Quick start
 
@@ -97,10 +98,11 @@ The current implementation supports the ext2/ext3/ext4 filesystem family and
 refuses other filesystems or exclusive-custody contention. Startup inspects a
 private snapshot, with a 1 GiB input/recovery bound, before writable SQLite can
 recover source journals. Authentic schema 22 returns `UPGRADE_REQUIRED`; it is
-never migrated during serving startup. Online backups use a read-only SQLite
-connection under the same shared custody, retained through publication and exact
-receipt read-back. Exclusive upgrades, prefix-aware upgrade backups, and external
-authority high-water enforcement remain unimplemented.
+never migrated during serving startup. Backups read an owned recovered private
+snapshot under the same source custody and preserve verified schema 22 or 23.
+Custody survives publication, exact receipt read-back and confirmed source close.
+Exclusive upgrades, durable backup/receipt retry and external authority high-water
+enforcement remain unimplemented.
 
 ## Offline maintenance
 
@@ -120,8 +122,10 @@ keys, and SQLite integrity before publishing an absent output; the thin CLI then
 creates its separate no-clobber receipt. The receipt binds physical bytes and
 integrity with BLAKE3; it is not signed and does not prove authenticity. A
 receipt-write failure can leave an unusable orphan snapshot. Restore verifies
-those exact bytes, advances the restore epoch, and publishes only to an absent
-destination. The result remains quarantined: normal Kernel open refuses it
+those exact bytes and the supported schema, preserves authority state, advances
+the restore epoch, and publishes only to an absent destination. Success requires
+read-back through a private verification snapshot; SQLite never opens the backup
+source or published output names. The result remains quarantined: normal Kernel open refuses it
 because no production authority admission operation exists. A directory-sync
 failure after publication is an unknown outcome with a complete destination
 possibly present. These are offline operator commands, not a live backup service
@@ -132,15 +136,16 @@ or an authority recovery procedure.
 Every lane is one script under `ops/ci/`, reachable as `just <lane>` or
 `bash scripts/ci-local.sh <lane>`.
 
-The exact 793-test inventory is disjoint: 747 standalone, three host-dependent
-egress, 34 contract, and nine family identities.
+The exact counts, filters and complete identity digests live in
+[`ops/ci/inventory.sh`](ops/ci/inventory.sh). Standalone, host-dependent egress,
+contract and family partitions must be complete and disjoint.
 
 | Lane | Command | Contents | Evidence class |
 | --- | --- | --- | --- |
-| fast | `just fast` | digest-bound 747-test standalone partition with all 747 executed and zero skipped, including explicitly feature-enabled verifier fixture tests; both Gitd binary variables are unset so product resolution fails closed | `COMPONENT_PROOF` |
+| fast | `just fast` | digest-bound standalone partition with every selected identity executed and zero skipped, including explicitly feature-enabled verifier fixture tests; both Gitd binary variables are unset so product resolution fails closed | `COMPONENT_PROOF` |
 | lint | `just lint` | fmt, Clippy, actionlint 1.7.8, ShellCheck 0.10.0, and inventory/workflow/observation/nightly meta-tests | hygiene gate; no evidence class |
 | contract | `just contract` | exactly 34 offline provider-protocol and simulation tests, executed once; no sibling daemon | `COMPONENT_PROOF` / `SYNTHETIC_PROOF` |
-| security | `just security` | gitleaks (no-git); `cargo deny fetch db` plus a lane-side freshness proof of the RustSec advisory database (refuses at 14 days); `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor --offline --no-ignores --strict-collection .`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails | hygiene gate; no evidence class |
+| security | `just security` | gitleaks (no-git); `cargo deny fetch db` plus a lane-side freshness proof of the RustSec advisory database (refuses at 14 days); `cargo deny --locked check licenses advisories bans sources` against the committed `deny.toml`; `zizmor --offline --no-ignores --strict-collection .github`; a missing tool, a missing `deny.toml`, or an absent/stale advisory database fails | hygiene gate; no evidence class |
 | docs | `just docs` | generated-contract drift, workspace rustdoc, and repository-relative Markdown links | hygiene gate; no evidence class |
 | required | `just check` | fast, lint, contract, security, and docs sequentially, exactly once | unsigned component observation only |
 | family | `BULLET_GITD_BIN=/canonical/absolute/bullet-gitd BULLET_GITD_SHA256=<lowercase-sha256> just family` | exactly nine connected family tests: five transaction-demo identities, three runner identities, and `synthetic_e2e`; missing, relative, non-canonical, non-executable, or digest-mismatched daemon subjects fail | family observation only; not registered until immutable family provisioning exists |
@@ -170,8 +175,8 @@ receipts. See [CI and test inventory](docs/testing.md).
 | Policy loader | v1alpha1 and v1alpha2 (ADR 0012 mirror); live admission is legal only at generation ≥ 2 with an active `provider-runner` key; the committed fixture is v1alpha1, generation 1, live disabled |
 | Launch-grant authority | Offline operator keygen and mint from the durable lease; the verifier binds lease, admission, policy, a single-use nonce, and the ledger's durable authority epoch/freeze generation; no admitted online operation advances those revisions |
 | Egress isolation | Linux-only namespace/nftables/CONNECT-proxy boundary with a sealed receipt; `just egress` on a capable host, else neutral 78 |
-| farmd projections | Five read-only §25 routes, each one atomic ledger snapshot with a sequence watermark; consumed by the Portal; never authority |
-| Runner ↔ farmd leases | Refused: product CLI constructs neither component client; the UDS predecessor binds both peers with `SO_PEERCRED` and socket identity, but registration is debug-fixture-only and acquire read-back metadata remains process-local |
+| farmd projections | Six read-only §25 routes, each one atomic ledger snapshot with a sequence watermark; consumed by the Portal; never authority |
+| Runner ↔ farmd leases | Explicit durable peer registry, signed UDS transport and file-backed acquire recovery; missing admission refuses; simulator dispatch only and no production profile receipt |
 | Exact five-plane transaction | A family-only component fixture exercises the roles; the product `bullet transaction --json` returns typed `ABSENT` with exit 2, and no `TRANSACTION_PROOF` exists |
 | Production | Not eligible; operator-ratified live policy, signed lease transport, durable authority epoch and budgets, online BulletGit authority, freeze, and restore admission are incomplete |
 

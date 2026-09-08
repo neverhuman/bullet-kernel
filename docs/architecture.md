@@ -1,9 +1,9 @@
 # Kernel architecture
 
-Last reviewed: 2026-08-26 against HEAD `3fb9d8e`. Every claim names the code
+Last reviewed: 2026-09-08 against HEAD `7c2dfac8`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
-<!-- bullet-doc-review:v1 subject=f8aa2b087a2fff064669ee136d25eb64ffad594e max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs -->
+<!-- bullet-doc-review:v1 subject=7c2dfac8a6d55a4f5a94caf09a05b5484d160958 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
 
 ## Ledger core
 
@@ -35,16 +35,19 @@ Until then, the online active-lease check is an observation only and unsigned
 authority stays refused.
 
 SQLite maintenance is an offline boundary. `bullet farm backup` uses SQLite's
-online backup API, validates exact schema, foreign keys, and integrity, then
-publishes an absent snapshot; the CLI separately writes an absent unsigned
+online backup API over an owned recovered private snapshot, validates authentic
+schema 22 or 23, foreign keys and integrity, then publishes an absent snapshot; the CLI separately writes an absent unsigned
 BLAKE3 receipt, so receipt failure may leave an unusable orphan snapshot.
 `bullet farm restore` admits the receipt-bound bytes through a bounded no-follow
-descriptor, advances the restore epoch, and no-clobber publishes an absent
-destination. That proves integrity and exact subject, not authenticity. A late
+descriptor, preserves the supported schema and authority state, advances the
+restore epoch, and no-clobber publishes an absent destination. It verifies the
+published quarantine through another private snapshot before reporting success. That proves integrity and exact subject, not authenticity. A late
 directory-sync failure has an `UNKNOWN` publication outcome with a complete
 destination possibly present. The restored database remains quarantined and
 normal ledger open fails until a future production authority operation admits
-its restore epoch.
+its restore epoch. Source custody and explicit source/restore close retain live
+handles on failure; exclusive upgrade, durable backup retry and external
+authority high-water admission remain open.
 
 ## Edge and contracts
 
@@ -78,9 +81,10 @@ tallies are `LabelCount` rows built by `count_labels` against a complete
 catalog: every catalog label is listed with its count, so a zero is explicit
 rather than absent, and observed labels outside the catalog are appended
 rather than dropped. An empty set is zero rows verified at a sequence, never a
-healthy default. The Portal's required lane consumes these five routes against
-a real farmd (component receipts Kernel `529bad1`, Portal `95108e3`); they are
-projections, never authority, and change no release decision. `crates/
+healthy default. Earlier Portal component receipts (Kernel `529bad1`, Portal
+`95108e3`) cover the five original routes and predate Context Lineage; they do
+not establish six-route coverage. The current six-route inventory comes from
+the source catalog. These projections change no authority or release decision. `crates/
 projections` holds only the §25 `View`/`Surface` types (a failed read is
 `unknown`, never an empty list) and stays non-gating.
 
@@ -341,8 +345,11 @@ transaction, so none supplies production Evidence or integration truth.
 ## Runner ↔ farmd lease admission refusal
 
 `apps/bullet-runner/src/main.rs` returns typed
-`LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` before it contacts farmd or touches the
-filesystem, provider, or gitd. The dormant unsigned `HttpLeaseClient` uses the
+`LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` when explicit lease inputs are absent or
+invalid. With an absolute socket/recovery path, farmd UID and socket GID it
+constructs `SignedLeaseRpcClient::new_admitted` and loads durable acquire recovery.
+The CLI separately admits the Candidate request digest and verification key, and
+its only selectable provider is `sim`. The dormant unsigned `HttpLeaseClient` uses the
 operator `/api/v1` prefix, but its lease and advance routes are deliberately not
 mounted and the product CLI never constructs it. This prevents a retired `/v1`
 response or a public browser route from being mistaken for workload authority.
@@ -364,10 +371,12 @@ path. `DirectLeaseClient` remains unsigned and test/embedded-only. A newer
 internal UDS predecessor keeps the signing key in farmd, persists grants/nonces,
 binds the connected Runner UID and registered Runner ID/epoch with `SO_PEERCRED`,
 and makes the client pin the farmd UID plus socket group/device/inode. Its
-registry is configurable only through a debug fixture, the client's acquire
-read-back metadata is process-local, and `bullet-runner` does not construct it.
-No public `/api/v1/leases` route is remounted, no production workload transport
-is admitted, and this closes no five-plane gate.
+registry and key can now be loaded from protected durable local files through
+`apps/bullet-farmd/src/main/launch.rs`; the debug fixture remains a separate path.
+The admitted client persists acquire intent/read-back metadata in its recovery
+file. farmd exits if the lease listener fails. These consumed components do not
+qualify production custody or a subscription Runner. No public `/api/v1/leases`
+route is remounted, and this closes no five-plane gate.
 
 ## Scaffolds
 
