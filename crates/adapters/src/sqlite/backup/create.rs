@@ -1,6 +1,6 @@
 //! Verified backup production with explicit admitted-source finalization.
-//! Authentic supported prefixes may be preserved. Their receipts do not grant
-//! serving or upgrade authority; ordinary restore still requires current schema.
+//! Authentic supported prefixes may be preserved. Restores of verified receipts
+//! remain quarantined and grant no serving or upgrade authority.
 
 use super::{
     digest_file, fail, force_single_file, migrations, open, phase, publish, receipt_mismatch,
