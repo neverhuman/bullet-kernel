@@ -1,0 +1,112 @@
+# Structured migration metadata for `db/migrations/`.
+#
+# This file declares the safety posture that already exists in code and tests.
+# It changes no migration byte: every file in this directory is `include_str!`ed
+# and checksummed by `crates/adapters/src/sqlite/migrations.rs`, so editing one
+# would break `verify_applied_migrations` on any existing database.
+
+schema_version = "1.0.0"
+engine = "sqlite"
+applies_to = "db/migrations/*.sql"
+
+[ownership]
+owner = "data"                    # agent/owner-map.json: `db/` -> data
+reviewer = "adapters"             # crates/adapters owns the runner and the tests
+# Standing approval rule, not a per-migration signature: a schema change is
+# approved only when the `data` owner lands it together with a passing
+# `crates/adapters/src/sqlite/migrations/tests.rs` and an unchanged
+# `schema_contract_digest()` expectation. There is no out-of-band approval path.
+approval = "owner `data` plus green migration contract tests; no other approver exists"
+
+[timeouts]
+# SQLite is embedded and single-writer, so PostgreSQL's `lock_timeout` and
+# `statement_timeout` GUCs do not exist here and setting them in SQL would be a
+# syntax error. The equivalent bound is applied by the adapter when it opens the
+# connection, not by the migration text:
+#   crates/adapters/src/sqlite/mod.rs -> conn.busy_timeout(Duration::from_millis(5_000))
+# so a writer that cannot take the database write lock fails after 5s with
+# SQLITE_BUSY instead of queueing indefinitely. WAL journal mode is set on the
+# same connection. This is the whole locking story for this engine.
+lock_timeout = "5s busy_timeout (SQLite write lock); PostgreSQL lock_timeout is not applicable to an embedded single-writer database"
+statement_timeout = "not applicable: SQLite has no statement_timeout; DDL here is bounded by the same 5s busy_timeout and by the exact, small migration set"
+engine_note = "no PostgreSQL server, no connection pool, no online DDL: the whole schema is applied in one transaction at first open"
+
+[rollback]
+# There is no down-migration and there deliberately never will be one pre-1.0.
+rollback = "restore the last verified backup: crates/adapters/src/sqlite/backup.rs takes an offline, receipt-bound copy (PRAGMA integrity_check plus schema_contract_digest) and restores it quarantined; a physically restored database refuses every operation with RESTORE_ADMISSION_REQUIRED until it is admitted"
+roll_forward = "add the next numbered migration; a database whose checksums no longer match the compiled set is refused by verify_existing rather than silently repaired"
+backup = "crates/adapters/src/sqlite/backup.rs (offline copy + receipt, schema_digest bound)"
+restore = "crates/adapters/src/sqlite/backup.rs restore path, quarantined until admission"
+
+[verification]
+# `has_verify_or_check_evidence` is satisfied by real, runnable proof.
+verify = "cargo nextest run -p bullet-adapters (crates/adapters/src/sqlite/migrations/tests.rs)"
+pre_check = "verify_unclaimed_pragmas + metadata_table_exists: a database with schema objects but no checksummed schema_version table is refused, never migrated over"
+post_check = "verify_metadata_schema, verify_applied_migrations, verify_product_schema, verify_foreign_key_integrity and identity::verify run on every open"
+check_artifact = "schema_contract_digest() over the exact migration set; it is embedded in every backup receipt"
+
+# Per-file notes for the statements the SQL detectors flag. Nothing here waives
+# a check: each entry names why the statement is what it is.
+[[migration]]
+file = "0002_authority.sql"
+destructive = "DROP TABLE IF EXISTS attempts"
+justification = "0001_ledger.sql creates a placeholder `attempts` table; 0002 replaces it with the typed authority shape in the same first-open transaction. The whole set runs in order on a fresh database, so the drop can only remove a table this same migration sequence created seconds earlier. It cannot reach a populated production table: verify_or_initialize refuses any pre-existing database that has schema objects without a checksummed schema_version table."
+data_loss = "none on the supported path (fresh initialize); a partially-migrated database is refused, not upgraded"
+
+[[migration]]
+file = "0004_event_time.sql"
+note = "ALTER TABLE events ADD COLUMN at TEXT; additive, nullable, no rewrite"
+
+[[migration]]
+file = "0005_lease_ttl.sql"
+note = "ALTER TABLE active_leases ADD COLUMN ttl_seconds with a CHECK bounding it to 1..=15; the same bound is enforced in the domain by DomainError::InvalidLeaseTtl"
+
+[[migration]]
+file = "0006_command_correlation.sql"
+note = "ALTER TABLE outbox ADD COLUMN command_id TEXT REFERENCES commands(id); additive, foreign keys verified by verify_foreign_key_integrity"
+
+[[migration]]
+file = "0013_nonce_ledger.sql"
+note = "Adds a normalized generic one-use nonce table; launch-grant and lease-transport nonce tables retain their distinct subject and expiry semantics"
+
+[[migration]]
+file = "0014_reservations.sql"
+note = "Adds the normalized budget-reservation predecessor table during the first-open transaction; no durable application write port or release authority is claimed"
+
+[[migration]]
+file = "0015_normalized_authority.sql"
+note = "Adds the singleton normalized-authority predecessor table during the first-open transaction; it is component schema only and does not replace the production authority store"
+
+[[migration]]
+file = "0016_predecessor_constraints.sql"
+destructive = "copies budget_reservations and authority_revisions into constrained replacement tables, drops the originals, then renames the replacements"
+justification = "0014 and 0015 create both source tables immediately beforehand in the same BEGIN IMMEDIATE first-open transaction. Existing checksummed databases are verified but never incrementally upgraded. Each copy is checked by its stricter destination schema before the corresponding source DROP; the enclosing transaction rolls every prior DDL statement back if a later copy or constraint fails. The replacement also installs componentwise monotonic authority counters, requires an authority-epoch advance for every scope-digest change, and forbids singleton deletion or replacement; it creates no durable application write port."
+data_loss = "none on the supported fresh-initialize path; a pre-existing, partial, future, or checksum-drifted schema is refused rather than rebuilt"
+
+[[migration]]
+file = "0017_mutation_authority.sql"
+note = "Adds normalized one-use mutation authority with a closed durable disposition machine; authority/freeze or restore-epoch movement atomically invalidates RESERVED rows and converts in-flight CONSUMED rows to UNKNOWN"
+
+[[migration]]
+file = "0018_mutation_permit_presentation.sql"
+note = "Refuses nonempty direct schema-17 prototype upgrades, binds reservations to every normalized authority field, and adds immutable exact signed-permit presentation before the sole RESERVED-to-CONSUMED transition; signature verification remains the harness boundary"
+
+[[migration]]
+file = "0019_candidate_preparation.sql"
+note = "Adds append-only Candidate-preparation source, signed-grant, and one-use consumption tables for fresh schema initialization; schema-18 databases remain unsupported and no production source-registration transport is connected"
+
+[[migration]]
+file = "0020_authority_scope_admission.sql"
+note = "Adds the append-only idempotency, exact generated grant bytes, normalized scope digest, previous/new authority epoch, and correlated audit-event binding for the sole scope-admission port; schema-19 databases remain unsupported"
+
+[[migration]]
+file = "0021_command_dispatch_claims.sql"
+note = "Adds durable exact request/outbox ownership by one registered Runner incarnation, response-loss read-back, authority/freeze/restore invalidation, and a closed CLAIMED-to-UNKNOWN component settlement; schema-20 databases remain unsupported"
+
+[[migration]]
+file = "0022_lease_transport_settlements.sql"
+note = "Adds append-only lease-transport settlement receipts with a stale-token refusal and exact settlement/outbox/event correlation; schema-21 databases remain unsupported"
+
+[[migration]]
+file = "0023_effect_recovery_claims.sql"
+note = "Adds restart-safe local-bare create-only Candidate-ref recovery claims with one active owner per intent, stale-owner invalidation, full normalized authority/freeze/restore and current-lease binding, DB-owned outbox/claim ordering, deterministic recovery receipt identity, and append-only triggers; schema-22 databases remain unsupported"

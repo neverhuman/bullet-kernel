@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://git.neverhuman.org/schemas/bullet-kernel-repair-queue.schema.json",
+  "title": "bullet-kernel Jankurai repair-queue artifact",
+  "description": "JSONL rows written by `ops/ci/audit.sh` to `.jankurai/repair-queue.jsonl`.",
+  "type": "object",
+  "required": ["path", "task"],
+  "properties": {
+    "path": { "type": "string" },
+    "task": { "type": "string" }
+  }
+}

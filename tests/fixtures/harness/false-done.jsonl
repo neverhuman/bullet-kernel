@@ -1,0 +1,5 @@
+{"seq":1,"kind":"session_start","ok":true}
+{"seq":2,"kind":"text","text":"working"}
+{"seq":3,"kind":"tool","name":"claim_done","ok":true}
+{"seq":4,"kind":"false_completion","ok":true,"authoritative":false}
+{"seq":5,"kind":"exit","code":0}

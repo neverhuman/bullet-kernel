@@ -1,0 +1,28 @@
+# Fail-closed source and supply-chain tools used by preflight, lint, and
+# security. The security lane needs network only to refresh RustSec; zizmor is
+# deliberately strict and offline. None of these diagnostics is release
+# authority or signed Bullet Evidence.
+schema_version = "1.0.0"
+release_state = "BLOCKED"
+release_authority = false
+enabled_tools = ["actionlint", "cargo-deny", "gitleaks", "shellcheck", "zizmor"]
+required_tools = ["actionlint", "cargo-deny", "gitleaks", "shellcheck", "zizmor"]
+advisory_tools = []
+
+[severity_thresholds]
+fail_lane_on = "high"
+
+[pins]
+actionlint = "1.7.8"
+cargo-deny = "0.19.8"
+gitleaks = "8.21.2"
+shellcheck = "0.10.0"
+zizmor = "1.25.2"
+
+[commands]
+zizmor = "zizmor --offline --no-ignores --strict-collection ."
+rustsec = "cargo deny --locked check licenses advisories bans sources"
+
+[network]
+security_lane = true
+zizmor = false

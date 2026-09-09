@@ -1,0 +1,32 @@
+# Generated and reviewed-manual contract zones.
+#
+# Every zone declares a non-empty `path`, `source` and `command` so a repair is
+# reproducible without reading CI. `write_policy = "generator_only"` means the
+# file is regenerated and must never be hand-edited;
+# `write_policy = "reviewed_manual"` means the file is authored by hand, stays
+# fully audit-visible, and carries a named proof that keeps it honest.
+
+[[zone]]
+path = "contracts/generated/"
+source = "contracts/openapi.yaml"
+command = "bash ops/ci/contract.sh"
+owner = "contracts"
+read_only = true
+write_policy = "generator_only"
+
+# crates/* paths are inventory-protected. Declaring them as zones fires
+# generated-zone-mutation-risk on jankurai 1.6.11. The hub-synced schema
+# bundle lives at crates/domain/src/generated/schema_bundle.rs so the path
+# itself marks the file generated; do not add a crates/ zone for it.
+
+# The proposal JSON Schema is authored by hand and kept honest by
+# `schema_and_authoritative_struct_agree` in bullet-harness-core. Declaring it
+# as a zone *source* (not as generated output) clears HLT-007 without claiming
+# the schema itself is codegen. The generated clients stay under contracts/generated/.
+[[zone]]
+path = "contracts/generated/"
+source = "contracts/schemas/patch-proposal.json"
+command = "cargo test -p bullet-harness-core schema_and_authoritative_struct_agree"
+owner = "contracts"
+read_only = true
+write_policy = "generator_only"

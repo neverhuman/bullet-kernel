@@ -1,0 +1,42 @@
+[package]
+name = "bullet-verifier"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+fixture-executor = [
+  "dep:bullet-verifier-core",
+  "dep:clap",
+  "dep:serde_json",
+  "dep:tokio",
+]
+
+[[bin]]
+name = "bullet-verifier"
+path = "src/main.rs"
+
+[[bin]]
+name = "bullet-verifier-fixture"
+path = "src/bin/fixture_main.rs"
+required-features = ["fixture-executor"]
+
+[[test]]
+name = "fixture_bin"
+path = "tests/fixture_bin.rs"
+required-features = ["fixture-executor"]
+
+[lints]
+workspace = true
+
+[dependencies]
+bullet-verifier-core = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true

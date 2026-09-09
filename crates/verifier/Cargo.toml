@@ -1,0 +1,22 @@
+[package]
+name = "bullet-verifier-core"
+description = "Independent verification plane: clean-room reconstruction, typed gate outcomes, exact-subject Evidence."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bullet-domain.workspace = true
+bullet-harness-core.workspace = true
+hex.workspace = true
+pasetors = { version = "=0.8.0", default-features = false, features = ["v4"] }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

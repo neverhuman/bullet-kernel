@@ -1,0 +1,19 @@
+# cargo-mutants baseline. Threshold admission is L-16b; this file only
+# names the first examined packages so a later CI lane has a pinned start.
+# Do not treat a local mutants run as a release receipt.
+
+examine = [
+  "crates/budgets",
+  "crates/application/src/nonce_ledger.rs",
+  "crates/effects/src/attest.rs",
+]
+
+exclude_globs = [
+  "apps/**",
+  "crates/harness-*/**",
+  "crates/mcp-mock/**",
+  "crates/test-simulation/**",
+]
+
+timeout_multiplier = 2.0
+output = "target/mutants"

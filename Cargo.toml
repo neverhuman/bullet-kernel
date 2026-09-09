@@ -1,0 +1,96 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/domain",
+  "crates/application",
+  "crates/adapters",
+  "crates/test-simulation",
+  "crates/harness-core",
+  "crates/harness-sim",
+  "crates/harness-claude",
+  "crates/harness-codex",
+  "crates/harness-cursor",
+  "crates/harness-antigravity",
+  "crates/harness-egress",
+  "crates/runner",
+  "crates/verifier",
+  "crates/effects",
+  "crates/behavior",
+  "crates/budgets",
+  "crates/router",
+  "crates/fusion",
+  "crates/mcp-mock",
+  "crates/adapters-postgres",
+  "crates/projections",
+  "apps/bullet-farmd",
+  "apps/bullet",
+  "apps/bullet-runner",
+  "apps/bullet-verifier",
+  "apps/bullet-effects",
+  "apps/bullet-attestor",
+  "apps/bullet-mcpd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.95"
+authors = ["Bullet Farm"]
+
+[workspace.dependencies]
+bullet-domain = { path = "crates/domain" }
+bullet-application = { path = "crates/application" }
+bullet-adapters = { path = "crates/adapters" }
+bullet-test-simulation = { path = "crates/test-simulation" }
+bullet-harness-core = { path = "crates/harness-core" }
+bullet-harness-sim = { path = "crates/harness-sim" }
+bullet-harness-claude = { path = "crates/harness-claude" }
+bullet-harness-codex = { path = "crates/harness-codex" }
+bullet-harness-cursor = { path = "crates/harness-cursor" }
+bullet-harness-antigravity = { path = "crates/harness-antigravity" }
+bullet-harness-egress = { path = "crates/harness-egress" }
+bullet-runner-core = { path = "crates/runner" }
+bullet-verifier-core = { path = "crates/verifier" }
+bullet-effects-core = { path = "crates/effects" }
+bullet-behavior = { path = "crates/behavior" }
+bullet-budgets = { path = "crates/budgets" }
+bullet-router = { path = "crates/router" }
+bullet-fusion = { path = "crates/fusion" }
+bullet-mcp-mock = { path = "crates/mcp-mock" }
+bullet-adapters-postgres = { path = "crates/adapters-postgres" }
+bullet-projections = { path = "crates/projections" }
+anyhow = "1"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["json", "macros"] }
+blake3 = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+hex = "0.4"
+libc = "0.2.189"
+proptest = "1"
+rmcp = { version = "=3.1.4", default-features = false, features = ["macros", "schemars", "server", "transport-io"] }
+rusqlite = { version = "=0.39.0", features = ["backup", "bundled", "fallible_uint"] }
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tempfile = "3"
+tokio-stream = "0.1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "process", "time", "io-util", "sync"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+getrandom = "0.3"
+unicode-normalization = "0.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "allow", priority = -1 }

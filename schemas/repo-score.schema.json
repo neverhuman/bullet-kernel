@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://git.neverhuman.org/schemas/bullet-kernel-repo-score.schema.json",
+  "title": "bullet-kernel Jankurai repo-score artifact",
+  "description": "Shape of `.jankurai/repo-score.json` written by `ops/ci/audit.sh`.",
+  "type": "object",
+  "required": ["score", "raw_score"],
+  "properties": {
+    "score": { "type": "integer" },
+    "raw_score": { "type": "integer" },
+    "caps_applied": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+[package]
+name = "bullet-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Enables the documented, test-only live-conformance seams (a live-admission
+# policy constructor and a no-op egress backend) plus the in-process lease
+# permit issuer used by transport simulations. Never enabled in production.
+test-seams = []
+# Links the real Claude probe executor into a production build. Default OFF, so
+# an ordinary `cargo build` is byte-identical in behaviour to before this
+# feature existed: `claude_probe` still refuses with RUNTIME_PROBE_UNAVAILABLE.
+# With the feature on, PROBE_EXECUTION can actually run, which is the structural
+# precondition for steps 8-18 of LiveStep::ALL ever executing outside cfg(test).
+#
+# Enabling it does NOT make a dogfood turn honest on its own: the probe still
+# prepares the ordinary provider proxy boundary, so its egress-denied label does
+# not by itself prove the proxy route was absent. Pair with an offline
+# no-share-net command mode before treating a probe as containment evidence.
+live-claude = ["dep:bullet-harness-claude"]
+# Production dogfood compose path. Distinct from live-claude so live-conformance
+# does not share this feature. The `bullet` bin enables it; ordinary lib builds do not.
+dogfood-claude = ["dep:bullet-harness-claude", "dep:bullet-harness-egress"]
+
+[dependencies]
+bullet-domain.workspace = true
+bullet-harness-core.workspace = true
+bullet-harness-claude = { workspace = true, optional = true }
+bullet-harness-egress = { workspace = true, optional = true }
+blake3.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+bullet-harness-claude.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+
+[[test]]
+name = "lease_transport"
+required-features = ["test-seams"]

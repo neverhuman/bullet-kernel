@@ -1,0 +1,17 @@
+[package]
+name = "bullet-router"
+description = "CognitiveTask classification, honest quota, replayable D0 dispatch."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bullet-domain.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

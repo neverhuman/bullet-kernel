@@ -1,0 +1,39 @@
+CREATE TABLE IF NOT EXISTS commands (
+  idempotency_key TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  payload_digest TEXT NOT NULL,
+  phase TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS graphs (
+  mission_id TEXT PRIMARY KEY,
+  body TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attempts (
+  id TEXT PRIMARY KEY,
+  body TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS candidates (
+  id TEXT PRIMARY KEY,
+  body TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evidence (
+  id TEXT PRIMARY KEY,
+  body TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS effects (
+  id TEXT PRIMARY KEY,
+  body TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  body TEXT NOT NULL
+);

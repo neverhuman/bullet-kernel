@@ -1,0 +1,39 @@
+[package]
+name = "bullet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+synthetic-dogfood = ["bullet-application/test-seams", "bullet-runner-core/test-seams"]
+
+[dependencies]
+bullet-adapters.workspace = true
+bullet-application = { workspace = true, features = ["dogfood-claude"] }
+bullet-domain.workspace = true
+bullet-effects-core.workspace = true
+bullet-harness-antigravity.workspace = true
+bullet-harness-claude.workspace = true
+bullet-harness-codex.workspace = true
+bullet-harness-core.workspace = true
+bullet-harness-cursor.workspace = true
+bullet-harness-egress.workspace = true
+bullet-harness-sim.workspace = true
+bullet-runner-core.workspace = true
+bullet-verifier-core.workspace = true
+chrono.workspace = true
+clap.workspace = true
+futures.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+rustix.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

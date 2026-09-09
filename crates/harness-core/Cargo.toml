@@ -1,0 +1,33 @@
+[package]
+name = "bullet-harness-core"
+description = "HarnessAdapter trait, capability negotiation, AgentEvent envelope, session states (spec s8, s18)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bullet-domain.workspace = true
+async-trait.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+futures.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+libc.workspace = true
+pasetors = { version = "=0.8.0", default-features = false, features = ["v4"] }
+rustix.workspace = true
+serde.workspace = true
+serde_jcs = "0.2"
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

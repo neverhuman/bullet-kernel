@@ -1,0 +1,85 @@
+# Jankurai tool adoption for bullet-kernel.
+#
+# `auto` keeps the auditor's own applicability detection; `disabled` records a
+# tool this component genuinely has no surface for. Hosted CI evidence is
+# deliberately absent for every entry: the installed jankurai 1.6.11 is a
+# machine-local path build, so the audit lane is a fail-closed local/release
+# gate (`ops/ci/audit.sh`) and no workflow may claim it ran. Adding a hosted job
+# that silently skipped would be a false green, which `ops/AGENTS.md` forbids.
+schema_version = "1.0.0"
+
+[[tools]]
+id = "audit-ci"
+mode = "auto"
+notes = "local only: bash ops/ci/audit.sh with the upward-only AUDIT_FLOOR ratchet"
+
+[[tools]]
+id = "proof-routing"
+mode = "auto"
+notes = "agent/test-map.json plus agent/proof-lanes.toml route every owned path"
+
+[[tools]]
+id = "proofbind"
+mode = "auto"
+notes = "run locally against a base ref; no hosted evidence is claimed"
+
+[[tools]]
+id = "proofmark-rust"
+mode = "auto"
+notes = "Rust semantic proof marking over the workspace crates; local only"
+
+[[tools]]
+id = "copy-code"
+mode = "auto"
+notes = "duplication triage is advisory here; the harness protocol crates share shape by design"
+
+[[tools]]
+id = "security"
+mode = "auto"
+notes = "the executable lane is ops/ci/security.sh via tools/security-lane.sh: gitleaks, cargo-deny licenses/advisories/bans/sources, zizmor"
+
+[[tools]]
+id = "ci-bad-behavior"
+mode = "auto"
+
+[[tools]]
+id = "git-bad-behavior"
+mode = "auto"
+
+[[tools]]
+id = "release-bad-behavior"
+mode = "auto"
+
+[[tools]]
+id = "db-migration-analyze"
+mode = "auto"
+notes = "db/migrations/meta.toml carries the ownership, timeout, rollback and verification posture; the runner is crates/adapters/src/sqlite/migrations.rs"
+
+[[tools]]
+id = "contract-drift"
+mode = "auto"
+notes = "contracts/generated is regenerated from contracts/openapi.yaml and proved by bash ops/ci/contract.sh"
+
+[[tools]]
+id = "rust-witness"
+mode = "auto"
+
+[[tools]]
+id = "authz-matrix"
+mode = "auto"
+notes = "authorization is a single fail-closed authority gateway plus lease fences, not a tenant matrix; the invariants live in crates/domain/tests/invariants.rs"
+
+[[tools]]
+id = "agent-tool-supply"
+mode = "auto"
+notes = "agent/security-policy.toml pins the lane tools; no ZYAL runbook exists here (see agent/JANKURAI_STANDARD.md)"
+
+[[tools]]
+id = "release-readiness"
+mode = "auto"
+notes = "docs/release.md and CHANGELOG.md record that no release exists yet"
+
+[[tools]]
+id = "cost-budget"
+mode = "disabled"
+notes = "no paid or metered operation: every lane is local and offline, and agent/audit-policy.toml enumerates cost_surface = []"

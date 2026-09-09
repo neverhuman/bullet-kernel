@@ -1,0 +1,27 @@
+[package]
+name = "bullet-mcpd"
+description = "Read-only stdio MCP adapter for Bullet Farm Kernel projections"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.95"
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bullet-domain.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+bullet-adapters.workspace = true
+bullet-application.workspace = true
+bullet-farmd = { path = "../bullet-farmd" }
+tempfile.workspace = true

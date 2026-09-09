@@ -1,0 +1,74 @@
+# Prepared Jeryu-native graph. Every job refuses with exit 78 until forge,
+# runner, and protected-context authority are ratified and read back. This file
+# registers nothing and every executable lane remains the same local script.
+
+[[job]]
+id = "activation"
+name = "prepared activation refusal"
+runner_class = "native-rust-clean"
+run = ["bash ops/ci/jeryu-activation-gate.sh"]
+cache_mounts = []
+artifact_paths = []
+
+[[job]]
+id = "preflight"
+name = "prepared source admission"
+runner_class = "native-rust-clean"
+needs = ["activation"]
+run = ["bash ops/ci/jeryu-activation-gate.sh", "bash scripts/ci-local.sh preflight"]
+cache_mounts = []
+artifact_paths = []
+
+[[job]]
+id = "fast"
+name = "fast"
+runner_class = "native-rust-clean"
+needs = ["preflight"]
+run = ["bash ops/ci/jeryu-activation-gate.sh", "bash scripts/ci-local.sh fast"]
+cache_mounts = []
+artifact_paths = [".ci-artifacts/junit/fast.xml"]
+
+[[job]]
+id = "lint"
+name = "lint"
+runner_class = "native-rust-clean"
+needs = ["preflight"]
+run = ["bash ops/ci/jeryu-activation-gate.sh", "bash scripts/ci-local.sh lint"]
+cache_mounts = []
+artifact_paths = []
+
+[[job]]
+id = "contract"
+name = "contract"
+runner_class = "native-rust-clean"
+needs = ["preflight"]
+run = ["bash ops/ci/jeryu-activation-gate.sh", "bash scripts/ci-local.sh contract"]
+cache_mounts = []
+artifact_paths = [".ci-artifacts/junit/contract.xml"]
+
+[[job]]
+id = "security"
+name = "security"
+runner_class = "native-rust-clean"
+needs = ["preflight"]
+run = ["bash ops/ci/jeryu-activation-gate.sh", "bash scripts/ci-local.sh security"]
+cache_mounts = []
+artifact_paths = []
+
+[[job]]
+id = "docs"
+name = "docs"
+runner_class = "native-rust-clean"
+needs = ["preflight"]
+run = ["bash ops/ci/jeryu-activation-gate.sh", "bash scripts/ci-local.sh docs"]
+cache_mounts = []
+artifact_paths = []
+
+[[job]]
+id = "required"
+name = "prepared CI / required convergence refusal"
+runner_class = "native-rust-clean"
+needs = ["preflight", "fast", "lint", "contract", "security", "docs"]
+run = ["bash ops/ci/jeryu-activation-gate.sh"]
+cache_mounts = []
+artifact_paths = []

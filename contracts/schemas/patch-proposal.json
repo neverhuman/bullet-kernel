@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bullet.farm/schemas/patch-proposal.json",
+  "title": "PatchProposal",
+  "description": "A schema-1, attempt- and checkpoint-bound whole-file proposal. Model narrative is non-authoritative and is omitted from BulletGit requests.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "proposal_id", "producing_attempt_id", "base_checkpoint_id", "base_checkpoint_digest", "operations", "gate_ids"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "proposal_id": { "type": "string", "pattern": "^cnt_[0-9a-f]{64}$" },
+    "producing_attempt_id": { "type": "string", "pattern": "^atm_[0-9a-f]{64}$" },
+    "base_checkpoint_id": { "type": "string", "pattern": "^ckp_[0-9a-f]{64}$" },
+    "base_checkpoint_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "preimage", "mutation"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "preimage": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind"],
+                "properties": { "kind": { "const": "absent" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "digest"],
+                "properties": {
+                  "kind": { "const": "digest" },
+                  "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                }
+              }
+            ]
+          },
+          "mutation": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "content_utf8"],
+                "properties": {
+                  "kind": { "const": "write" },
+                  "content_utf8": { "type": "string", "maxLength": 1048576 }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind"],
+                "properties": { "kind": { "const": "delete" } }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "gate_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^gat_[0-9a-f]{64}$" }
+    },
+    "intent_summary": { "type": "string", "maxLength": 4096, "description": "Non-authoritative model narrative." },
+    "claims": { "type": "array", "maxItems": 128, "items": { "type": "string", "maxLength": 4096 }, "description": "Non-authoritative model claims; never evidence." },
+    "uncertainties": { "type": "array", "maxItems": 128, "items": { "type": "string", "maxLength": 4096 }, "description": "Non-authoritative model uncertainty." },
+    "done": { "type": "boolean", "description": "Non-authoritative model opinion; gates decide." }
+  }
+}

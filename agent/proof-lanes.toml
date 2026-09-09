@@ -1,0 +1,250 @@
+# Canonical Kernel proof-lane registry. Every accepted `scripts/ci-local.sh`
+# name has one record, including compatibility aliases. Each purpose begins
+# with validator-bound execution facts. No entry is release authority.
+
+[[lane]]
+name = "required"
+command = "bash scripts/ci-local.sh required"
+purpose = "scope=standalone; scheduled=false; hosted_required=false; jeryu=prepared-inactive; release_authority=false; release_state=BLOCKED; local sequential convergence; hosted CI converges atomic observations instead"
+command_id = "lane.required"
+kind = "validation"
+cost = 50
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK", "HLT-009-GENERATED-SECURITY", "HLT-010-SECRET-SPRAWL", "HLT-016-SUPPLY-CHAIN-DRIFT", "HLT-020-CI-HARDENING-GAP"]
+required_artifacts = [".ci-artifacts/junit/fast.xml", ".ci-artifacts/junit/contract.xml"]
+timeout_seconds = 3600
+requires_network = true
+destructive = false
+
+[[lane]]
+name = "fast"
+command = "just fast"
+purpose = "scope=standalone; scheduled=false; hosted_required=true; jeryu=prepared-inactive; release_authority=false; release_state=BLOCKED; deterministic fast lane with an exact nonzero standalone component partition and sanitized JUnit"
+command_id = "lane.fast"
+kind = "validation"
+cost = 20
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = [".ci-artifacts/junit/fast.xml"]
+timeout_seconds = 1800
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "lint"
+command = "bash scripts/ci-local.sh lint"
+purpose = "scope=standalone; scheduled=false; hosted_required=true; jeryu=prepared-inactive; release_authority=false; release_state=BLOCKED; format, Clippy, pinned source-policy tools, and hostile CI metadata checks"
+command_id = "lane.lint"
+kind = "validation"
+cost = 20
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK", "HLT-020-CI-HARDENING-GAP", "HLT-034-CI-BAD-BEHAVIOR", "HLT-042-CI-LOCAL-PARITY"]
+required_artifacts = []
+timeout_seconds = 1800
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "contract"
+command = "bash scripts/ci-local.sh contract"
+purpose = "scope=standalone; scheduled=false; hosted_required=true; jeryu=prepared-inactive; release_authority=false; release_state=BLOCKED; exact nonzero offline provider-contract and simulation partition"
+command_id = "lane.contract"
+kind = "validation"
+cost = 15
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-007-HANDWRITTEN-CONTRACT", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = [".ci-artifacts/junit/contract.xml"]
+timeout_seconds = 900
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "security"
+command = "bash scripts/ci-local.sh security"
+purpose = "scope=standalone; scheduled=true; hosted_required=true; jeryu=prepared-inactive; release_authority=false; release_state=BLOCKED; current-source secrets, fresh RustSec policy, and strict offline workflow audit"
+command_id = "lane.security"
+kind = "security"
+cost = 20
+rules_covered = ["HLT-009-GENERATED-SECURITY", "HLT-010-SECRET-SPRAWL", "HLT-016-SUPPLY-CHAIN-DRIFT", "HLT-020-CI-HARDENING-GAP", "HLT-024-AGENT-TOOL-SUPPLY-GAP"]
+required_artifacts = []
+timeout_seconds = 1800
+requires_network = true
+destructive = false
+
+[[lane]]
+name = "docs"
+command = "bash scripts/ci-local.sh docs"
+purpose = "scope=standalone; scheduled=false; hosted_required=true; jeryu=prepared-inactive; release_authority=false; release_state=BLOCKED; generated-contract freshness, warning-denied rustdoc, and relative links"
+command_id = "lane.docs"
+kind = "validation"
+cost = 20
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-007-HANDWRITTEN-CONTRACT"]
+required_artifacts = []
+timeout_seconds = 1800
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "family"
+command = "bash scripts/ci-local.sh family"
+purpose = "scope=family; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; nine connected tests against the Hub-supplied absolute digest-bound bullet-gitd"
+command_id = "lane.family"
+kind = "validation"
+cost = 15
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = [".ci-artifacts/junit/family.xml"]
+timeout_seconds = 900
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "faults"
+command = "bash scripts/ci-local.sh faults"
+purpose = "scope=standalone; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; exact 13-test component sampler under wrapper-owned private Cargo-target custody; no release fault receipt"
+command_id = "lane.faults"
+kind = "validation"
+cost = 20
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK", "HLT-020-CI-HARDENING-GAP"]
+required_artifacts = [".ci-artifacts/junit/faults.xml"]
+timeout_seconds = 1800
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "preflight"
+command = "bash scripts/ci-local.sh preflight"
+purpose = "scope=standalone; scheduled=true; hosted_required=true; jeryu=prepared-inactive; release_authority=false; release_state=BLOCKED; source and lockfile admission before project dependency installation"
+command_id = "lane.preflight"
+kind = "security"
+cost = 5
+rules_covered = ["HLT-010-SECRET-SPRAWL", "HLT-016-SUPPLY-CHAIN-DRIFT", "HLT-020-CI-HARDENING-GAP"]
+required_artifacts = []
+timeout_seconds = 300
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "links"
+command = "bash scripts/ci-local.sh links"
+purpose = "scope=standalone; scheduled=true; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; scheduled external-link diagnostic over a nonempty Markdown inventory"
+command_id = "lane.links"
+kind = "analysis"
+cost = 5
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = []
+timeout_seconds = 900
+requires_network = true
+destructive = false
+
+[[lane]]
+name = "coverage"
+command = "bash scripts/ci-local.sh coverage"
+purpose = "scope=standalone; scheduled=true; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; scheduled coverage diagnostic over the exact standalone partition"
+command_id = "lane.coverage"
+kind = "analysis"
+cost = 25
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = [".ci-artifacts/coverage/summary.json"]
+timeout_seconds = 1800
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "history-secrets"
+command = "bash scripts/ci-local.sh history-secrets"
+purpose = "scope=standalone; scheduled=true; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; scheduled full-history gitleaks diagnostic requiring a non-shallow checkout"
+command_id = "lane.history-secrets"
+kind = "security"
+cost = 10
+rules_covered = ["HLT-010-SECRET-SPRAWL"]
+required_artifacts = []
+timeout_seconds = 900
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "portable-refusal"
+command = "bash scripts/ci-local.sh portable-refusal"
+purpose = "scope=standalone; scheduled=true; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; scheduled macOS and Windows compile plus typed pre-spawn refusal"
+command_id = "lane.portable-refusal"
+kind = "validation"
+cost = 25
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK", "HLT-020-CI-HARDENING-GAP"]
+required_artifacts = []
+timeout_seconds = 1800
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "nightly"
+command = "bash scripts/ci-local.sh nightly"
+purpose = "scope=operator-local; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; unregistered live-provider entrypoint where neutral exit 78 is never success"
+command_id = "lane.nightly"
+kind = "validation"
+cost = 50
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK", "HLT-024-AGENT-TOOL-SUPPLY-GAP", "HLT-026-COST-BUDGET-GAP"]
+required_artifacts = []
+timeout_seconds = 3600
+requires_network = true
+destructive = false
+
+[[lane]]
+name = "audit"
+command = "bash scripts/ci-local.sh audit"
+purpose = "scope=operator-local; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; local Jankurai score ratchet and repair artifacts"
+command_id = "lane.audit"
+kind = "audit"
+cost = 10
+rules_covered = ["HLT-004-UNMAPPED-PROOF"]
+required_artifacts = [".jankurai/repo-score.json", ".jankurai/repo-score.md"]
+timeout_seconds = 900
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "egress"
+command = "bash scripts/ci-local.sh egress"
+purpose = "scope=operator-local; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; host-admitted namespace isolation probes where unavailable capability is neutral 78"
+command_id = "lane.egress"
+kind = "validation"
+cost = 25
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK", "HLT-020-CI-HARDENING-GAP"]
+required_artifacts = []
+timeout_seconds = 1800
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "toolchain-msrv"
+command = "bash scripts/ci-local.sh toolchain-msrv"
+purpose = "scope=operator-local; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; offline Rust 1.95.0 machine observation that is never a receipt or release gate"
+command_id = "lane.toolchain-msrv"
+kind = "validation"
+cost = 50
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK", "HLT-016-SUPPLY-CHAIN-DRIFT"]
+required_artifacts = [".bullet-family/toolchain-1.95.0-bullet-kernel.json"]
+timeout_seconds = 7200
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "gates"
+command = "bash scripts/ci-local.sh gates"
+purpose = "scope=alias; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; compatibility alias for required with the identical exit status"
+command_id = "lane.gates"
+kind = "validation"
+cost = 50
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = [".ci-artifacts/junit/fast.xml", ".ci-artifacts/junit/contract.xml"]
+timeout_seconds = 3600
+requires_network = true
+destructive = false
+
+[[lane]]
+name = "all"
+command = "bash scripts/ci-local.sh all"
+purpose = "scope=alias; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; default compatibility alias for required with the identical exit status"
+command_id = "lane.all"
+kind = "validation"
+cost = 50
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = [".ci-artifacts/junit/fast.xml", ".ci-artifacts/junit/contract.xml"]
+timeout_seconds = 3600
+requires_network = true
+destructive = false

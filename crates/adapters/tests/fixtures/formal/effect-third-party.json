@@ -1,0 +1,1 @@
+{"model":"EffectCheck","schema_version":"v1alpha1","steps":[{"action":"persist_effect_intent","expected":"intent","remote":"none"},{"action":"dispatch_effect_timeout","expected":"unknown","remote":"none"},{"action":"third_party_effect","expected":"unknown","remote":"third_party"},{"action":"readback_effect","expected":"orphaned_remote","remote":"third_party"}]}

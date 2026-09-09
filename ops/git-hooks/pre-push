@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Mandatory local pre-push gate. Wire it once with:
+#   git config core.hooksPath ops/git-hooks
+# It runs the same deterministic fast lane CI runs, so a push cannot be the
+# first place a failure shows up. It never exits 0 on a skipped or missing step.
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+exec bash "$repo_root/ops/ci/fast.sh"

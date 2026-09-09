@@ -1,0 +1,301 @@
+{
+  "workspace": "bullet-kernel",
+  "tests": {
+    "crates/domain/": {
+      "command": "cargo test -p bullet-domain",
+      "purpose": "prove IDs, tokens, observations, and transitions"
+    },
+    "crates/application/": {
+      "command": "cargo test -p bullet-application",
+      "purpose": "prove materializer, leases, and demo scenario"
+    },
+    "crates/budgets/": {
+      "command": "cargo test -p bullet-budgets",
+      "purpose": "prove in-memory reservation conservation, lifetime identity, overflow refusal, and retained unknown liability"
+    },
+    "crates/adapters/": {
+      "command": "cargo test -p bullet-adapters",
+      "purpose": "prove SQLite ledger and simulators"
+    },
+    "apps/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "prove app binaries and component tests in the standalone partition; connected family sources have exact overrides"
+    },
+    "apps/bullet/tests/synthetic_e2e.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the connected synthetic scaffold with an explicitly admitted digest-bound Gitd subject"
+    },
+    "apps/bullet/tests/transaction_demo.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove all five connected transaction-demo identities with an explicitly admitted digest-bound Gitd subject"
+    },
+    "apps/bullet-mcpd/": {
+      "command": "cargo test -p bullet-mcpd",
+      "purpose": "prove the bounded read-only MCP lifecycle, exact farmd snapshots, and authority-negative inventory"
+    },
+    "apps/bullet-farmd/build.rs": {
+      "command": "cargo test -p bullet-farmd --test portal_bundle",
+      "purpose": "prove the optional Portal embedding verifies a pre-built bundle before staging; the packaged browser lane is bullet-portal ops/ci/packaged-farmd.sh"
+    },
+    "apps/bullet-farmd/build/": {
+      "command": "cargo test -p bullet-farmd --test portal_bundle",
+      "purpose": "prove the bundle manifest verifier reproduces the bullet-portal generator and refuses drift, extra entries, and symlinks"
+    },
+    "apps/bullet-farmd/src/api/portal.rs": {
+      "command": "BULLET_PORTAL_DIST=<absolute built bullet-portal dist> cargo test -p bullet-farmd --features embedded-portal --test portal_routes",
+      "purpose": "prove same-origin static serving, cache headers, and that bootstrap/session/CSRF/origin rules are unchanged"
+    },
+    "apps/bullet-farmd/src/api/routes.rs": {
+      "command": "bash scripts/ci-local.sh docs",
+      "purpose": "prove the static route catalog constructs farmd and exactly projects README method/path/OpenAPI membership"
+    },
+    "contracts/": {
+      "command": "cargo run -q -p bullet -- contracts check",
+      "purpose": "prove generated client matches OpenAPI"
+    },
+    "ops/": {
+      "command": "just check",
+      "purpose": "verify local CI parity"
+    },
+    "scripts/": {
+      "command": "bash scripts/ci-local.sh lint",
+      "purpose": "verify local and hosted entrypoints, observation schema, and ShellCheck policy"
+    },
+    "docs/": {
+      "command": "bash scripts/ci-local.sh docs",
+      "purpose": "verify contract drift, rustdoc, and repository-relative documentation links"
+    },
+    "ci.toml": {
+      "command": "bash ops/ci/workflow-policy.sh",
+      "purpose": "verify inactive Jeryu jobs stay forge-neutral and route to local lane scripts"
+    },
+    "tests/": {
+      "command": "cargo test -p bullet-test-simulation",
+      "purpose": "prove harness tapes stay non-authoritative"
+    },
+    ".github/": {
+      "command": "bash scripts/ci-local.sh lint",
+      "purpose": "prove hosted lanes, immutable action pins, triggers, and protected aggregation policy"
+    },
+    "crates/harness-core/": {
+      "command": "cargo test -p bullet-harness-core -p bullet-harness-sim",
+      "purpose": "prove adapter trait, capability matrix, and simulator conformance"
+    },
+    "crates/harness-core/tests/candidate_execution_envelope.rs": {
+      "command": "cargo test -p bullet-harness-core --test candidate_execution_envelope",
+      "purpose": "prove exact ordered execution-tool and environment bindings for Candidate preparation"
+    },
+    "crates/application/tests/authority_scope.rs": {
+      "command": "cargo test -p bullet-application --test authority_scope",
+      "purpose": "prove ScopeGrant schema closure, exact revision/envelope bounds, hostile path refusal, command identity, and the shared ordered-path digest"
+    },
+    "crates/adapters/tests/authority_scope.rs": {
+      "command": "cargo test -p bullet-adapters --test authority_scope",
+      "purpose": "prove atomic durable ScopeGrant admission, exact replay across restart, rollback, stale/freeze refusal, and backup identity"
+    },
+    "crates/adapters/tests/candidate_preparation.rs": {
+      "command": "cargo test -p bullet-adapters --test candidate_preparation",
+      "purpose": "prove atomic durable Candidate-grant issuance, replay, rollback, schema refusal, and nonce consumption"
+    },
+    "apps/bullet-farmd/tests/candidate_preparation_rpc.rs": {
+      "command": "cargo test -p bullet-farmd --test candidate_preparation_rpc",
+      "purpose": "prove peer-authenticated bounded workload-UDS Candidate authority/source/issuance/read-back, exact replay and restart, and typed hostile refusal"
+    },
+    "apps/bullet-farmd/tests/kernel_authority_candidate.rs": {
+      "command": "cargo test -p bullet-farmd --test kernel_authority_candidate",
+      "purpose": "prove prepare-candidate final check authenticates and exactly matches durable schema-19 grant truth, then consumes its nonce once across restart"
+    },
+    "crates/harness-claude/": {
+      "command": "cargo test -p bullet-harness-claude",
+      "purpose": "prove Claude adapter parsing and argv guardrails"
+    },
+    "crates/harness-codex/": {
+      "command": "cargo test -p bullet-harness-codex",
+      "purpose": "prove Codex adapter parsing and argv guardrails"
+    },
+    "crates/harness-cursor/": {
+      "command": "cargo test -p bullet-harness-cursor",
+      "purpose": "prove Cursor adapter parsing and argv guardrails"
+    },
+    "crates/harness-antigravity/": {
+      "command": "cargo test -p bullet-harness-antigravity",
+      "purpose": "prove agy text adapter and Unsupported capability gating"
+    },
+    "crates/harness-egress/": {
+      "command": "cargo test -p bullet-harness-egress && bash ops/ci/egress.sh",
+      "purpose": "prove allowlist/proxy/receipt units, then live namespace egress isolation (neutral 78 without tools)"
+    },
+    "crates/runner/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "prove Runner components, including sealed Gitd binary admission, in the standalone partition; connected family sources have exact overrides"
+    },
+    "ops/ci/faults.sh": {
+      "command": "bash scripts/ci-local.sh faults",
+      "purpose": "pin and execute 13 already-inventoried component boundary identities under private-target custody, including the six-process SQLite/local-bare recovery matrix parent; release.fault-suite remains blocked"
+    },
+    "ops/ci/proof-transaction-offline.sh": {
+      "command": "BULLET_GITD_BIN=<absolute admitted binary> BULLET_GITD_SHA256=<exact lowercase digest> bash ops/ci/proof-transaction-offline.sh",
+      "purpose": "repeat the connected offline component bridge and retain its strict unsigned fixture receipt; this does not provide independent transaction or release evidence"
+    },
+    "ops/ci/proof-transaction-offline-test.sh": {
+      "command": "bash ops/ci/proof-transaction-offline-test.sh",
+      "purpose": "prove hostile Gitd, digest, output-directory, and Cargo-target CLI subjects refuse before Cargo or output mutation, while pinning offline locked builds and component-only receipt guards"
+    },
+    "ops/ci/proof-synthetic-dogfood.sh": {
+      "command": "BULLET_GITD_BIN=<absolute admitted binary> BULLET_GITD_SHA256=<exact lowercase digest> bash ops/ci/proof-synthetic-dogfood.sh",
+      "purpose": "repeat two isolated simulator Candidates, blinded non-quality selection, sealed winner, exact retained-origin replay, fresh successor-fence effect authority, fixture verification, local delivery/check/protected-integration/observation closure, ten named and five ordinary-chaos cells including both post-acquire grant-readback cleanup paths, and two create-once unsigned component receipts with every higher eligibility hard-false"
+    },
+    "ops/ci/proof-synthetic-dogfood-test.sh": {
+      "command": "bash ops/ci/proof-synthetic-dogfood-test.sh",
+      "purpose": "prove credential, Gitd, digest, and Cargo-target subjects refuse before Cargo and pin exact locked farmd/app/verifier builds, inherited verifier admission, two-receipt custody, fault ordering, selected effect closure, and hard-false eligibility guards"
+    },
+    "ops/ci/nextest-groups-test.sh": {
+      "command": "bash ops/ci/nextest-groups-test.sh",
+      "purpose": "prove the fast profile serializes exactly the 21 SQLite migration/schema-identity tests without widening timeouts or reducing coverage"
+    },
+    "ops/ci/proof-custody-test.sh": {
+      "command": "bash ops/ci/proof-custody-test.sh",
+      "purpose": "prove standalone and inherited CI proof custody, including explicit removal of an outer admitted Cargo target before the standalone fixture"
+    },
+    "crates/runner/tests/heartbeat_stale.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the connected stale-heartbeat identity with an explicitly admitted digest-bound Gitd subject"
+    },
+    "crates/runner/tests/kill_retry.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the connected successor-fence identity with an explicitly admitted digest-bound Gitd subject"
+    },
+    "crates/runner/tests/loop_sim.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the connected production-authority refusal identity with an explicitly admitted digest-bound Gitd subject"
+    },
+    "crates/runner/tests/support/mod.rs": {
+      "command": "bash scripts/ci-local.sh family",
+      "purpose": "prove the shared connected Runner fixture only under the admitted digest-bound Gitd family lane"
+    },
+    "crates/verifier/": {
+      "command": "cargo test -p bullet-verifier-core",
+      "purpose": "prove clean reconstruction and typed gate outcomes"
+    },
+    "crates/effects/": {
+      "command": "cargo test -p bullet-effects-core",
+      "purpose": "prove effect state machine and OUTCOME_UNKNOWN reconciliation"
+    },
+    "crates/behavior/": {
+      "command": "cargo test -p bullet-behavior",
+      "purpose": "prove the \u00a717 planned catalog and non-authoritative detector scaffolds"
+    },
+    "crates/router/": {
+      "command": "cargo test -p bullet-router",
+      "purpose": "prove replayable T0 fallback and honest unknown-quota abstention"
+    },
+    "crates/fusion/": {
+      "command": "cargo test -p bullet-fusion",
+      "purpose": "prove deterministic non-gating struggle/fusion scaffolding"
+    },
+    "crates/mcp-mock/": {
+      "command": "cargo test -p bullet-mcp-mock",
+      "purpose": "prove in-repo MCP mocks never leave the process"
+    },
+    "crates/adapters-postgres/": {
+      "command": "cargo test -p bullet-adapters-postgres",
+      "purpose": "prove future team-mode configuration never connects in required CI"
+    },
+    "crates/projections/": {
+      "command": "cargo test -p bullet-projections",
+      "purpose": "prove \u00a725 surfaces fail to unknown, not empty"
+    },
+    "README.md": {
+      "command": "bash scripts/ci-local.sh docs",
+      "purpose": "prove the generated farmd route table and every repository-relative documentation link"
+    },
+    "AGENTS.md": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "agent entrypoint; the fast lane proves the commands it names"
+    },
+    "SPLIT.md": {
+      "command": "bash scripts/ci-local.sh required",
+      "purpose": "split-family contract; the required lane is the check it names"
+    },
+    "Justfile": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "command surface; every recipe delegates to scripts/ci-local.sh"
+    },
+    ".gitignore": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "local-state exclusions; the fast lane proves the tree still builds"
+    },
+    "LICENSE": {
+      "command": "test -s LICENSE",
+      "purpose": "license text; no executable proof"
+    },
+    "CLAUDE.md": {
+      "command": "bash ops/ci/docs.sh",
+      "purpose": "thin Claude adapter; it only points at AGENTS.md"
+    },
+    "schemas/": {
+      "command": "bash ops/ci/audit.sh",
+      "purpose": "auditor artifact schemas aligned with ops/ci/audit.sh"
+    },
+    "agent/": {
+      "command": "bash ops/ci/audit.sh",
+      "purpose": "Jankurai metadata; the audit lane validates it"
+    },
+    ".config/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "nextest profiles used by every lane"
+    },
+    ".config/nextest.toml": {
+      "command": "bash ops/ci/nextest-groups-test.sh",
+      "purpose": "prove the fast-only max-one SQLite migration group expands to exactly its reviewed identities while retaining the frozen timeout"
+    },
+    "Cargo.toml": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "workspace manifest"
+    },
+    "Cargo.lock": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "locked dependency graph"
+    },
+    "mutants.toml": {
+      "command": "bash scripts/ci-local.sh lint",
+      "purpose": "prove mutation configuration is structurally routed; this command does not run mutants or provide mutation-score evidence"
+    },
+    "db/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "SQLite migrations applied by the adapters tests"
+    },
+    "CHANGELOG.md": {
+      "command": "bash scripts/ci-local.sh docs",
+      "purpose": "release notes; docs lane proves repository-relative links"
+    },
+    "deny.toml": {
+      "command": "bash scripts/ci-local.sh security",
+      "purpose": "cargo-deny policy consumed by the security lane"
+    },
+    "rust-toolchain.toml": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "pinned rustc; the fast lane builds with this toolchain"
+    },
+    "tools/": {
+      "command": "bash scripts/ci-local.sh security",
+      "purpose": "canonical security-lane wrapper"
+    },
+    ".ci-artifacts/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "lane observation and junit outputs written by local CI"
+    },
+    ".bullet-family/": {
+      "command": "bash scripts/ci-local.sh fast",
+      "purpose": "local toolchain probe leftovers; not source authority"
+    },
+    "crates/harness-sim/": {
+      "command": "cargo test -p bullet-harness-core -p bullet-harness-sim",
+      "purpose": "prove adapter trait, capability matrix, and simulator conformance"
+    },
+    "crates/test-simulation/": {
+      "command": "cargo test -p bullet-test-simulation",
+      "purpose": "prove harness tapes stay non-authoritative"
+    }
+  }
+}

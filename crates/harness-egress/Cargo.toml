@@ -1,0 +1,22 @@
+[package]
+name = "bullet-harness-egress"
+description = "Provider egress isolation: user+net namespace holder, slirp4netns uplink, in-namespace nftables default-drop, host allow-listing CONNECT proxy, and a digestible isolation receipt."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+blake3.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rustix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
