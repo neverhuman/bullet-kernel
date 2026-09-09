@@ -479,6 +479,18 @@ async fn successor_uses_fence_two_while_salvaged_workspace_stays_inert() {
     assert!(successor_stages.contains(&"candidate_preserved".to_string()));
     assert!(successor_stages.contains(&"workspace_cleaned".to_string()));
     assert!(successor_stages.contains(&"released".to_string()));
+    let released_at = successor_stages
+        .iter()
+        .position(|stage| stage == "released")
+        .expect("released");
+    let cleaned_at = successor_stages
+        .iter()
+        .position(|stage| stage == "workspace_cleaned")
+        .expect("cleaned");
+    assert!(
+        released_at < cleaned_at,
+        "Candidate finalization must persist before workspace cleanup: {successor_stages:?}"
+    );
     assert_eq!(
         successor_stages.last().map(String::as_str),
         Some("terminated")

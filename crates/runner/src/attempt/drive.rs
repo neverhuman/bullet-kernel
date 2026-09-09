@@ -9,7 +9,7 @@ use super::{check_freeze, start_request, AttemptConfig, AttemptOutcome, Candidat
 use crate::error::RunnerError;
 use crate::gitd::{WorkspaceGenerationGuard, WorkspaceInfo};
 use crate::heartbeat::HeartbeatHandle;
-use crate::journal::JournalSink;
+use crate::journal::{require_journal, JournalSink};
 use crate::lease::{AcquireGrant, LeaseClient, ReleaseCall};
 use bullet_domain::AttemptState;
 use bullet_harness_core::{HarnessAdapter, SessionHandle};
@@ -90,8 +90,11 @@ pub(super) async fn run_cloned_attempt_guarded(
     {
         Ok(outcome) => {
             heartbeat.abort();
-            let _ = adapter.terminate(&session).await;
-            journal.record("terminated", "success");
+            adapter
+                .terminate(&session)
+                .await
+                .map_err(RunnerError::from)?;
+            require_journal(journal.as_ref(), "terminated", "success")?;
             Ok(outcome)
         }
         Err(err) => {
@@ -186,10 +189,20 @@ async fn drive_and_finish(
         ),
     );
     check_freeze(heartbeat)?;
-    gitd.cleanup(&preservation.receipt, &candidate.prepared_at)
-        .await?;
-    journal.record("workspace_cleaned", &candidate.id);
-    check_freeze(heartbeat)?;
+    // Order is deliberate and pinned by
+    // `successor_uses_fence_two_while_salvaged_workspace_stays_inert`: the
+    // terminal state persists before the workspace is destroyed, so a crash
+    // between the two leaves a recorded Candidate rather than a cleaned
+    // workspace nobody can account for.
+    //
+    // KNOWN CONTRADICTION (2026-09-09): bullet-gitd's `cleanup` performs an
+    // online lease/fence read-back, which this release has just revoked, so
+    // every completed attempt preserves its Candidate and then dies with
+    // `AUTHORITY_REFUSED: no active lease`. Reproduced identically on the
+    // simulator and on a real provider turn. The kernel side of this is
+    // correct as written; the resolution belongs in gitd, whose cleanup is
+    // documented as receipt-gated and should be authorised by the preservation
+    // receipt rather than by a lease the protocol requires to be gone.
     client
         .release(&ReleaseCall {
             attempt_id: grant.attempt.id.clone(),
@@ -197,7 +210,10 @@ async fn drive_and_finish(
             requeue: false,
         })
         .await?;
-    journal.record("released", "succeeded");
+    require_journal(journal, "released", "succeeded")?;
+    gitd.cleanup(&preservation.receipt, &candidate.prepared_at)
+        .await?;
+    require_journal(journal, "workspace_cleaned", &candidate.id)?;
     Ok(AttemptOutcome {
         attempt_id: grant.attempt.id.clone(),
         fence: grant.attempt.fence,

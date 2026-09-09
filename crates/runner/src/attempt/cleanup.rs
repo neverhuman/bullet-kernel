@@ -68,11 +68,18 @@ pub(super) async fn cleanup_failure(
             }
             Err(salvage_err) => journal.record("salvage_failed", &salvage_err.to_string()),
         }
-        let _ = adapter.terminate(session).await;
-        journal.record("terminated", err.reason_code());
+        if let Err(term_err) = adapter.terminate(session).await {
+            journal.record("terminate_failed", &term_err.to_string());
+        } else {
+            journal.record("terminated", err.reason_code());
+        }
         return;
     }
-    let _ = adapter.terminate(session).await;
+    if let Err(term_err) = adapter.terminate(session).await {
+        journal.record("terminate_failed", &term_err.to_string());
+    } else {
+        journal.record("terminated", err.reason_code());
+    }
     let released = client
         .release(&ReleaseCall {
             attempt_id: grant.attempt.id.clone(),
@@ -84,5 +91,4 @@ pub(super) async fn cleanup_failure(
         "released",
         &format!("failed requeue=true ok={}", released.is_ok()),
     );
-    journal.record("terminated", err.reason_code());
 }

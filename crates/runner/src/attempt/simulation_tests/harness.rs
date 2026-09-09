@@ -20,6 +20,7 @@ pub(super) struct ScriptedSim {
     prompts: Mutex<Vec<String>>,
     send_delay: Mutex<Option<Duration>>,
     start_failure: Mutex<Option<String>>,
+    terminate_failure: Mutex<Option<String>>,
     terminated: AtomicBool,
 }
 
@@ -31,6 +32,7 @@ impl ScriptedSim {
             prompts: Mutex::new(Vec::new()),
             send_delay: Mutex::new(None),
             start_failure: Mutex::new(None),
+            terminate_failure: Mutex::new(None),
             terminated: AtomicBool::new(false),
         }
     }
@@ -52,6 +54,10 @@ impl ScriptedSim {
 
     pub(super) fn fail_start(&self, reason: &str) {
         *self.start_failure.lock().expect("start failure") = Some(reason.to_string());
+    }
+
+    pub(super) fn fail_terminate(&self, reason: &str) {
+        *self.terminate_failure.lock().expect("terminate failure") = Some(reason.to_string());
     }
 
     pub(super) fn was_terminated(&self) -> bool {
@@ -144,6 +150,17 @@ impl HarnessAdapter for ScriptedSim {
     }
 
     async fn terminate(&self, session: &SessionHandle) -> HarnessResult<Ack> {
+        if let Some(reason) = self
+            .terminate_failure
+            .lock()
+            .expect("terminate failure")
+            .clone()
+        {
+            return Err(HarnessError::Protocol {
+                provider: "sim".into(),
+                reason,
+            });
+        }
         let result = self.inner.terminate(session).await;
         if result.is_ok() {
             self.terminated.store(true, Ordering::SeqCst);

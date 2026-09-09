@@ -59,6 +59,8 @@ pub struct AttemptConfig {
     candidate_preparation: Option<CandidatePreparationAdmission>,
     /// Exact new external directory where the successful Candidate is retained.
     preservation_destination: Option<PathBuf>,
+    /// Provider-native model id carried into `StartSession`.
+    pub model: Option<String>,
 }
 
 impl AttemptConfig {
@@ -84,7 +86,15 @@ impl AttemptConfig {
             heartbeat: HeartbeatConfig::default(),
             candidate_preparation: None,
             preservation_destination: None,
+            model: None,
         }
+    }
+
+    /// Bind the exact provider model. Production coding turns must set this.
+    #[must_use]
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
     }
 
     /// Require one exact Candidate source and independently pinned public key.
@@ -301,7 +311,7 @@ pub(super) fn start_request(
             .workspace_root
             .join("artifacts")
             .join(grant.attempt.id.as_str()),
-        model: None,
+        model: config.model.clone(),
         structured_schema: serde_json::from_str(bullet_harness_core::proposal::schema_source())
             .ok(),
         max_budget_usd: None,
