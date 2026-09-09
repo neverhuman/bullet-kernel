@@ -30,6 +30,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Install checksum-pinned ripgrep 14.1.1
+        run: bash ops/ci/install-ripgrep.sh
       - name: Install gitleaks 8.21.2
         env:
           GITLEAKS_SHA256: 5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
@@ -78,6 +80,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Install checksum-pinned ripgrep 14.1.1
+        run: bash ops/ci/install-ripgrep.sh
       - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # pinned action
         with:
           toolchain: 1.97.1
@@ -124,6 +128,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Install checksum-pinned ripgrep 14.1.1
+        run: bash ops/ci/install-ripgrep.sh
       - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # pinned action
         with:
           toolchain: 1.97.1
@@ -170,6 +176,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Install checksum-pinned ripgrep 14.1.1
+        run: bash ops/ci/install-ripgrep.sh
       - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # pinned action
         with:
           toolchain: 1.97.1
@@ -216,6 +224,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Install checksum-pinned ripgrep 14.1.1
+        run: bash ops/ci/install-ripgrep.sh
       - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # pinned action
         with:
           toolchain: 1.97.1
@@ -271,6 +281,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Install checksum-pinned ripgrep 14.1.1
+        run: bash ops/ci/install-ripgrep.sh
       - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # pinned action
         with:
           toolchain: 1.97.1
@@ -317,6 +329,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Install checksum-pinned ripgrep 14.1.1
+        run: bash ops/ci/install-ripgrep.sh
       - name: Download preflight observation
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

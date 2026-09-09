@@ -109,6 +109,7 @@ pub(super) async fn run_product_runner(
         for path in granted_scope {
             command.arg("--scope").arg(path);
         }
+        apply_provider_selection(&mut command)?;
         chaos::refuse_if_selected(Boundary::RunnerStartup)?;
         let fault = chaos::fault_for(Boundary::RunnerStartup)?;
         command
@@ -139,7 +140,7 @@ pub(super) async fn run_product_runner(
             };
         } else {
             child
-                .wait_with_output()
+                .wait_with_output_for(runner_supervision_ceiling())
                 .map_err(|error| fail(format!("supervise product runner: {error}")))?
         };
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -268,6 +269,18 @@ pub(super) async fn register_candidate_source(
         version,
     }];
     let now_unix_ms = authority.now_unix_ms();
+    let execution_identity = ExecutionIdentity::observed();
+    // The lease expiry is one 15 s TTL, renewed by heartbeat for the life of
+    // the attempt. Pinning the envelope to that first TTL was invisible with
+    // the simulator, which answers in milliseconds; a real turn takes over two
+    // minutes, so the envelope expired mid-attempt and Candidate preparation
+    // refused work that had already been done and gated. The envelope covers
+    // the attempt the bridge is actually willing to supervise.
+    let expires_at_unix_ms = authority
+        .lease_expires_at_unix_ms()
+        .max(now_unix_ms.saturating_add(
+            u64::try_from(runner_supervision_ceiling().as_millis()).unwrap_or(u64::MAX),
+        ));
     let source = CandidatePreparationSource {
         schema_version: "v1alpha1".into(),
         attempt_id: attempt.id.clone(),
@@ -283,10 +296,10 @@ pub(super) async fn register_candidate_source(
             claims_domain: "execution.envelope.v1alpha1".into(),
             runner_id: attempt.runner_id.to_string(),
             runner_epoch: attempt.runner_epoch,
-            provider: "simulator".into(),
-            model: "deterministic".into(),
-            adapter: "simulator-v1".into(),
-            provider_profile_id: typed_id("prf", "offline-simulator-profile"),
+            provider: execution_identity.provider,
+            model: execution_identity.model,
+            adapter: execution_identity.adapter,
+            provider_profile_id: typed_id("prf", &execution_identity.profile_seed),
             platform: "linux-x86_64".into(),
             containment_profile_id: typed_id("ctp", "offline-same-host-component"),
             environment_digest: Digest::of(b"offline-product-runner-environment-v1").to_hex(),
@@ -297,7 +310,7 @@ pub(super) async fn register_candidate_source(
             authority_epoch: authority.authority_epoch(),
             freeze_generation: authority.freeze_generation(),
             issued_at_unix_ms: now_unix_ms,
-            expires_at_unix_ms: authority.lease_expires_at_unix_ms(),
+            expires_at_unix_ms,
         },
         ttl_ms: 15_000,
     };
@@ -316,4 +329,145 @@ pub(super) async fn register_candidate_source(
 
 fn typed_id(prefix: &str, label: &str) -> String {
     format!("{prefix}_{}", Digest::of(label.as_bytes()).to_hex())
+}
+
+/// Select the provider the bridge drives.
+///
+/// The bridge defaults to `sim` so the offline component proof stays
+/// deterministic and needs no account, no network and no spend. That default
+/// is also the reason every Candidate this bridge has ever produced came from
+/// a canned proposal, which is worth stating plainly rather than hiding
+/// behind the word "offline".
+///
+/// Setting `BULLET_TXN_PROVIDER=claude` drives a REAL contained provider turn
+/// instead. Every dogfood admission input must then be supplied by
+/// environment; a missing one refuses here rather than letting the runner
+/// start and discover it later. There is no partial mode and no fallback: if
+/// the real provider cannot be admitted, the bridge does not quietly run the
+/// simulator and call the result a Candidate.
+fn apply_provider_selection(command: &mut Command) -> Result<(), String> {
+    let provider = std::env::var("BULLET_TXN_PROVIDER").unwrap_or_else(|_| "sim".to_owned());
+    if provider == "sim" {
+        return Ok(());
+    }
+    if provider != "claude" {
+        return Err(fail(format!(
+            "BULLET_TXN_PROVIDER={provider} is not a provider this bridge can drive"
+        )));
+    }
+    command.arg("--provider").arg("claude");
+    for (variable, flag) in [
+        ("BULLET_DOGFOOD_DATA_DIR", "--dogfood-data-dir"),
+        ("BULLET_DOGFOOD_POLICY", "--dogfood-policy"),
+        ("BULLET_DOGFOOD_BINDING", "--dogfood-binding"),
+        ("BULLET_DOGFOOD_ENROLLMENT", "--dogfood-enrollment"),
+        ("BULLET_DOGFOOD_ISSUER", "--dogfood-issuer"),
+        ("BULLET_DOGFOOD_KEY_ID", "--dogfood-key-id"),
+        ("BULLET_DOGFOOD_EXECUTABLE", "--dogfood-executable"),
+        ("BULLET_DOGFOOD_RECEIPT", "--dogfood-receipt"),
+        ("BULLET_DOGFOOD_MAX_BUDGET_USD", "--dogfood-max-budget-usd"),
+    ] {
+        let value = std::env::var(variable).map_err(|_| {
+            fail(format!(
+                "{variable} is required when BULLET_TXN_PROVIDER=claude ({flag})"
+            ))
+        })?;
+        command.arg(flag).arg(value);
+    }
+    if let Ok(seconds) = std::env::var("BULLET_DOGFOOD_WALL_TIMEOUT_SECS") {
+        command.arg("--dogfood-wall-timeout-secs").arg(seconds);
+    }
+    // Without a credential grant the contained provider starts, reports
+    // "Not logged in", and exits after a wasted spawn. At least one grant is
+    // therefore required rather than optional.
+    let credentials = std::env::var("BULLET_DOGFOOD_CREDENTIALS").map_err(|_| {
+        fail(
+            "BULLET_DOGFOOD_CREDENTIALS is required when BULLET_TXN_PROVIDER=claude \
+             (semicolon-separated source,target,blake3 grants)",
+        )
+    })?;
+    let mut granted = 0usize;
+    for grant in credentials.split(';').filter(|value| !value.is_empty()) {
+        command.arg("--dogfood-credential").arg(grant);
+        granted += 1;
+    }
+    if granted == 0 {
+        return Err(fail(
+            "BULLET_DOGFOOD_CREDENTIALS named no grant, so the provider would start unauthenticated",
+        ));
+    }
+    Ok(())
+}
+
+/// How long the bridge waits for the product Runner to finish.
+///
+/// The default 30 s is sized for the simulator, which answers instantly. A
+/// real contained provider turn takes roughly a minute, so under
+/// `BULLET_TXN_PROVIDER=claude` the bridge was killing the Runner mid-turn and
+/// reporting a timeout that looked like a Runner defect. The ceiling now
+/// follows the turn ceiling the operator actually stated, plus slack for
+/// clone, gate and preservation work on either side of the turn.
+fn runner_supervision_ceiling() -> std::time::Duration {
+    const SIMULATOR_CEILING: std::time::Duration = std::time::Duration::from_secs(30);
+    const SURROUNDING_WORK: u64 = 120;
+    if std::env::var("BULLET_TXN_PROVIDER")
+        .as_deref()
+        .unwrap_or("sim")
+        == "sim"
+    {
+        return SIMULATOR_CEILING;
+    }
+    let turn = std::env::var("BULLET_DOGFOOD_WALL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(600);
+    std::time::Duration::from_secs(turn.saturating_add(SURROUNDING_WORK))
+}
+
+/// What actually executes the attempt, as recorded in the Candidate's
+/// execution envelope.
+///
+/// This was hard-coded to `simulator` / `deterministic` / `simulator-v1`. With
+/// the simulator that was true. Under a real provider it would have stamped a
+/// Candidate produced by a real model with an envelope claiming a simulator
+/// made it, which is the exact confusion the envelope exists to prevent.
+struct ExecutionIdentity {
+    provider: String,
+    model: String,
+    adapter: String,
+    profile_seed: String,
+}
+
+impl ExecutionIdentity {
+    fn observed() -> Self {
+        let provider = std::env::var("BULLET_TXN_PROVIDER").unwrap_or_else(|_| "sim".to_owned());
+        if provider == "sim" {
+            return Self {
+                provider: "simulator".into(),
+                model: "deterministic".into(),
+                adapter: "simulator-v1".into(),
+                profile_seed: "offline-simulator-profile".into(),
+            };
+        }
+        // The envelope is registered before the turn, so the exact model id is
+        // not yet knowable: the provider selects it. Recording the enrolled
+        // runtime is the honest, checkable fact available at this point.
+        let runtime = std::env::var("BULLET_DOGFOOD_EXECUTABLE")
+            .ok()
+            .and_then(|path| {
+                std::path::Path::new(&path)
+                    .parent()
+                    .and_then(std::path::Path::parent)
+                    .and_then(std::path::Path::file_name)
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "unknown-runtime".to_owned());
+        Self {
+            model: std::env::var("BULLET_TXN_MODEL")
+                .unwrap_or_else(|_| format!("provider-selected@{runtime}")),
+            adapter: format!("dogfood-{provider}-v1"),
+            profile_seed: format!("dogfood-{provider}-profile"),
+            provider,
+        }
+    }
 }

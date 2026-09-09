@@ -61,16 +61,17 @@ impl ClaudeStreamTranscript {
                 .and_then(Value::as_u64)
                 .is_some_and(|turns| match self.profile {
                     TranscriptProfile::ConformanceV1 => turns == self.assistant_messages,
-                    // The CLI counts its own synthetic injections as turns, so
-                    // a real schema-bearing turn reports more turns than there
-                    // are assistant messages. The bound stays exact: it can
-                    // never exceed what this transcript actually admitted.
+                    // `num_turns` is the CLI's own accounting of its internal
+                    // conversation, not a count of anything this transcript
+                    // names. A real turn streams one assistant message across
+                    // several frames and interleaves tool-result turns, so it
+                    // reported 5 turns for 3 assistant messages: the old bound
+                    // refused a clean turn after it had been billed. What the
+                    // bound is actually for is catching work we did not see,
+                    // so it is stated against frames we did see, and the
+                    // stronger hidden-work signals are checked outright below.
                     TranscriptProfile::DogfoodReadOnlyV0 => {
-                        turns > 0
-                            && turns
-                                <= self
-                                    .assistant_messages
-                                    .saturating_add(self.synthetic_user_frames)
+                        turns > 0 && turns <= self.inbound_frames
                     }
                 });
         if self.phase != Phase::Active
@@ -93,6 +94,25 @@ impl ClaudeStreamTranscript {
             || object.get("errors").is_some()
         {
             return self.fail("success result disagrees with the active terminal subject");
+        }
+        // Hidden work is the thing the turn count was reaching for and could
+        // not see. A sub-agent runs its own conversation that never appears in
+        // this transcript, so a read-only dogfood turn admits none: zero
+        // spawned, zero depth, and nothing left queued behind the result.
+        if self.profile == TranscriptProfile::DogfoodReadOnlyV0 {
+            let subagents_quiet = object
+                .get("subagent_stats")
+                .and_then(Value::as_object)
+                .is_some_and(|stats| {
+                    stats.get("spawned").and_then(Value::as_u64) == Some(0)
+                        && stats.get("max_depth").and_then(Value::as_u64) == Some(0)
+                });
+            if !subagents_quiet {
+                return self.fail("the turn ran sub-agent work this transcript never showed");
+            }
+            if object.get("queued_turn_count").and_then(Value::as_u64) != Some(0) {
+                return self.fail("the turn ended with work still queued behind the result");
+            }
         }
         let Some(structured) = object.get("structured_output") else {
             return self.fail("success result lacks structured_output");

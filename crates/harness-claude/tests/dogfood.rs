@@ -174,6 +174,10 @@ fn success_result(structured_output: Value) -> Value {
         "permission_denials": [],
         "structured_output": structured_output,
         "terminal_reason": "completed",
+        // A real 2.1.266 result always carries these. They are the only place
+        // a turn admits work this transcript never showed.
+        "queued_turn_count": 0,
+        "subagent_stats": {"spawned": 0, "max_depth": 0},
     })
 }
 

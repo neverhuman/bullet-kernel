@@ -551,3 +551,39 @@ pub(super) fn valid_result_common(object: &Map<String, Value>, admits_vendor_fie
             .get("terminal_reason")
             .is_none_or(|reason| reason.is_null() || reason.is_string())
 }
+
+/// The provider's own reason for refusing a turn, when it reported one.
+///
+/// `claude` reports startup and API failures as a synthetic assistant frame:
+/// `is_api_error_message: true`, a short `error` tag, `model: "<synthetic>"`,
+/// and the human-readable cause as the frame's only text block. Reading that
+/// text back is the difference between "assistant envelope is not an exact
+/// main-session message" and "Not logged in".
+pub(super) fn provider_error_reason(object: &Map<String, Value>) -> Option<String> {
+    let flagged = object
+        .get("is_api_error_message")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let tag = object.get("error").and_then(Value::as_str);
+    if !flagged && tag.is_none() {
+        return None;
+    }
+    let text = object
+        .get("message")
+        .and_then(Value::as_object)
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .and_then(|content| {
+            content
+                .iter()
+                .filter_map(|item| item.as_object()?.get("text")?.as_str())
+                .find(|text| !text.trim().is_empty())
+        })
+        .map(str::trim);
+    match (tag, text) {
+        (Some(tag), Some(text)) => Some(format!("{tag}: {text}")),
+        (Some(tag), None) => Some(tag.to_owned()),
+        (None, Some(text)) => Some(text.to_owned()),
+        (None, None) => Some("the provider reported an API error with no detail".to_owned()),
+    }
+}

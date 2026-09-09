@@ -5,8 +5,8 @@ mod tools;
 
 use crate::protocol::{
     basic_event_subject, empty_array, empty_optional_array, event_subject, exact_fields,
-    model_matches, protocol, unique_string_array, valid_native_id, valid_uuid,
-    ClaudeStreamTranscript, Phase, TranscriptProfile, MAX_ASSISTANT_CONTENT_ITEMS,
+    model_matches, protocol, provider_error_reason, unique_string_array, valid_native_id,
+    valid_uuid, ClaudeStreamTranscript, Phase, TranscriptProfile, MAX_ASSISTANT_CONTENT_ITEMS,
     MAX_STREAM_JSON_FRAME_BYTES, READ_ONLY_TOOL_ALLOWLIST,
 };
 use bullet_harness_core::{decode_strict_json, AgentEvent, AgentEventKind, HarnessError};
@@ -240,6 +240,15 @@ impl ClaudeStreamTranscript {
         } else {
             exact_fields(object, &envelope_required, &["error"])
         };
+        // The CLI reports its own failures as a synthetic assistant frame
+        // carrying `error` and `is_api_error_message`. Refusing those as a
+        // malformed envelope is technically true and practically useless: the
+        // operator is told the shape is wrong when the actual fact is "Not
+        // logged in", or a rate limit, or an expired token. Say what the
+        // provider said.
+        if let Some(reason) = provider_error_reason(object) {
+            return self.fail(format!("the provider refused the turn: {reason}"));
+        }
         if !envelope_ok
             || !object.get("parent_tool_use_id").is_some_and(Value::is_null)
             || !object.get("error").is_none_or(Value::is_null)

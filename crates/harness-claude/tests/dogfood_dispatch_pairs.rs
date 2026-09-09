@@ -42,6 +42,12 @@ fn terminal(success: bool, cost: Value) -> Value {
         "modelUsage":{"claude-offline-model":{"inputTokens":10,"outputTokens":5}}, "permission_denials":[]});
     if success {
         value["result"] = json!("synthetic");
+        // A real 2.1.266 success result always carries these two; they are the
+        // only place a turn admits work the transcript never showed. The
+        // frozen conformance subject keeps its closed field set, so they go on
+        // the success branch only.
+        value["queued_turn_count"] = json!(0);
+        value["subagent_stats"] = json!({"spawned": 0, "max_depth": 0});
         value["structured_output"] = json!({"schema_version":1, "proposal_id":format!("cnt_{}","1".repeat(64)),
             "producing_attempt_id":format!("atm_{}","2".repeat(64)), "base_checkpoint_id":format!("ckp_{}","3".repeat(64)),
             "base_checkpoint_digest":"4".repeat(64), "intent_summary":"synthetic fixture only",
