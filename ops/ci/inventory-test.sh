@@ -260,9 +260,18 @@ family_wrapper="$(<ops/ci/family.sh)"
 gitd_admission="$(<crates/runner/src/gitd/binary.rs)"
 for required in 'GITD_BINARY_UNPROVISIONED' 'BULLET_GITD_SHA256' 'OFlags::NOFOLLOW' \
   'MemfdFlags::ALLOW_SEALING' 'SealFlags::WRITE' 'native ELF64 little-endian' '/proc/self/fd/' \
-  'sha256_and_count(&mut sealed_file)' \
-  'invalid_subjects_never_execute_canary' 'sealed_image_survives_same_inode_overwrite'; do
+  'sha256_and_count(&mut sealed_file)'; do
   [[ "$gitd_admission" == *"$required"* ]] \
+    || { refuse PRODUCT_DAEMON_ADMISSION_GUARD_MISSING "$required"; exit 1; }
+done
+
+gitd_test_module=$'#[cfg(test)]\n#[path = "binary_tests.rs"]\nmod tests;'
+[[ "$gitd_admission" == *"$gitd_test_module"* ]] \
+  || { refuse PRODUCT_DAEMON_ADMISSION_GUARD_MISSING 'binary_tests.rs test module'; exit 1; }
+gitd_admission_tests="$(<crates/runner/src/gitd/binary_tests.rs)"
+for required in 'invalid_subjects_never_execute_canary' \
+  'sealed_image_survives_same_inode_overwrite'; do
+  [[ "$gitd_admission_tests" == *"$required"* ]] \
     || { refuse PRODUCT_DAEMON_ADMISSION_GUARD_MISSING "$required"; exit 1; }
 done
 

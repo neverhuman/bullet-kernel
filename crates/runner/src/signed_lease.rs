@@ -182,8 +182,7 @@ impl<L: Ledger + Send> LeaseClient for SignedLeaseClient<L> {
     ) -> Result<(), RunnerError> {
         Err(RunnerError::Lease {
             code: "LEASE_TRANSPORT_UNSUPPORTED".into(),
-            message: "signed advance is unavailable; do not fall back to DirectLeaseClient"
-                .into(),
+            message: "signed advance is unavailable; do not fall back to DirectLeaseClient".into(),
         })
     }
 

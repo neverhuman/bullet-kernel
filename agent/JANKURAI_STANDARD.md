@@ -21,16 +21,26 @@ contracts, SQLite adapters. The machine-readable half of this binding is
 
 ## Generated zones
 
-Do not hand-edit a `generator_only` zone. `crates/domain/src/generated/schema_bundle.rs`
-and `crates/adapters/tests/fixtures/formal/` are hub-synced;
+Do not hand-edit a `generator_only` zone. `generated/schema_bundle.rs`
+and `generated/formal/` are hub-synced;
 `contracts/generated/` is emitted from `contracts/openapi.yaml`. Repair them
 from the source with the `command` recorded next to the zone in
 `agent/generated-zones.toml`, never by editing the output.
-`contracts/schemas/patch-proposal.json` is deliberately absent from that
-manifest: it is hand-written, it has no generator, and declaring it would claim
-one. Its agreement with the authoritative Rust struct is proved instead by
-`schema_and_authoritative_struct_agree` in `crates/harness-core/src/proposal.rs`,
-which embeds the exact bytes through `schema_source()`.
+`generated/patch-proposal-binding.rs` is the generated zone whose `source` is
+the authored `contracts/schemas/patch-proposal.json`.
+`cargo run --locked -p bullet --bin bullet -- contracts check` checks OpenAPI client drift;
+`bash ../bullet-farm/scripts/sync-family-contracts.sh check` compares the Hub
+copies without writing them. The offline contract lane is a separate protocol
+test partition and does not regenerate the client.
+
+`contracts/schemas/patch-proposal.json` stays authored source with no generator
+and remains in the authored and security audit scope. Its Rust binding in
+`crates/harness-core/src/proposal.rs` embeds the exact bytes through
+`schema_source()`. The named agreement test checks required keys, closed
+top-level properties and the operations/gates item limits; complete schema/Rust
+equivalence remains unproved. Review changes to both contracts together. Do not
+add a generated header or alter the canonical JSON bytes to accommodate an
+auditor classification error.
 
 ## Repair receipts and the agent-friendly exception surface
 

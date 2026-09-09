@@ -45,10 +45,14 @@ struct Step {
 
 fn trace(name: &str) -> Trace {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/formal")
+        .join("../../generated/formal")
         .join(name);
-    let bytes = std::fs::read(path).expect("read generated formal trace");
-    let trace = serde_json::from_slice::<Trace>(&bytes).expect("strict trace");
+    let text = std::fs::read_to_string(path).expect("read generated formal trace");
+    let json: String = text
+        .lines()
+        .filter(|line| !line.starts_with("//"))
+        .collect();
+    let trace = serde_json::from_str::<Trace>(&json).expect("strict trace");
     assert_eq!(trace.schema_version, "v1alpha1");
     trace
 }
