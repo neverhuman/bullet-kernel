@@ -3,7 +3,7 @@
 Last reviewed: 2026-09-08 against HEAD `7c2dfac8`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
-<!-- bullet-doc-review:v1 subject=7c2dfac8a6d55a4f5a94caf09a05b5484d160958 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
+<!-- bullet-doc-review:v1 subject=8538df6746bef347cb089cda6f65a0f62153fb42 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
 
 ## Ledger core
 
@@ -325,7 +325,10 @@ exact-subject transaction.
 
 `crates/runner` (`apps/bullet-runner`) runs the attempt loop: scope check,
 heartbeat self-fence, checkpoint journal, and `bullet-gitd` supervision; the
-binary accepts only the `sim` provider. Since `ca380bc` the runner's `Capsule`
+binary selects the provider explicitly: `sim` is the deterministic
+simulator and `claude` drives a real contained turn through the dogfood
+admission, refusing by name when any admission input is missing rather than
+falling back to the simulator. Since `ca380bc` the runner's `Capsule`
 carries the producing Attempt and the daemon-issued base checkpoint id and
 digest; `pre_apply_refusal` refuses a proposal whose `producing_attempt_id`,
 `base_checkpoint_id`, or `base_checkpoint_digest` differs from the active
@@ -349,7 +352,7 @@ transaction, so none supplies production Evidence or integration truth.
 invalid. With an absolute socket/recovery path, farmd UID and socket GID it
 constructs `SignedLeaseRpcClient::new_admitted` and loads durable acquire recovery.
 The CLI separately admits the Candidate request digest and verification key, and
-its only selectable provider is `sim`. The dormant unsigned `HttpLeaseClient` uses the
+and provider admission is decided before any of it. The dormant unsigned `HttpLeaseClient` uses the
 operator `/api/v1` prefix, but its lease and advance routes are deliberately not
 mounted and the product CLI never constructs it. This prevents a retired `/v1`
 response or a public browser route from being mistaken for workload authority.

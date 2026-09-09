@@ -324,7 +324,10 @@ printf '%s\n' \
 cmp -s "$test_root/receipt-expected" "$test_root/receipt-actual" \
   || { refuse NEXTEST_RECEIPT_FILTER_DRIFT 'filesystem-hostile group must match exactly five reviewed identities'; exit 1; }
 
-cargo nextest show-config test-groups --locked --workspace "${NEXTEST_FEATURES[@]}" \
+# The hosted lanes export CARGO_TERM_COLOR=always, which colours this output
+# even when it is redirected to a file, and the exact-line match below then
+# fails against a correctly configured group. Ask for no colour explicitly.
+cargo nextest --color never show-config test-groups --locked --workspace "${NEXTEST_FEATURES[@]}" \
   --profile fast --groups "$group" --no-pager >"$test_root/show-config"
 
 rg -Fxq 'group: sqlite-migration-identity (max threads = 1)' "$test_root/show-config" \
@@ -378,7 +381,7 @@ if ! cmp -s "$test_root/expected" "$test_root/actual"; then
   exit 1
 fi
 
-cargo nextest show-config test-groups --locked --workspace "${NEXTEST_FEATURES[@]}" \
+cargo nextest --color never show-config test-groups --locked --workspace "${NEXTEST_FEATURES[@]}" \
   --profile fast --groups "$receipt_group" --no-pager >"$test_root/receipt-show-config"
 rg -Fxq "group: $receipt_group (max threads = 1)" "$test_root/receipt-show-config" \
   || { refuse NEXTEST_RECEIPT_GROUP_INVALID 'nextest did not apply receipt max-threads=1'; exit 1; }
