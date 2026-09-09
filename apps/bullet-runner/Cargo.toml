@@ -9,10 +9,13 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-bullet-application.workspace = true
+bullet-application = { workspace = true, features = ["dogfood-claude"] }
 bullet-domain.workspace = true
 bullet-effects-core.workspace = true
+bullet-harness-claude.workspace = true
+bullet-harness-codex.workspace = true
 bullet-harness-core.workspace = true
+bullet-harness-cursor.workspace = true
 bullet-harness-sim.workspace = true
 bullet-runner-core.workspace = true
 bullet-verifier-core.workspace = true

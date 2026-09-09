@@ -12,6 +12,8 @@ pub mod conformance_effects;
 pub mod context;
 pub mod demo;
 pub mod dogfood;
+#[cfg(feature = "dogfood-claude")]
+pub mod dogfood_adapter;
 pub mod dogfood_produce;
 #[cfg(feature = "dogfood-claude")]
 pub mod dogfood_run;
@@ -30,6 +32,7 @@ pub mod nonce_ledger;
 pub mod policy_snapshot;
 pub mod queue;
 pub mod records;
+pub mod run_coding;
 pub mod simulators;
 pub mod store;
 
@@ -108,6 +111,11 @@ pub use queue::{claim_ready, ready_queue, ReadyItem};
 pub use records::{
     ActiveLease, ExpiredLease, HeartbeatRequest, LeaseGrant, LeaseRequest, LedgerEvent, OutboxItem,
     ReadyRow, ReleaseRequest, StoredGraph,
+};
+pub use run_coding::{
+    is_supported_dispatch_kind, plan_run_coding_admission, CodingAdmissionPlan,
+    CodingAdmissionView, CodingProvider, RunCodingPayload, MAX_CODING_QUOTA_UNITS, RUN_CODING_KIND,
+    RUN_DEMO_KIND,
 };
 pub use simulators::{ProviderSimulator, ScmSimulator, SimulatedInvocation};
 pub use store::{Ledger, LedgerError};

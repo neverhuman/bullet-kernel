@@ -1,6 +1,6 @@
 use super::{
-    admit_candidate_authority, admit_signed_lease_client, lease_transport_refusal, parse_runner_id,
-    parse_work_package_id, run, run_admitted, Args,
+    adapter_for, admit_candidate_authority, admit_signed_lease_client, lease_transport_refusal,
+    parse_runner_id, parse_work_package_id, run, run_admitted, Args,
 };
 use bullet_domain::{AttemptId, RunnerId, WorkPackageId, REPOSITORY_GATE_ID};
 use bullet_harness_core::CandidatePreparationSigningKey;
@@ -23,6 +23,18 @@ fn args(root: &Path, runner_id: &RunnerId, key: &Path) -> Args {
         work_package_id: WorkPackageId::from_seed("admitted-package").to_string(),
         runner_epoch: 1,
         provider: "sim".into(),
+        model: None,
+        dogfood_data_dir: None,
+        dogfood_policy: None,
+        dogfood_binding: None,
+        dogfood_enrollment: None,
+        dogfood_issuer: None,
+        dogfood_key_id: None,
+        dogfood_executable: None,
+        dogfood_credentials: Vec::new(),
+        dogfood_receipt: None,
+        dogfood_max_budget_usd: None,
+        dogfood_wall_timeout_secs: None,
         workspace_root: root.join("must-not-create-workspace"),
         source_repo: root.join("missing-source"),
         base_sha: "a".repeat(40),
@@ -328,8 +340,180 @@ async fn runner_identity_and_candidate_key_are_required_before_dispatch() {
         expected.clone(),
     ));
     assert_eq!(
-        run_admitted(selected, client, candidate_admission, package).await,
+        run_admitted(
+            selected,
+            client,
+            std::sync::Arc::new(bullet_harness_sim::SimAdapter::new()),
+            candidate_admission,
+            package
+        )
+        .await,
         ExitCode::FAILURE
     );
     server.await.expect("exact fake task");
+}
+
+// ---------------------------------------------------------------------------
+// De-sim: the runner used to accept only `--provider sim`, so the transaction
+// loop only ever saw a canned proposal. These pin the replacement contract.
+// ---------------------------------------------------------------------------
+
+fn dogfood_args(root: &Path, runner_id: &RunnerId, key: &Path) -> Args {
+    let mut selected = args(root, runner_id, key);
+    selected.provider = "claude".into();
+    selected.dogfood_data_dir = Some(root.join("dd"));
+    selected.dogfood_policy = Some(root.join("policy.json"));
+    selected.dogfood_binding = Some(root.join("binding.json"));
+    selected.dogfood_enrollment = Some(root.join("enrollment.json"));
+    selected.dogfood_issuer = Some("dogfood-local".into());
+    selected.dogfood_key_id = Some("dogfood-runner-1".into());
+    selected.dogfood_executable =
+        Some(PathBuf::from("/usr/lib/bullet/providers/claude/bin/claude"));
+    selected.dogfood_receipt = Some(root.join("receipt.json"));
+    selected.dogfood_max_budget_usd = Some(0.5);
+    selected.workspace_root = root.join("workspace");
+    selected
+}
+
+#[test]
+fn the_simulator_is_selected_only_when_it_is_named() {
+    let root = tempfile::tempdir().expect("temp root");
+    let runner_id = RunnerId::from_seed("provider-selection");
+    let key = write_candidate_key(root.path());
+    let mut selected = args(root.path(), &runner_id, &key);
+
+    selected.provider = "sim".into();
+    assert_eq!(
+        adapter_for(&selected.provider, &selected)
+            .expect("the simulator needs no admission")
+            .descriptor()
+            .provider,
+        "sim"
+    );
+
+    selected.provider = "claude".into();
+    // The whole point: a real provider name never yields the simulator. It
+    // either yields the real adapter or it refuses.
+    let refusal = adapter_for(&selected.provider, &selected)
+        .err()
+        .expect("claude without admission must refuse");
+    assert!(
+        refusal.starts_with("--dogfood-") && refusal.contains("required for a real provider"),
+        "the refusal must name a missing dogfood input, got: {refusal}"
+    );
+    assert!(
+        !refusal.contains("sim"),
+        "a real provider must never mention the simulator: {refusal}"
+    );
+
+    selected.provider = "codex".into();
+    let refusal = adapter_for(&selected.provider, &selected)
+        .err()
+        .expect("codex without a model must refuse");
+    assert!(refusal.contains("--model"), "{refusal}");
+
+    selected.model = Some("gpt-5".into());
+    let adapter = adapter_for(&selected.provider, &selected).expect("codex constructs offline");
+    assert_eq!(adapter.descriptor().provider, "codex");
+
+    selected.provider = "cursor".into();
+    selected.model = Some("composer-2".into());
+    let adapter = adapter_for(&selected.provider, &selected).expect("cursor constructs offline");
+    assert_eq!(adapter.descriptor().provider, "cursor");
+}
+
+#[test]
+fn a_real_provider_yields_a_real_adapter_that_is_not_the_simulator() {
+    let root = tempfile::tempdir().expect("temp root");
+    let runner_id = RunnerId::from_seed("real-adapter");
+    let key = write_candidate_key(root.path());
+    let selected = dogfood_args(root.path(), &runner_id, &key);
+    let adapter = adapter_for(&selected.provider, &selected)
+        .expect("complete admission yields the real adapter");
+    assert_eq!(adapter.descriptor().provider, "claude");
+}
+
+#[test]
+fn every_dogfood_path_must_be_absolute() {
+    let root = tempfile::tempdir().expect("temp root");
+    let runner_id = RunnerId::from_seed("absolute-paths");
+    let key = write_candidate_key(root.path());
+    for (flag, apply) in [
+        (
+            "dogfood-data-dir",
+            (|a: &mut Args| a.dogfood_data_dir = Some(PathBuf::from("dd"))) as fn(&mut Args),
+        ),
+        ("dogfood-policy", |a: &mut Args| {
+            a.dogfood_policy = Some(PathBuf::from("p.json"))
+        }),
+        ("dogfood-binding", |a: &mut Args| {
+            a.dogfood_binding = Some(PathBuf::from("b.json"))
+        }),
+        ("dogfood-enrollment", |a: &mut Args| {
+            a.dogfood_enrollment = Some(PathBuf::from("e.json"))
+        }),
+        ("dogfood-executable", |a: &mut Args| {
+            a.dogfood_executable = Some(PathBuf::from("claude"))
+        }),
+        ("dogfood-receipt", |a: &mut Args| {
+            a.dogfood_receipt = Some(PathBuf::from("r.json"))
+        }),
+        ("workspace-root", |a: &mut Args| {
+            a.workspace_root = PathBuf::from("workspace")
+        }),
+    ] {
+        let mut selected = dogfood_args(root.path(), &runner_id, &key);
+        apply(&mut selected);
+        let refusal = adapter_for(&selected.provider, &selected)
+            .err()
+            .unwrap_or_else(|| panic!("--{flag} relative path must refuse"));
+        assert!(
+            refusal.contains(flag) && refusal.contains("absolute"),
+            "--{flag} must be refused by name as non-absolute, got: {refusal}"
+        );
+    }
+}
+
+#[test]
+fn a_real_turn_never_starts_without_a_stated_spend_ceiling() {
+    let root = tempfile::tempdir().expect("temp root");
+    let runner_id = RunnerId::from_seed("spend-ceiling");
+    let key = write_candidate_key(root.path());
+    for (budget, expect) in [
+        (None, "is required"),
+        (Some(0.0), "positive finite"),
+        (Some(-1.0), "positive finite"),
+        (Some(f64::NAN), "positive finite"),
+        (Some(f64::INFINITY), "positive finite"),
+    ] {
+        let mut selected = dogfood_args(root.path(), &runner_id, &key);
+        selected.dogfood_max_budget_usd = budget;
+        let refusal = adapter_for(&selected.provider, &selected)
+            .err()
+            .unwrap_or_else(|| panic!("budget {budget:?} must refuse"));
+        assert!(
+            refusal.contains("dogfood-max-budget-usd") && refusal.contains(expect),
+            "budget {budget:?} refusal was: {refusal}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn provider_admission_is_decided_before_any_other_admission_touches_the_host() {
+    // Ordering matters: an operator who fat-fingers a dogfood flag should be
+    // told that, not sent down the Candidate-grant or lease-socket path first.
+    // Nothing on disk may be created by the refusal.
+    let root = tempfile::tempdir().expect("temp root");
+    let runner_id = RunnerId::from_seed("ordering");
+    let mut selected = dogfood_args(root.path(), &runner_id, Path::new("/nonexistent/key.json"));
+    selected.dogfood_policy = None;
+    let workspace = selected.workspace_root.clone();
+    let journal = selected.data_dir.clone();
+
+    assert_eq!(run(selected).await, ExitCode::from(2));
+    assert!(
+        !workspace.exists(),
+        "a refused run must create no workspace"
+    );
+    assert!(!journal.exists(), "a refused run must create no journal");
 }

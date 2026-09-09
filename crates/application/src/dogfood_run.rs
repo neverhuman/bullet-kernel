@@ -129,10 +129,61 @@ impl std::error::Error for DogfoodRunError {}
 pub fn run_dogfood_read_only(
     options: DogfoodReadOnlyOptions,
 ) -> Result<DogfoodRunStatus, DogfoodRunError> {
+    let composed = match dispatch_dogfood_compose(&options)? {
+        ComposedTurn::Neutral { code, detail } => return Ok(neutral(code, detail)),
+        ComposedTurn::Dispatched(composed) => composed,
+    };
+    write_dogfood_evidence(&options, &composed)
+}
+
+/// A composed dogfood turn, or the designed-neutral reason it did not compose.
+pub enum ComposedTurn {
+    /// The provider ran and returned a validated proposal.
+    Dispatched(Box<DispatchedTurn>),
+    /// A missing prerequisite. Exit 78; nothing was spawned.
+    Neutral {
+        /// Stable reason code.
+        code: &'static str,
+        /// Non-secret detail.
+        detail: String,
+    },
+}
+
+/// One real provider turn plus the enrolled runtime it was bound to.
+pub struct DispatchedTurn {
+    /// The validated proposal and the observed turn facts.
+    pub outcome: bullet_harness_claude::dogfood::DogfoodTurnOutcome,
+    /// Exact enrolled runtime version the turn was admitted against.
+    pub enrolled_runtime_version: String,
+}
+
+/// Designed-neutral composition outcome: nothing was spawned.
+fn composed_neutral(code: &'static str, detail: impl Into<String>) -> ComposedTurn {
+    ComposedTurn::Neutral {
+        code,
+        detail: detail.into(),
+    }
+}
+
+/// Compose containment and run exactly one REAL provider turn.
+///
+/// This is the whole of [`run_dogfood_read_only`] except writing evidence, so a
+/// `HarnessAdapter` can drive a real provider through the same admission the
+/// CLI uses. It exists because the Runner accepted only `--provider sim`: the
+/// dogfood dispatch was a free function no adapter could reach, which is the
+/// only reason the real provider turn and the transaction loop never met.
+///
+/// # Errors
+///
+/// The same typed refusals as [`run_dogfood_read_only`].
+pub fn dispatch_dogfood_compose(
+    options: &DogfoodReadOnlyOptions,
+) -> Result<ComposedTurn, DogfoodRunError> {
+    let options = options.clone();
     let prompt = match options.prompt.as_deref() {
         Some(prompt) if !prompt.is_empty() => prompt.to_owned(),
         _ => {
-            return Ok(neutral(
+            return Ok(composed_neutral(
                 "DOGFOOD_PROMPT_MISSING",
                 "prompt is required for a live turn",
             ));
@@ -185,7 +236,7 @@ pub fn run_dogfood_read_only(
     let policy_bytes = match read_regular_0600(&options.policy) {
         Ok(bytes) => bytes,
         Err(error) if error.code == "DOGFOOD_POLICY_MISSING" => {
-            return Ok(neutral(error.code, error.detail));
+            return Ok(composed_neutral(error.code, error.detail));
         }
         Err(error) => return Err(error),
     };
@@ -215,7 +266,7 @@ pub fn run_dogfood_read_only(
 
     let expected_enrollment = enrollment_path(&options.data_dir, &options.provider);
     if options.enrollment != expected_enrollment {
-        return Ok(neutral(
+        return Ok(composed_neutral(
             "ENROLLMENT_PATH_MISMATCH",
             format!("enrollment must be {}", expected_enrollment.display()),
         ));
@@ -234,7 +285,7 @@ pub fn run_dogfood_read_only(
     let enrolled = match enrolled {
         Ok(enrolled) => enrolled,
         Err(error) if error.code == "ENROLLMENT_MISSING" => {
-            return Ok(neutral(error.code, error.detail));
+            return Ok(composed_neutral(error.code, error.detail));
         }
         Err(error) => return Err(error),
     };
@@ -285,7 +336,7 @@ pub fn run_dogfood_read_only(
         .canonicalize()
         .map_err(|error| failed("DOGFOOD_WORKDIR", error.to_string()))?;
     if !workdir.is_dir() {
-        return Ok(neutral(
+        return Ok(composed_neutral(
             "DOGFOOD_WORKDIR_MISSING",
             "workdir must be an existing directory",
         ));
@@ -296,14 +347,14 @@ pub fn run_dogfood_read_only(
     let bubblewrap = match require_host_file("/usr/bin/bwrap") {
         Ok(path) => path,
         Err(error) if error.code == "CONTAINMENT_UNAVAILABLE" => {
-            return Ok(neutral(error.code, error.detail));
+            return Ok(composed_neutral(error.code, error.detail));
         }
         Err(error) => return Err(error),
     };
     let ca_bundle = match require_host_file("/etc/ssl/certs/ca-certificates.crt") {
         Ok(path) => path,
         Err(error) if error.code == "CONTAINMENT_UNAVAILABLE" => {
-            return Ok(neutral(error.code, error.detail));
+            return Ok(composed_neutral(error.code, error.detail));
         }
         Err(error) => return Err(error),
     };
@@ -349,7 +400,7 @@ pub fn run_dogfood_read_only(
     let sandbox = match EgressSandbox::prepare(policy, &egress_dir) {
         Ok(sandbox) => sandbox,
         Err(error) => {
-            return Ok(neutral(
+            return Ok(composed_neutral(
                 "CONTAINMENT_UNAVAILABLE",
                 format!("{error}; exit {DOGFOOD_NEUTRAL_EXIT}"),
             ));
@@ -496,6 +547,18 @@ pub fn run_dogfood_read_only(
         }
     };
 
+    Ok(ComposedTurn::Dispatched(Box::new(DispatchedTurn {
+        outcome,
+        enrolled_runtime_version: enrolled.record().version.clone(),
+    })))
+}
+
+/// Write the create-once proposal and receipt for a composed turn.
+fn write_dogfood_evidence(
+    options: &DogfoodReadOnlyOptions,
+    composed: &DispatchedTurn,
+) -> Result<DogfoodRunStatus, DogfoodRunError> {
+    let outcome = &composed.outcome;
     let proposal_bytes = serde_json::to_vec(&outcome.proposal)
         .map_err(|error| failed("DOGFOOD_PROPOSAL", error.to_string()))?;
     let proposal_blake3 = blake3::hash(&proposal_bytes).to_hex().to_string();
@@ -516,7 +579,7 @@ pub fn run_dogfood_read_only(
         verification_eligible: false,
         custody: DogfoodReadOnlyReceiptV0::CUSTODY.to_owned(),
         proposal_blake3,
-        enrolled_runtime_version: enrolled.record().version.clone(),
+        enrolled_runtime_version: composed.enrolled_runtime_version.clone(),
         wall_ms: outcome.live.wall_ms,
         total_cost_micro_usd: outcome.live.total_cost_micro_usd,
     };
@@ -527,7 +590,7 @@ pub fn run_dogfood_read_only(
         other => failed("DOGFOOD_RECEIPT", other.to_string()),
     })?;
     Ok(DogfoodRunStatus::Succeeded {
-        receipt: options.receipt,
+        receipt: options.receipt.clone(),
         proposal: proposal_path,
     })
 }

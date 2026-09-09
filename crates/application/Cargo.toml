@@ -26,14 +26,17 @@ test-seams = []
 live-claude = ["dep:bullet-harness-claude"]
 # Production dogfood compose path. Distinct from live-claude so live-conformance
 # does not share this feature. The `bullet` bin enables it; ordinary lib builds do not.
-dogfood-claude = ["dep:bullet-harness-claude", "dep:bullet-harness-egress"]
+dogfood-claude = ["dep:bullet-harness-claude", "dep:bullet-harness-egress", "dep:async-trait", "dep:futures", "dep:tokio"]
 
 [dependencies]
 bullet-domain.workspace = true
 bullet-harness-core.workspace = true
 bullet-harness-claude = { workspace = true, optional = true }
 bullet-harness-egress = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
 blake3.workspace = true
+futures = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -41,6 +44,7 @@ thiserror.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 bullet-harness-claude.workspace = true
 proptest.workspace = true
 tempfile.workspace = true

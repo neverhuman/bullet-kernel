@@ -6,6 +6,7 @@
 mod protocol;
 mod supervisor;
 
+use bullet_application::dogfood_run::{CredentialSpec, DogfoodReadOnlyOptions};
 use bullet_domain::{RunnerId, WorkPackageId};
 use bullet_harness_core::HarnessAdapter;
 use bullet_runner_core::{
@@ -57,9 +58,50 @@ struct Args {
     /// Runner generation.
     #[arg(long, default_value_t = 1)]
     runner_epoch: u64,
-    /// Provider adapter. Wave-0 binaries expose simulator mode only.
-    #[arg(long, default_value = "sim", value_parser = ["sim"])]
+    /// Provider adapter. `sim` is the deterministic simulator; `claude` drives
+    /// a REAL contained provider turn and requires the dogfood admission flags
+    /// below. There is no fallback: a real provider with missing admission
+    /// refuses, it never degrades to the simulator.
+    #[arg(long, default_value = "sim", value_parser = ["sim", "claude", "codex", "cursor"])]
     provider: String,
+    /// Provider-native model id. Required for a real provider; `sim` may omit it.
+    #[arg(long)]
+    model: Option<String>,
+    /// Absolute 0700 dogfood data directory. Required for a real provider.
+    #[arg(long)]
+    dogfood_data_dir: Option<PathBuf>,
+    /// Absolute 0600 v1alpha2 dogfood policy. Required for a real provider.
+    #[arg(long)]
+    dogfood_policy: Option<PathBuf>,
+    /// Absolute DogfoodBindingV1. Required for a real provider.
+    #[arg(long)]
+    dogfood_binding: Option<PathBuf>,
+    /// Absolute provider enrollment. Required for a real provider.
+    #[arg(long)]
+    dogfood_enrollment: Option<PathBuf>,
+    /// Operator issuer label. Required for a real provider.
+    #[arg(long)]
+    dogfood_issuer: Option<String>,
+    /// Operator key id. Required for a real provider.
+    #[arg(long)]
+    dogfood_key_id: Option<String>,
+    /// Absolute enrolled provider executable. Required for a real provider.
+    #[arg(long)]
+    dogfood_executable: Option<PathBuf>,
+    /// Repeatable `source,target,blake3` credential grants.
+    #[arg(long = "dogfood-credential")]
+    dogfood_credentials: Vec<String>,
+    /// Create-once receipt path for the real turn.
+    #[arg(long)]
+    dogfood_receipt: Option<PathBuf>,
+    /// Hard spend ceiling in USD for the real turn. Required for a real
+    /// provider: the runner never starts billable work without a stated cap.
+    #[arg(long)]
+    dogfood_max_budget_usd: Option<f64>,
+    /// Optional wall-clock ceiling in seconds, bounded by the policy's own
+    /// maximum attempt seconds.
+    #[arg(long)]
+    dogfood_wall_timeout_secs: Option<u64>,
     /// Root for private clones and runtime dirs.
     #[arg(long)]
     workspace_root: PathBuf,
@@ -92,11 +134,101 @@ struct Args {
     ttl_seconds: i64,
 }
 
-fn adapter_for(provider: &str) -> Option<Arc<dyn HarnessAdapter>> {
+/// Resolve the provider adapter.
+///
+/// `sim` is the deterministic simulator. `claude` drives a REAL contained
+/// provider turn through the same admission the `bullet dogfood read-only`
+/// CLI uses. A real provider whose admission inputs are incomplete refuses
+/// here: it must never fall back to the simulator, because a simulated
+/// proposal that looks like a real one is the one outcome this whole design
+/// exists to prevent.
+fn adapter_for(provider: &str, args: &Args) -> Result<Arc<dyn HarnessAdapter>, String> {
     match provider {
-        "sim" => Some(Arc::new(bullet_harness_sim::SimAdapter::new())),
-        _ => None,
+        "sim" => Ok(Arc::new(bullet_harness_sim::SimAdapter::new())),
+        "claude" => dogfood_options(args).map(|options| {
+            Arc::new(bullet_application::dogfood_adapter::DogfoodClaudeAdapter::new(options))
+                as Arc<dyn HarnessAdapter>
+        }),
+        "codex" => {
+            require_model(args)?;
+            Ok(Arc::new(bullet_harness_codex::CodexAdapter::new()))
+        }
+        "cursor" => {
+            require_model(args)?;
+            Ok(Arc::new(bullet_harness_cursor::CursorAdapter::new()))
+        }
+        other => Err(format!("unavailable provider {other}")),
     }
+}
+
+fn require_model(args: &Args) -> Result<(), String> {
+    match args.model.as_deref() {
+        Some(model) if !model.is_empty() => Ok(()),
+        _ => Err("--model is required for a real provider".into()),
+    }
+}
+
+/// Assemble the dogfood admission from the runner's flags, refusing by name
+/// for anything absent.
+fn dogfood_options(args: &Args) -> Result<DogfoodReadOnlyOptions, String> {
+    fn need<T>(value: Option<T>, flag: &str) -> Result<T, String> {
+        value.ok_or_else(|| format!("--{flag} is required for a real provider"))
+    }
+    // Every dogfood path is documented as absolute and is resolved by a
+    // privileged validator later. A relative path here would be resolved
+    // against whatever directory the runner happened to start in, so it is
+    // refused at the argument boundary rather than carried inward.
+    fn absolute(value: PathBuf, flag: &str) -> Result<PathBuf, String> {
+        if value.is_absolute() {
+            Ok(value)
+        } else {
+            Err(format!(
+                "--{flag} must be an absolute path, got {}",
+                value.display()
+            ))
+        }
+    }
+    fn need_absolute(value: Option<PathBuf>, flag: &str) -> Result<PathBuf, String> {
+        absolute(need(value, flag)?, flag)
+    }
+    let max_budget_usd = need(args.dogfood_max_budget_usd, "dogfood-max-budget-usd")?;
+    if !max_budget_usd.is_finite() || max_budget_usd <= 0.0 {
+        return Err(format!(
+            "--dogfood-max-budget-usd must be a positive finite amount, got {max_budget_usd}"
+        ));
+    }
+    let credentials = args
+        .dogfood_credentials
+        .iter()
+        .map(|value| {
+            let parts: Vec<&str> = value.splitn(3, ',').collect();
+            if parts.len() != 3 {
+                return Err("--dogfood-credential must be source,target,blake3".to_string());
+            }
+            Ok(CredentialSpec {
+                source: PathBuf::from(parts[0]),
+                target: PathBuf::from(parts[1]),
+                blake3: parts[2].to_owned(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(DogfoodReadOnlyOptions {
+        provider: "claude".to_string(),
+        data_dir: need_absolute(args.dogfood_data_dir.clone(), "dogfood-data-dir")?,
+        policy: need_absolute(args.dogfood_policy.clone(), "dogfood-policy")?,
+        binding: need_absolute(args.dogfood_binding.clone(), "dogfood-binding")?,
+        enrollment: need_absolute(args.dogfood_enrollment.clone(), "dogfood-enrollment")?,
+        issuer: need(args.dogfood_issuer.clone(), "dogfood-issuer")?,
+        key_id: need(args.dogfood_key_id.clone(), "dogfood-key-id")?,
+        executable: need_absolute(args.dogfood_executable.clone(), "dogfood-executable")?,
+        gate_ids: args.gate_ids.clone(),
+        credentials,
+        workdir: absolute(args.workspace_root.clone(), "workspace-root")?,
+        prompt: None,
+        max_budget_usd: Some(max_budget_usd),
+        wall_timeout_secs: args.dogfood_wall_timeout_secs,
+        receipt: need_absolute(args.dogfood_receipt.clone(), "dogfood-receipt")?,
+    })
 }
 
 fn parse_runner_id(raw: &str) -> Result<RunnerId, String> {
@@ -130,15 +262,26 @@ impl SupervisorJournal {
 
 impl JournalSink for SupervisorJournal {
     fn record(&self, stage: &str, detail: &str) {
-        let result = if self.started.swap(true, Ordering::SeqCst) {
+        if let Err(err) = self.try_record(stage, detail) {
+            eprintln!("journal error at {stage}: {err}");
+        }
+    }
+
+    fn try_record(&self, stage: &str, detail: &str) -> Result<(), String> {
+        let started = self.started.load(Ordering::SeqCst);
+        let result = if started {
             self.supervisor.heartbeat(&self.session)
         } else {
             self.supervisor
                 .dispatch(&self.session, Some(detail.to_string()))
         };
         match result {
-            Ok(checkpoint) => eprintln!("journal seq {}: {stage}: {detail}", checkpoint.seq),
-            Err(err) => eprintln!("journal error at {stage}: {err}"),
+            Ok(checkpoint) => {
+                self.started.store(true, Ordering::SeqCst);
+                eprintln!("journal seq {}: {stage}: {detail}", checkpoint.seq);
+                Ok(())
+            }
+            Err(err) => Err(err),
         }
     }
 }
@@ -165,6 +308,17 @@ async fn run(args: Args) -> ExitCode {
     // constructs SignedLeaseRpcClient::new_admitted only when every local
     // admission input exists.
     let _preserved_http_path = run_quarantined;
+    // Provider admission is argument-only, so it is decided first: a real
+    // provider with missing admission must refuse before any filesystem
+    // canonicalization, socket admission, journal open or lease acquisition,
+    // and it must never silently become the simulator.
+    let adapter = match adapter_for(&args.provider, &args) {
+        Ok(adapter) => adapter,
+        Err(reason) => {
+            eprintln!("bullet-runner: PROVIDER_ADMISSION_INCOMPLETE: {reason}");
+            return ExitCode::from(2);
+        }
+    };
     let work_package_id = match parse_work_package_id(&args.work_package_id) {
         Ok(work_package_id) => work_package_id,
         Err(error) => {
@@ -180,7 +334,9 @@ async fn run(args: Args) -> ExitCode {
         }
     };
     match admit_signed_lease_client(&args) {
-        Ok(client) => run_admitted(args, client, candidate_admission, work_package_id).await,
+        Ok(client) => {
+            run_admitted(args, client, adapter, candidate_admission, work_package_id).await
+        }
         Err((code, message)) => {
             eprintln!("bullet-runner: {code}: {message}");
             ExitCode::from(2)
@@ -231,6 +387,7 @@ fn admit_signed_lease_client(
 async fn run_admitted(
     args: Args,
     client: std::sync::Arc<SignedLeaseRpcClient>,
+    adapter: Arc<dyn HarnessAdapter>,
     candidate_admission: CandidatePreparationAdmission,
     work_package_id: WorkPackageId,
 ) -> ExitCode {
@@ -240,13 +397,6 @@ async fn run_admitted(
             eprintln!("bullet-runner: INVALID_RUNNER_ID: {error}");
             return ExitCode::from(2);
         }
-    };
-    let Some(adapter) = adapter_for(&args.provider) else {
-        eprintln!(
-            "bullet-runner: unavailable provider {} (simulator-only quarantine)",
-            args.provider
-        );
-        return ExitCode::from(2);
     };
     let supervisor = match Supervisor::open(&args.data_dir) {
         Ok(supervisor) => supervisor,
@@ -297,12 +447,12 @@ async fn run_quarantined(args: Args) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let Some(adapter) = adapter_for(&args.provider) else {
-        eprintln!(
-            "bullet-runner: unavailable provider {} (simulator-only quarantine)",
-            args.provider
-        );
-        return ExitCode::from(2);
+    let adapter = match adapter_for(&args.provider, &args) {
+        Ok(adapter) => adapter,
+        Err(reason) => {
+            eprintln!("bullet-runner: PROVIDER_ADMISSION_INCOMPLETE: {reason}");
+            return ExitCode::from(2);
+        }
     };
     let client: Arc<dyn LeaseClient> = match HttpLeaseClient::new(&args.farmd) {
         Ok(client) => Arc::new(client),
@@ -382,6 +532,10 @@ async fn execute(
     )
     .with_candidate_preparation(candidate_admission)
     .with_preservation_destination(args.preservation_destination);
+    let config = match args.model.clone() {
+        Some(model) => config.with_model(model),
+        None => config,
+    };
     let clock = Arc::new(MonotonicClock::new());
     let result = run_attempt(client, adapter, journal.clone(), clock, &request, &config).await;
     journal.close();

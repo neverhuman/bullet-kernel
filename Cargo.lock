@@ -265,17 +265,20 @@ dependencies = [
 name = "bullet-application"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "blake3",
  "bullet-domain",
  "bullet-harness-claude",
  "bullet-harness-core",
  "bullet-harness-egress",
  "chrono",
+ "futures",
  "proptest",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
  "unicode-normalization",
 ]
 
@@ -545,7 +548,10 @@ dependencies = [
  "bullet-application",
  "bullet-domain",
  "bullet-effects-core",
+ "bullet-harness-claude",
+ "bullet-harness-codex",
  "bullet-harness-core",
+ "bullet-harness-cursor",
  "bullet-harness-sim",
  "bullet-runner-core",
  "bullet-verifier-core",
