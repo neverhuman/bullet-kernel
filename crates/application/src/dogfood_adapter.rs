@@ -12,7 +12,8 @@
 //! when one is missing.
 
 use crate::dogfood_run::{
-    dispatch_dogfood_compose, ComposedTurn, DogfoodReadOnlyOptions, DogfoodRunError,
+    dispatch_dogfood_compose, write_dogfood_evidence, ComposedTurn, DogfoodReadOnlyOptions,
+    DogfoodRunError,
 };
 use bullet_domain::Observation;
 use bullet_harness_core::{
@@ -164,6 +165,7 @@ impl HarnessAdapter for DogfoodClaudeAdapter {
         // the same enrollment the CLI uses. `spawn_blocking`, not
         // `block_in_place`: the latter panics outright on a current-thread
         // runtime, and an adapter that panics cannot refuse.
+        let options_for_evidence = options.clone();
         let composed = tokio::task::spawn_blocking(move || dispatch_dogfood_compose(&options))
             .await
             .map_err(|error| HarnessError::AdmissionRefused {
@@ -189,6 +191,12 @@ impl HarnessAdapter for DogfoodClaudeAdapter {
             .map_err(|_| unsupported(PROVIDER, "turn state"))? = Some(CompletedTurn {
             events: dispatched.outcome.live.events.clone(),
         });
+        // The same create-once proposal and receipt the CLI writes. An
+        // operator who passed `--dogfood-receipt` and got a real, billed turn
+        // should hold the evidence for it no matter which surface drove it;
+        // without this the Runner spent real money and left nothing behind.
+        write_dogfood_evidence(&options_for_evidence, &dispatched)
+            .map_err(|error| Self::refuse(&error))?;
         Ok(handle)
     }
 

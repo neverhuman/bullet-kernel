@@ -103,7 +103,10 @@ pub(super) async fn run_product_runner(
             .arg("--preservation-destination")
             .arg(&preserve_to)
             .arg("--objective")
-            .arg("offline-component-bridge")
+            .arg(
+                std::env::var("BULLET_TXN_OBJECTIVE")
+                    .unwrap_or_else(|_| "offline-component-bridge".to_owned()),
+            )
             .arg("--gate-id")
             .arg(REPOSITORY_GATE_ID);
         for path in granted_scope {

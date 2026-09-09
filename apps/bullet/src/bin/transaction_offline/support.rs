@@ -216,9 +216,63 @@ pub(super) fn sh(dir: &Path, script: &str) -> Result<(), String> {
 }
 pub(super) fn init_source(root: &Path) -> Result<(PathBuf, String), String> {
     let src = root.join("source");
-    fs::create_dir_all(src.join("src")).map_err(|err| fail(err.to_string()))?;
-    fs::write(src.join("src").join("lib.rs"), "pub fn seed() {}\n")
-        .map_err(|err| fail(err.to_string()))?;
+    fs::create_dir_all(&src).map_err(|err| fail(err.to_string()))?;
+    // By default the bridge builds a one-file stub, which is all the simulator
+    // ever needed. `BULLET_TXN_SOURCE_SNAPSHOT` seeds it from the committed
+    // tree of a real repository instead, so a real provider reads real source
+    // under containment. Only the tree is copied, never history, remotes or
+    // untracked files, and the snapshot repository itself is never written to.
+    match std::env::var_os("BULLET_TXN_SOURCE_SNAPSHOT") {
+        Some(raw) => {
+            let snapshot = PathBuf::from(&raw);
+            if !snapshot.is_absolute() || !snapshot.join(".git").exists() {
+                return Err(fail(
+                    "BULLET_TXN_SOURCE_SNAPSHOT must be an absolute path to a git repository",
+                ));
+            }
+            let status = Command::new("git")
+                .args(["-C", &snapshot.display().to_string(), "archive", "HEAD"])
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|err| fail(format!("archive snapshot: {err}")))?;
+            let archive = status
+                .wait_with_output()
+                .map_err(|err| fail(format!("archive snapshot: {err}")))?;
+            if !archive.status.success() {
+                return Err(fail(format!(
+                    "archive snapshot: {}",
+                    String::from_utf8_lossy(&archive.stderr)
+                )));
+            }
+            let mut untar = Command::new("tar")
+                .args(["-x", "-C", &src.display().to_string()])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|err| fail(format!("extract snapshot: {err}")))?;
+            {
+                use std::io::Write as _;
+                let stdin = untar
+                    .stdin
+                    .as_mut()
+                    .ok_or_else(|| fail("extract snapshot: no stdin"))?;
+                stdin
+                    .write_all(&archive.stdout)
+                    .map_err(|err| fail(format!("extract snapshot: {err}")))?;
+            }
+            if !untar
+                .wait()
+                .map_err(|err| fail(format!("extract snapshot: {err}")))?
+                .success()
+            {
+                return Err(fail("extract snapshot failed"));
+            }
+        }
+        None => {
+            fs::create_dir_all(src.join("src")).map_err(|err| fail(err.to_string()))?;
+            fs::write(src.join("src").join("lib.rs"), "pub fn seed() {}\n")
+                .map_err(|err| fail(err.to_string()))?;
+        }
+    }
     sh(
         &src,
         "git init -q -b main . && git config user.name bullet && git config user.email bullet@test && git add . && git commit -qm seed",

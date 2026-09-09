@@ -554,7 +554,11 @@ pub fn dispatch_dogfood_compose(
 }
 
 /// Write the create-once proposal and receipt for a composed turn.
-fn write_dogfood_evidence(
+///
+/// Public so the Runner's adapter writes the same evidence the CLI does: an
+/// operator who passed `--dogfood-receipt` and got a real turn should get the
+/// receipt, whichever surface drove it.
+pub fn write_dogfood_evidence(
     options: &DogfoodReadOnlyOptions,
     composed: &DispatchedTurn,
 ) -> Result<DogfoodRunStatus, DogfoodRunError> {
