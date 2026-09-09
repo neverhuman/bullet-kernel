@@ -15,43 +15,25 @@ read_only = true
 write_policy = "generator_only"
 
 [[zone]]
-path = "crates/domain/src/generated/schema_bundle.rs"
+path = "generated/schema_bundle.rs"
 source = "bullet-farm:contracts/generated/rust/schema_bundle.rs"
-command = "bash ../bullet-farm/scripts/sync-family-contracts.sh write"
+command = "cp ../bullet-farm/contracts/generated/rust/schema_bundle.rs generated/schema_bundle.rs"
 owner = "contracts"
 read_only = true
 write_policy = "generator_only"
 
 [[zone]]
-path = "crates/application/tests/fixtures/policy-v1alpha1.json"
-source = "bullet-farm:policy/v1alpha1/policy.json"
-command = "bash ../bullet-farm/scripts/sync-family-contracts.sh write"
-owner = "application"
-read_only = true
-write_policy = "generator_only"
-
-[[zone]]
-path = "crates/application/tests/fixtures/policy-v1alpha2-live-enabled.json"
-source = "bullet-farm:crates/bullet-wire/tests/fixtures/policy-v1alpha2-live-enabled.json"
-command = "bash ../bullet-farm/scripts/sync-family-contracts.sh write"
-owner = "application"
-read_only = true
-write_policy = "generator_only"
-
-[[zone]]
-path = "crates/adapters/tests/fixtures/formal/"
+path = "generated/formal/"
 source = "bullet-farm:formal/traces"
 command = "bash ../bullet-farm/scripts/sync-family-contracts.sh write"
 owner = "assurance"
 read_only = true
 write_policy = "generator_only"
 
-# Authored contract: this command checks selected constraints, writes no output,
-# and is not a generator or proof of complete Rust/schema equivalence.
 [[zone]]
-path = "contracts/schemas/patch-proposal.json"
-source = "crates/harness-core/src/proposal.rs"
+path = "generated/patch-proposal-binding.rs"
+source = "contracts/schemas/patch-proposal.json"
 command = "cargo test --locked -p bullet-harness-core --lib proposal::tests::schema_and_authoritative_struct_agree -- --exact"
 owner = "contracts"
-read_only = false
-write_policy = "reviewed_manual"
+read_only = true
+write_policy = "generator_only"

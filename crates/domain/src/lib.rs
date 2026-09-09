@@ -9,7 +9,7 @@ pub mod gates;
 pub mod ids;
 pub mod mutation_guard;
 pub mod observation;
-#[path = "generated/schema_bundle.rs"]
+#[path = "../../../generated/schema_bundle.rs"]
 pub mod schema_bundle;
 pub mod states;
 pub mod taxonomy;
