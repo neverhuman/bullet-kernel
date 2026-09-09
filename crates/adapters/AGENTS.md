@@ -14,6 +14,7 @@ This is where durable truth is written.
   `db/migrations/meta.toml`.
 - A physically restored database stays quarantined and refuses work with
   `RESTORE_ADMISSION_REQUIRED`. Do not add a bypass.
-- `generated/formal/` (repo root) is a hub-synced generated zone
-  (`agent/generated-zones.toml`); do not hand-edit it.
+- `crates/adapters/tests/fixtures/formal/` is a hub-synced generated zone
+  (`agent/generated-zones.toml`); do not hand-edit it. Replay its byte-exact JSON
+  with strict parsing; do not strip comments or concatenate lines.
 - Proof lane: `bash scripts/ci-local.sh required`.
