@@ -23,17 +23,35 @@ read_only = true
 write_policy = "generator_only"
 
 [[zone]]
-path = "generated/formal/"
+path = "crates/application/tests/fixtures/policy-v1alpha1.json"
+source = "bullet-farm:policy/v1alpha1/policy.json"
+command = "bash ../bullet-farm/scripts/sync-family-contracts.sh write"
+owner = "application"
+read_only = true
+write_policy = "generator_only"
+
+[[zone]]
+path = "crates/application/tests/fixtures/policy-v1alpha2-live-enabled.json"
+source = "bullet-farm:crates/bullet-wire/tests/fixtures/policy-v1alpha2-live-enabled.json"
+command = "bash ../bullet-farm/scripts/sync-family-contracts.sh write"
+owner = "application"
+read_only = true
+write_policy = "generator_only"
+
+[[zone]]
+path = "crates/adapters/tests/fixtures/formal/"
 source = "bullet-farm:formal/traces"
 command = "bash ../bullet-farm/scripts/sync-family-contracts.sh write"
 owner = "assurance"
 read_only = true
 write_policy = "generator_only"
 
+# Authored contract: this command checks selected constraints, writes no output,
+# and is not a generator or proof of complete Rust/schema equivalence.
 [[zone]]
-path = "generated/patch-proposal-binding.rs"
-source = "contracts/schemas/patch-proposal.json"
+path = "contracts/schemas/patch-proposal.json"
+source = "crates/harness-core/src/proposal.rs"
 command = "cargo test --locked -p bullet-harness-core --lib proposal::tests::schema_and_authoritative_struct_agree -- --exact"
 owner = "contracts"
-read_only = true
-write_policy = "generator_only"
+read_only = false
+write_policy = "reviewed_manual"
