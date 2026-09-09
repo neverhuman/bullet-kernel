@@ -43,18 +43,45 @@ struct Step {
     remote: String,
 }
 
+fn parse_trace(json: &str) -> serde_json::Result<Trace> {
+    serde_json::from_str(json)
+}
+
 fn trace(name: &str) -> Trace {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../generated/formal")
+        .join("tests/fixtures/formal")
         .join(name);
-    let text = std::fs::read_to_string(path).expect("read generated formal trace");
-    let json: String = text
-        .lines()
-        .filter(|line| !line.starts_with("//"))
-        .collect();
-    let trace = serde_json::from_str::<Trace>(&json).expect("strict trace");
+    let json = std::fs::read_to_string(path).expect("read generated formal trace");
+    let trace = parse_trace(&json).expect("strict trace");
     assert_eq!(trace.schema_version, "v1alpha1");
     trace
+}
+
+#[test]
+fn formal_trace_parser_preserves_raw_json() {
+    let valid = r#"{"model":"EffectCheck","schema_version":"v1alpha1","steps":[]}"#;
+    for json in [valid.to_owned(), valid.replace(',', ",\n")] {
+        let trace = parse_trace(&json).expect("valid raw JSON");
+        assert_eq!(trace.model, "EffectCheck");
+        assert_eq!(trace.schema_version, "v1alpha1");
+        assert!(trace.steps.is_empty());
+    }
+    let escaped_newline = valid.replace("EffectCheck", r"Effect\nCheck");
+    assert_eq!(
+        parse_trace(&escaped_newline).unwrap().model,
+        "Effect\nCheck"
+    );
+    for invalid in [
+        valid.trim_end_matches('}').to_owned(),
+        format!("// Generated trace\n{valid}"),
+        valid.replace(',', ",// comment\n"),
+        valid.replace("EffectCheck", "Effect\nCheck"),
+    ] {
+        assert!(
+            parse_trace(&invalid).is_err(),
+            "accepted invalid JSON: {invalid:?}"
+        );
+    }
 }
 
 fn t(offset: i64) -> DateTime<Utc> {
