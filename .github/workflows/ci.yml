@@ -134,9 +134,11 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
+      - name: Install checksum-pinned actionlint 1.7.8
+        run: bash ops/ci/install-actionlint.sh
       - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
         with:
-          tool: actionlint@1.7.8,shellcheck@0.10.0
+          tool: shellcheck@0.10.0
           fallback: none
       - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
         with:
@@ -281,6 +283,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Install checksum-pinned ripgrep 14.1.1
         run: bash ops/ci/install-ripgrep.sh
       - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # pinned action
