@@ -44,6 +44,11 @@ pub(crate) enum DogfoodCommands {
         /// Absolute enrolled executable.
         #[arg(long)]
         executable: Option<PathBuf>,
+        /// Admitted sealed-catalog gate id (`gat_` + 64 hex), repeatable.
+        /// At least one is required: the turn's proposal must echo exactly
+        /// this set, and an empty selection is refused before any spend.
+        #[arg(long = "gate-id")]
+        gate_ids: Vec<String>,
         /// Repeatable `source,target,blake3` grants.
         #[arg(long = "credential")]
         credentials: Vec<String>,
@@ -59,6 +64,11 @@ pub(crate) enum DogfoodCommands {
         /// Optional USD cap at or below the enrollment max.
         #[arg(long)]
         max_budget_usd: Option<f64>,
+        /// Optional wall-clock bound for the turn, in seconds. Defaults to
+        /// 180. The policy's `budget_policy.maximum_attempt_seconds` is the
+        /// ceiling; a larger request is refused.
+        #[arg(long)]
+        wall_timeout_secs: Option<u64>,
         /// Create-once receipt path.
         #[arg(long)]
         receipt: Option<PathBuf>,
@@ -154,10 +164,12 @@ pub(crate) fn run(command: DogfoodCommands) -> ExitCode {
             issuer,
             key_id,
             executable,
+            gate_ids,
             credentials,
             workdir,
             prompt,
             max_budget_usd,
+            wall_timeout_secs,
             receipt,
             json,
         } => {
@@ -177,6 +189,7 @@ pub(crate) fn run(command: DogfoodCommands) -> ExitCode {
                         key_id.as_ref().is_some_and(|value| !value.is_empty()),
                     ),
                     ("executable", executable.is_some()),
+                    ("gate-id", !gate_ids.is_empty()),
                     ("workdir", workdir.is_some()),
                     ("receipt", receipt.is_some()),
                 ],
@@ -198,10 +211,12 @@ pub(crate) fn run(command: DogfoodCommands) -> ExitCode {
                 issuer: issuer.expect("checked"),
                 key_id: key_id.expect("checked"),
                 executable: executable.expect("checked"),
+                gate_ids,
                 credentials,
                 workdir: workdir.expect("checked"),
                 prompt,
                 max_budget_usd,
+                wall_timeout_secs,
                 receipt: receipt.expect("checked"),
             };
             match run_dogfood_read_only(options) {

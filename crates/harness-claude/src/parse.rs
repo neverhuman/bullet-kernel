@@ -3,10 +3,10 @@
 mod tools;
 
 use crate::protocol::{
-    basic_event_subject, empty_array, empty_optional_array, event_subject, exact_fields, protocol,
-    unique_string_array, valid_native_id, valid_result_common, valid_uuid, ClaudeStreamOutcome,
-    ClaudeStreamTranscript, Phase, TranscriptProfile, MAX_ASSISTANT_CONTENT_ITEMS,
-    MAX_STREAM_JSON_FRAME_BYTES, READ_ONLY_TOOL_ALLOWLIST,
+    basic_event_subject, empty_array, empty_optional_array, event_subject, exact_fields,
+    model_matches, protocol, unique_string_array, valid_native_id, valid_result_common, valid_uuid,
+    ClaudeStreamOutcome, ClaudeStreamTranscript, Phase, TranscriptProfile,
+    MAX_ASSISTANT_CONTENT_ITEMS, MAX_STREAM_JSON_FRAME_BYTES, READ_ONLY_TOOL_ALLOWLIST,
 };
 use bullet_harness_core::{
     decode_strict_json, AgentEvent, AgentEventKind, HarnessError, PatchProposal,
@@ -53,10 +53,27 @@ impl ClaudeStreamTranscript {
             return self.fail("duplicate stream-JSON frame");
         }
         match object.get("type").and_then(Value::as_str) {
+            // Route on subtype, not just type: `system` is the CLI's status
+            // channel. 2.1.266 emits `system/thinking_tokens` progress frames
+            // mid-turn, and sending every `system` frame to the init handler
+            // refused them as "system/init is invalid in phase Active" -- after
+            // the turn had been billed. A non-init system frame carries no
+            // authority: it cannot name a tool, a session, or a proposal, so it
+            // yields no event and changes no state.
+            Some("system")
+                if self.profile.admits_vendor_fields()
+                    && object.get("subtype").and_then(Value::as_str) != Some("init") =>
+            {
+                Ok(Vec::new())
+            }
             Some("system") => self.system_init(object),
             Some("assistant") => self.assistant(object),
             Some("result") => self.result(object),
             Some("user") if self.profile.admits_tool_use() => self.tool_result(object),
+            // Quota telemetry. It carries no admission meaning and the CLI
+            // emits it unprompted on a subscription account; it still counts
+            // against the frame budget above.
+            Some("rate_limit_event") if self.profile.admits_vendor_fields() => Ok(Vec::new()),
             Some(other) => self.fail(format!("unadmitted stream-JSON type {other:?}")),
             None => self.fail("stream-JSON frame lacks string type"),
         }
@@ -93,7 +110,17 @@ impl ClaudeStreamTranscript {
             "mcp_server_errors",
             "capabilities",
         ];
-        if !exact_fields(object, &required, &optional)
+        // ConformanceV1 keeps its closed field set. The dogfood profile admits
+        // unknown non-authority keys: a real 2.1.266 init carries
+        // fast_mode_state, memory_paths and messaging_socket_path, none of
+        // which mean anything for admission, and refusing them refused the
+        // whole turn AFTER it had been billed.
+        let fields_ok = if self.profile.admits_vendor_fields() {
+            required.iter().all(|key| object.contains_key(*key))
+        } else {
+            exact_fields(object, &required, &optional)
+        };
+        if !fields_ok
             || object.get("subtype").and_then(Value::as_str) != Some("init")
             || object.get("claude_code_version").and_then(Value::as_str)
                 != Some(self.expected_runtime_version.as_str())
@@ -104,14 +131,29 @@ impl ClaudeStreamTranscript {
                 .and_then(Value::as_str)
                 .is_some_and(valid_native_id)
             || object.get("output_style").and_then(Value::as_str) != Some("default")
-            || object.get("analytics_disabled").and_then(Value::as_bool) != Some(true)
-            || object
+            // These two are org-privacy telemetry hints, not authority. A
+            // personal subscription reports false for both and cannot be made
+            // to report true by any environment the containment can set
+            // (product_feedback_disabled is driven by org ZDR policy), so
+            // pinning them to true refused every real turn on a real account.
+            // They stay pinned on the frozen conformance subject and are
+            // observed, not gated, under dogfood.
+            || (!self.profile.admits_vendor_fields()
+                && (object.get("analytics_disabled").and_then(Value::as_bool) != Some(true)
+                    || object
+                        .get("product_feedback_disabled")
+                        .and_then(Value::as_bool)
+                        != Some(true)))
+            || !object.get("analytics_disabled").is_some_and(Value::is_boolean)
+            || !object
                 .get("product_feedback_disabled")
-                .and_then(Value::as_bool)
-                != Some(true)
+                .is_some_and(Value::is_boolean)
             || !empty_array(object, "mcp_servers")
             || !empty_array(object, "slash_commands")
-            || !empty_array(object, "agents")
+            // `agents` lists the agent TYPES the build knows, not authority the
+            // turn holds: dispatching one needs the `Task` tool, which the
+            // allowlist below excludes. A real 2.1.266 always reports several.
+            || (!self.profile.admits_vendor_fields() && !empty_array(object, "agents"))
             || !empty_array(object, "skills")
             || !empty_array(object, "plugins")
             || !empty_optional_array(object, "plugin_errors")
@@ -139,7 +181,7 @@ impl ClaudeStreamTranscript {
                 if tools.is_empty()
                     || !tools
                         .iter()
-                        .all(|tool| READ_ONLY_TOOL_ALLOWLIST.contains(tool))
+                        .all(|tool| self.profile.tool_allowlist().contains(tool))
                 {
                     return self.fail("system/init tools exceed the read-only allowlist");
                 }
@@ -184,17 +226,23 @@ impl ClaudeStreamTranscript {
         if self.assistant_messages >= self.profile.max_assistant_messages() {
             return self.fail("assistant message limit exceeded");
         }
-        if !exact_fields(
-            object,
-            &[
-                "type",
-                "uuid",
-                "session_id",
-                "message",
-                "parent_tool_use_id",
-            ],
-            &["error"],
-        ) || !object.get("parent_tool_use_id").is_some_and(Value::is_null)
+        let envelope_required = [
+            "type",
+            "uuid",
+            "session_id",
+            "message",
+            "parent_tool_use_id",
+        ];
+        // A real assistant frame also carries `timestamp` and `request_id`.
+        let envelope_ok = if self.profile.admits_vendor_fields() {
+            envelope_required
+                .iter()
+                .all(|key| object.contains_key(*key))
+        } else {
+            exact_fields(object, &envelope_required, &["error"])
+        };
+        if !envelope_ok
+            || !object.get("parent_tool_use_id").is_some_and(Value::is_null)
             || !object.get("error").is_none_or(Value::is_null)
         {
             return self.fail("assistant envelope is not an exact main-session message");
@@ -216,10 +264,26 @@ impl ClaudeStreamTranscript {
             "stop_sequence",
             "usage",
         ];
-        if !exact_fields(message, &required, &["container", "context_management"])
+        let message_ok = if self.profile.admits_vendor_fields() {
+            required.iter().all(|key| message.contains_key(*key))
+        } else {
+            exact_fields(message, &required, &["container", "context_management"])
+        };
+        if !message_ok
             || message.get("type").and_then(Value::as_str) != Some("message")
             || message.get("role").and_then(Value::as_str) != Some("assistant")
-            || message.get("model").and_then(Value::as_str) != self.model.as_deref()
+            || !message
+                .get("model")
+                .and_then(Value::as_str)
+                .is_some_and(|message_model| match self.profile {
+                    TranscriptProfile::ConformanceV1 => {
+                        Some(message_model) == self.model.as_deref()
+                    }
+                    TranscriptProfile::DogfoodReadOnlyV0 => self
+                        .model
+                        .as_deref()
+                        .is_some_and(|session| model_matches(session, message_model)),
+                })
             || !message.get("usage").is_some_and(Value::is_object)
             || !message.get("stop_sequence").is_some_and(Value::is_null)
             || !message.get("stop_reason").is_some_and(|value| {
@@ -233,9 +297,19 @@ impl ClaudeStreamTranscript {
         let Some(message_id) = message.get("id").and_then(Value::as_str) else {
             return self.fail("assistant message lacks id");
         };
-        if !valid_native_id(message_id) || !self.seen_message_ids.insert(message_id.to_string()) {
+        if !valid_native_id(message_id) {
             return self.fail("assistant message id is invalid or duplicate");
         }
+        // 2.1.266 streams one logical assistant message as several frames --
+        // observed 24 frames carrying 8 distinct ids, split by content block
+        // (thinking, text, tool_use). Treating every repeat as a replay refused
+        // every real turn after it had been billed.
+        let continuation = self.profile.admits_vendor_fields()
+            && self.last_message_id.as_deref() == Some(message_id);
+        if !continuation && !self.seen_message_ids.insert(message_id.to_string()) {
+            return self.fail("assistant message id is invalid or duplicate");
+        }
+        self.last_message_id = Some(message_id.to_owned());
         let Some(content) = message.get("content").and_then(Value::as_array) else {
             return self.fail("assistant content is not an array");
         };
@@ -279,7 +353,9 @@ impl ClaudeStreamTranscript {
             mapped.push(self.event(kind, payload, &format!("{uuid}:content:{index}")));
         }
         self.record_event(uuid)?;
-        self.assistant_messages += 1;
+        if !continuation {
+            self.assistant_messages += 1;
+        }
         Ok(mapped)
     }
 
@@ -292,7 +368,7 @@ impl ClaudeStreamTranscript {
         };
         self.require_native_session(session_id)?;
         self.record_event(uuid)?;
-        if !valid_result_common(object) {
+        if !valid_result_common(object, self.profile.admits_vendor_fields()) {
             return self.fail("result common subject is malformed");
         }
         let Some(subtype) = object.get("subtype").and_then(Value::as_str) else {
@@ -333,8 +409,16 @@ impl ClaudeStreamTranscript {
                 .and_then(Value::as_u64)
                 .is_some_and(|turns| match self.profile {
                     TranscriptProfile::ConformanceV1 => turns == self.assistant_messages,
+                    // The CLI counts its own synthetic injections as turns, so
+                    // a real schema-bearing turn reports more turns than there
+                    // are assistant messages. The bound stays exact: it can
+                    // never exceed what this transcript actually admitted.
                     TranscriptProfile::DogfoodReadOnlyV0 => {
-                        turns > 0 && turns <= self.assistant_messages
+                        turns > 0
+                            && turns
+                                <= self
+                                    .assistant_messages
+                                    .saturating_add(self.synthetic_user_frames)
                     }
                 });
         if self.phase != Phase::Active
@@ -343,7 +427,16 @@ impl ClaudeStreamTranscript {
             || !num_turns_matches
             || !model_usage_matches
             || object.get("is_error").and_then(Value::as_bool) != Some(false)
-            || object.get("stop_reason").and_then(Value::as_str) != Some("end_turn")
+            // A schema-bearing turn ends by calling StructuredOutput, so the
+            // terminal stop_reason is `tool_use`, not `end_turn`. The frozen
+            // conformance subject has no tools and keeps `end_turn` only.
+            || !object
+                .get("stop_reason")
+                .and_then(Value::as_str)
+                .is_some_and(|reason| {
+                    reason == "end_turn"
+                        || (self.profile.admits_tool_use() && reason == "tool_use")
+                })
             || !object.get("result").is_some_and(Value::is_string)
             || object.get("errors").is_some()
         {

@@ -174,7 +174,21 @@ pub(super) fn passported_runtime(
         ));
     };
     let root = prefix.join(provider).join(version);
-    let passport_path = root.with_extension("passport.json");
+    // NOT `with_extension`: it replaces everything after the LAST dot, so a
+    // semver directory like `.../claude/2.1.266` became
+    // `.../claude/2.1.passport.json` and every passport lookup missed. The
+    // documented layout is the sibling file named `<root>.passport.json`.
+    let mut passport_name = root
+        .file_name()
+        .ok_or_else(|| {
+            failed(
+                "DOGFOOD_PASSPORT_LAYOUT",
+                "deployment root has no final segment",
+            )
+        })?
+        .to_os_string();
+    passport_name.push(".passport.json");
+    let passport_path = root.with_file_name(passport_name);
     let bytes = fs::read(&passport_path).map_err(|error| {
         failed(
             "DOGFOOD_PASSPORT_MISSING",

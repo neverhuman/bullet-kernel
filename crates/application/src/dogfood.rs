@@ -210,6 +210,92 @@ pub fn write_receipt(
     Ok(path.to_path_buf())
 }
 
+/// Create-once record of a provider turn that ran, was billed, and was then
+/// refused. Carries no proposal: the whole point is that none was admitted.
+/// Without this, every failed real turn is unrecorded spend.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DogfoodRefusalRecordV0 {
+    /// Record schema.
+    pub schema_version: String,
+    /// Purpose-separated kind. Never a receipt kind.
+    pub kind: String,
+    /// Stable refusal code from the compose.
+    pub code: String,
+    /// Non-secret refusal detail.
+    pub detail: String,
+    /// Enrolled runtime version observed.
+    pub enrolled_runtime_version: String,
+    /// Child exit status, when the child was reaped.
+    pub exit_code: Option<i32>,
+    /// Observed wall time in milliseconds.
+    pub wall_ms: u64,
+    /// Whether the wall timeout fired.
+    pub timed_out: bool,
+    /// Domain-separated digest of captured stdout.
+    pub stdout_blake3: String,
+    /// Domain-separated digest of captured stderr.
+    pub stderr_blake3: String,
+    /// Provider-reported cost in micro-USD, when the turn reported one.
+    pub total_cost_micro_usd: Option<u64>,
+}
+
+impl DogfoodRefusalRecordV0 {
+    pub const SCHEMA_VERSION: &'static str = "v0";
+    pub const KIND: &'static str = "DOGFOOD_REFUSED_AFTER_TURN";
+
+    /// Structural validation.
+    ///
+    /// # Errors
+    ///
+    /// `DogfoodError::Refused` for a malformed record.
+    pub fn validate(&self) -> Result<(), DogfoodError> {
+        if self.schema_version != Self::SCHEMA_VERSION {
+            return Err(DogfoodError::Refused("refusal schema must be v0"));
+        }
+        if self.kind != Self::KIND {
+            return Err(DogfoodError::Refused(
+                "refusal kind must be DOGFOOD_REFUSED_AFTER_TURN",
+            ));
+        }
+        if self.code.is_empty() {
+            return Err(DogfoodError::Refused("refusal code must be non-empty"));
+        }
+        Ok(())
+    }
+}
+
+/// Write one create-once 0600 refusal record.
+///
+/// # Errors
+///
+/// `DogfoodError::Refused` on overwrite or a malformed record; `Io` otherwise.
+pub fn write_refusal_record(
+    path: &Path,
+    record: &DogfoodRefusalRecordV0,
+) -> Result<PathBuf, DogfoodError> {
+    record.validate()?;
+    let bytes = serde_json::to_vec(record).map_err(|error| DogfoodError::Io(error.to_string()))?;
+    if bytes_windows_forbidden(&bytes) {
+        return Err(DogfoodError::Refused(
+            "serialized refusal contains a signing key",
+        ));
+    }
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                DogfoodError::Refused("refusal record overwrite is refused")
+            } else {
+                DogfoodError::Io(error.to_string())
+            }
+        })?;
+    write_0600(file, &bytes)?;
+    Ok(path.to_path_buf())
+}
+
 fn bytes_windows_forbidden(bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
     ["\"sig\"", "signature", "\"mac\"", "\"seal\""]

@@ -3,7 +3,6 @@
 use super::{basic_event_subject, exact_fields};
 use crate::protocol::{
     valid_native_id, ClaudeStreamTranscript, Phase, MAX_ASSISTANT_CONTENT_ITEMS,
-    READ_ONLY_TOOL_ALLOWLIST,
 };
 use bullet_harness_core::{AgentEvent, AgentEventKind, HarnessError};
 use serde_json::{json, Map, Value};
@@ -14,7 +13,15 @@ impl ClaudeStreamTranscript {
         &mut self,
         item: &Map<String, Value>,
     ) -> Result<Value, HarnessError> {
-        if !exact_fields(item, &["type", "id", "name", "input"], &[])
+        let item_required = ["type", "id", "name", "input"];
+        // Real builds add `caller` to the tool_use item; it names who
+        // requested the tool, not what it may do.
+        let item_ok = if self.profile.admits_vendor_fields() {
+            item_required.iter().all(|key| item.contains_key(*key))
+        } else {
+            exact_fields(item, &item_required, &[])
+        };
+        if !item_ok
             || item.get("type").and_then(Value::as_str) != Some("tool_use")
             || !item.get("input").is_some_and(Value::is_object)
         {
@@ -26,7 +33,7 @@ impl ClaudeStreamTranscript {
         let Some(name) = item.get("name").and_then(Value::as_str) else {
             return self.fail("read-only tool request lacks a name");
         };
-        if !valid_native_id(tool_use_id) || !READ_ONLY_TOOL_ALLOWLIST.contains(&name) {
+        if !valid_native_id(tool_use_id) || !self.profile.tool_allowlist().contains(&name) {
             return self.fail("read-only tool request exceeds admission");
         }
         if self.seen_tool_use_ids.contains(tool_use_id)
@@ -50,18 +57,24 @@ impl ClaudeStreamTranscript {
         object: &Map<String, Value>,
     ) -> Result<Vec<AgentEvent>, HarnessError> {
         self.require_phase(Phase::Active, "tool result")?;
-        if !exact_fields(
-            object,
-            &[
-                "type",
-                "uuid",
-                "session_id",
-                "message",
-                "parent_tool_use_id",
-            ],
-            &[],
-        ) || !object.get("parent_tool_use_id").is_some_and(Value::is_null)
-        {
+        let envelope_required = [
+            "type",
+            "uuid",
+            "session_id",
+            "message",
+            "parent_tool_use_id",
+        ];
+        // Real `user` frames carry `timestamp`, `isSynthetic` and a
+        // `tool_use_result` echo (a string on 2.1.266). None of them is
+        // authority; the admitted content array below is.
+        let envelope_ok = if self.profile.admits_vendor_fields() {
+            envelope_required
+                .iter()
+                .all(|key| object.contains_key(*key))
+        } else {
+            exact_fields(object, &envelope_required, &[])
+        };
+        if !envelope_ok || !object.get("parent_tool_use_id").is_some_and(Value::is_null) {
             return self.fail("tool result envelope is not an exact main-session frame");
         }
         let Some((uuid, session_id)) = basic_event_subject(object) else {
@@ -71,9 +84,14 @@ impl ClaudeStreamTranscript {
         let Some(message) = object.get("message").and_then(Value::as_object) else {
             return self.fail("tool result message is not an object");
         };
-        if !exact_fields(message, &["role", "content"], &[])
-            || message.get("role").and_then(Value::as_str) != Some("user")
-        {
+        let message_ok = if self.profile.admits_vendor_fields() {
+            ["role", "content"]
+                .iter()
+                .all(|key| message.contains_key(*key))
+        } else {
+            exact_fields(message, &["role", "content"], &[])
+        };
+        if !message_ok || message.get("role").and_then(Value::as_str) != Some("user") {
             return self.fail("tool result message subject is malformed");
         }
         let Some(content) = message.get("content").and_then(Value::as_array) else {
@@ -81,6 +99,29 @@ impl ClaudeStreamTranscript {
         };
         if content.is_empty() || content.len() > MAX_ASSISTANT_CONTENT_ITEMS {
             return self.fail("tool result content item count is outside admission");
+        }
+
+        // A synthetic user frame is the CLI instructing the model, not a tool
+        // result and not model output: 2.1.266 emits
+        // `[structured-output-enforce] You MUST call the StructuredOutput
+        // tool` this way whenever `--json-schema` is set. It carries only text,
+        // settles no outstanding request, and yields no event, so admitting it
+        // records nothing and grants nothing -- but refusing it refused every
+        // schema-bearing turn.
+        if self.profile.admits_vendor_fields()
+            && object.get("isSynthetic").and_then(Value::as_bool) == Some(true)
+        {
+            let text_only = content.iter().all(|item| {
+                item.as_object()
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("text")
+            });
+            if text_only {
+                self.record_event(uuid)?;
+                self.synthetic_user_frames = self.synthetic_user_frames.saturating_add(1);
+                return Ok(Vec::new());
+            }
         }
 
         let mut ids = Vec::with_capacity(content.len());

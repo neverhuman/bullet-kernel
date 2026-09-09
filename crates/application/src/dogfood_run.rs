@@ -4,11 +4,14 @@
 //! `dispatch_dogfood_turn`. It never applies a proposal and never flips
 //! `live_admission_enabled`.
 
-use crate::dogfood::{write_receipt, DogfoodReadOnlyReceiptV0};
+use crate::dogfood::{
+    write_receipt, write_refusal_record, DogfoodReadOnlyReceiptV0, DogfoodRefusalRecordV0,
+};
 use crate::live_conformance::{enrollment_path, load_provider_enrollment};
 use crate::policy_snapshot::{
     refuse_dogfood_binding_as_live, validate_dogfood_admission, LoadedPolicy,
 };
+use bullet_domain::{gate_definition, parse_gate_ids};
 use bullet_harness_claude::dogfood::dispatch_dogfood_turn;
 use bullet_harness_core::{
     synthetic_uuid, CanarySecrets, CredentialGrant, LiveTurnRequest, PreparedProviderHome,
@@ -20,6 +23,9 @@ use bullet_harness_egress::{
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
+
+/// Default wall-clock bound for one dogfood turn when the operator names none.
+pub const DEFAULT_WALL_TIMEOUT_SECONDS: u64 = 180;
 
 /// Designed-neutral exit used for missing operator input and missing namespaces.
 pub const DOGFOOD_NEUTRAL_EXIT: u8 = CONTAINMENT_UNAVAILABLE_EXIT;
@@ -60,6 +66,10 @@ pub struct DogfoodReadOnlyOptions {
     pub key_id: String,
     /// Absolute provider executable. Must match the enrollment.
     pub executable: PathBuf,
+    /// Admitted sealed-catalog gate identifiers the turn's proposal must echo.
+    /// Never empty: the transcript refuses an empty selection, so an empty set
+    /// here would refuse the turn *after* the provider had already run.
+    pub gate_ids: Vec<String>,
     /// Repeatable credential grants.
     pub credentials: Vec<CredentialSpec>,
     /// Absolute family working directory, bound read-only.
@@ -68,6 +78,9 @@ pub struct DogfoodReadOnlyOptions {
     pub prompt: Option<String>,
     /// Optional tighter USD cap; enrollment max still wins.
     pub max_budget_usd: Option<f64>,
+    /// Optional wall-clock bound in seconds, bounded by the policy's
+    /// `maximum_attempt_seconds`. `None` keeps the 180 s default.
+    pub wall_timeout_secs: Option<u64>,
     /// Create-once receipt path.
     pub receipt: PathBuf,
 }
@@ -146,6 +159,19 @@ pub fn run_dogfood_read_only(
             ),
         ));
     }
+    // Before any staging, containment, or spend: the transcript constructor
+    // refuses an empty or unadmitted gate selection, and it runs only after the
+    // provider process has been spawned and billed. Refuse here instead.
+    let admitted_gate_ids = parse_gate_ids(&options.gate_ids)
+        .map_err(|error| failed("DOGFOOD_GATE_IDS", error.to_string()))?;
+    for gate_id in &admitted_gate_ids {
+        if gate_definition(gate_id).is_none() {
+            return Err(failed(
+                "DOGFOOD_GATE_UNADMITTED",
+                format!("gate {gate_id} is not in the sealed V1 catalog"),
+            ));
+        }
+    }
     refuse_launch_grant_alpha(&options.issuer, &options.key_id)?;
     require_absolute("data-dir", &options.data_dir)?;
     require_absolute("policy", &options.policy)?;
@@ -171,6 +197,12 @@ pub fn run_dogfood_read_only(
             "dogfood admission refuses a general live binding",
         ));
     }
+    // The structural half ran in `from_bytes`; the activation window is a wall
+    // -clock fact and was never checked on this path, so an expired or
+    // not-yet-active policy composed a live turn.
+    loaded
+        .validate_at(unix_ms())
+        .map_err(|error| failed("DOGFOOD_POLICY_NOT_ACTIVE", error.to_string()))?;
     let binding = load_binding(&options.binding)?;
     if refuse_dogfood_binding_as_live(&binding).is_ok() {
         return Err(failed(
@@ -329,15 +361,44 @@ pub fn run_dogfood_read_only(
 
     let canaries = CanarySecrets::new(vec![synthetic_uuid("canary-one")])
         .map_err(|error| failed("DOGFOOD_CANARY", error.to_string()))?;
+    // The wall bound is a ratified policy fact, not a constant: a real
+    // repository task does not finish in the 180 s that was hard-coded here,
+    // and a turn killed by the wall is billed for nothing.
+    let policy_max_seconds = loaded.snapshot().budget_policy.maximum_attempt_seconds;
+    let wall_timeout_secs = match options.wall_timeout_secs {
+        None => DEFAULT_WALL_TIMEOUT_SECONDS.min(policy_max_seconds),
+        Some(requested) if requested == 0 || requested > policy_max_seconds => {
+            return Err(failed(
+                "DOGFOOD_WALL_TIMEOUT",
+                format!(
+                    "wall timeout {requested}s must be 1..={policy_max_seconds}s \
+                     (policy budget_policy.maximum_attempt_seconds)"
+                ),
+            ));
+        }
+        Some(requested) => requested,
+    };
+
+    // Nothing else on this path tells the model which gate identifiers its
+    // proposal must echo, and the transcript refuses a terminal whose
+    // `gate_ids` differ from the admission. Without this the operator has to
+    // paste the ids into the prompt by hand, and a turn that forgets them is
+    // billed and then refused.
+    let prompt = format!(
+        "{prompt}\n\nWhen you return the PatchProposal, its `gate_ids` field must be \
+         exactly this ordered list, copied verbatim: {gates}",
+        gates = serde_json::to_string(&options.gate_ids)
+            .map_err(|error| failed("DOGFOOD_GATE_IDS", error.to_string()))?
+    );
     let request = LiveTurnRequest {
         session_id: bullet_harness_core::AgentSessionId::new(synthetic_uuid("session")),
         invocation_id: bullet_harness_core::InvocationId::new(synthetic_uuid("invocation")),
         prompt,
         workdir: workdir.clone(),
         expected_runtime_version: enrolled.record().version.clone(),
-        gate_ids: Vec::new(),
+        gate_ids: options.gate_ids.clone(),
         max_cost_micro_usd,
-        wall_timeout: Duration::from_secs(180),
+        wall_timeout: Duration::from_secs(wall_timeout_secs),
         canaries: canaries.clone(),
     };
     // The child environment is composed INSIDE the bubblewrap plan via
@@ -379,7 +440,61 @@ pub fn run_dogfood_read_only(
     if let Some(detail) = compose_error.borrow_mut().take() {
         return Err(failed("DOGFOOD_CONTAINMENT_COMPOSE", detail));
     }
-    let outcome = dispatched.map_err(|error| failed("DOGFOOD_DISPATCH", error.to_string()))?;
+    let outcome = match dispatched {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            // A refusal decided before the spawn cost nothing and needs no
+            // record. A refusal after the turn ran was paid for: persist what
+            // it did beside the receipt path so the spend is never silent.
+            if let Some(observed) = error.observed() {
+                let record = DogfoodRefusalRecordV0 {
+                    schema_version: DogfoodRefusalRecordV0::SCHEMA_VERSION.to_owned(),
+                    kind: DogfoodRefusalRecordV0::KIND.to_owned(),
+                    code: "DOGFOOD_DISPATCH".to_owned(),
+                    detail: error.error().to_string(),
+                    enrolled_runtime_version: enrolled.record().version.clone(),
+                    exit_code: observed.exit_code,
+                    wall_ms: observed.wall_ms,
+                    timed_out: observed.timed_out,
+                    stdout_blake3: observed.stdout_blake3.clone(),
+                    stderr_blake3: observed.stderr_blake3.clone(),
+                    total_cost_micro_usd: observed.total_cost_micro_usd,
+                };
+                let refusal_path = options.receipt.with_extension("refused.json");
+                // Opt-in diagnosis. A billed turn that the transcript refuses
+                // leaves only digests, which cannot tell an operator WHY the
+                // provider failed. When an absolute directory is named, the
+                // captured streams are preserved create-once 0600 beside the
+                // record. Off by default: the streams are provider output, not
+                // receipt material, and nothing commits to them.
+                if let Some(dir) = std::env::var_os("BULLET_DOGFOOD_CAPTURE_DIR") {
+                    let dir = PathBuf::from(dir);
+                    if dir.is_absolute() {
+                        let stdout_path = dir.join("refused.stdout.jsonl");
+                        let stderr_path = dir.join("refused.stderr.txt");
+                        let stdout = observed.stdout_lines.join("\n");
+                        let _ = write_create_once_0600(&stdout_path, stdout.as_bytes());
+                        let _ = write_create_once_0600(&stderr_path, observed.stderr.as_bytes());
+                    }
+                }
+                if let Err(write_error) = write_refusal_record(&refusal_path, &record) {
+                    return Err(failed(
+                        "DOGFOOD_REFUSAL_RECORD",
+                        format!("{write_error} after {}", error.error()),
+                    ));
+                }
+                return Err(failed(
+                    "DOGFOOD_DISPATCH",
+                    format!(
+                        "{} (billed turn recorded at {})",
+                        error.error(),
+                        refusal_path.display()
+                    ),
+                ));
+            }
+            return Err(failed("DOGFOOD_DISPATCH", error.to_string()));
+        }
+    };
 
     let proposal_bytes = serde_json::to_vec(&outcome.proposal)
         .map_err(|error| failed("DOGFOOD_PROPOSAL", error.to_string()))?;

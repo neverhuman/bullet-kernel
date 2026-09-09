@@ -73,8 +73,11 @@ enum Commands {
     },
     /// Internal dogfood compose. Not a release profile and not live-conformance.
     Dogfood {
+        /// Boxed: the read-only compose carries the most operator inputs of
+        /// any subcommand, and an unboxed variant makes every other `Commands`
+        /// value pay for its size.
         #[command(subcommand)]
-        command: dogfood::DogfoodCommands,
+        command: Box<dogfood::DogfoodCommands>,
     },
 }
 
@@ -251,7 +254,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Commands::Provider { command } => provider::run(command),
-        Commands::Dogfood { command } => dogfood::run(command),
+        Commands::Dogfood { command } => dogfood::run(*command),
         Commands::Transaction { json } => {
             if !json {
                 eprintln!("bullet: TRANSACTION_PROOF_UNAVAILABLE: --json is required");

@@ -416,3 +416,126 @@ fn a_dogfood_success_without_structured_output_is_refused() {
         "a success terminal without a proposal is not a completed turn"
     );
 }
+
+/// Replay of a transcript captured from the real Claude Code 2.1.266 CLI on
+/// 2026-09-09, invoked with exactly the dogfood argv (plan mode, the read-only
+/// tool set, and `--json-schema` carrying the projected PatchProposal schema).
+///
+/// Every previous fixture in this crate is a hand-written `json!` literal
+/// modelled on 2.1.243. Replaying real bytes is the only way to know whether
+/// the parser can read the CLI that is actually installed; when this was first
+/// run against the pre-existing parser it failed at the very first frame.
+mod real_capture {
+    use super::*;
+
+    const REAL_CAPTURE: &str = include_str!("fixtures/claude-2.1.266-real-turn.jsonl");
+    const REAL_VERSION: &str = "2.1.266";
+    const REAL_CWD: &str = "/workspace";
+
+    fn real_machine() -> ClaudeStreamTranscript {
+        ClaudeStreamTranscript::new_with_profile(
+            AgentSessionId::new(KERNEL_SESSION),
+            InvocationId::new(INVOCATION),
+            REAL_CWD,
+            REAL_VERSION,
+            vec![GATE.into()],
+            TranscriptProfile::DogfoodReadOnlyV0,
+        )
+        .expect("dogfood machine")
+    }
+
+    fn frames() -> Vec<String> {
+        REAL_CAPTURE
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn every_real_2_1_266_frame_is_admitted_up_to_semantic_validation() {
+        let mut machine = real_machine();
+        let _ = machine
+            .user_message("Reply with exactly: OK")
+            .expect("prompt");
+        let frames = frames();
+        let (terminal, transport) = frames.split_last().expect("capture has frames");
+
+        // system/init, quota telemetry, two assistant messages, the CLI's
+        // synthetic structured-output notice, and a real tool result. Every one
+        // of these was refused by the parser before this lane: the init on its
+        // field set, telemetry flags, non-empty `agents` and the
+        // `claude-opus-5[1m]` model id; the assistant frames on `timestamp`
+        // and on the init/message model disagreement; the synthetic notice and
+        // the tool result on their envelopes.
+        for (index, frame) in transport.iter().enumerate() {
+            machine
+                .ingest_line(frame)
+                .unwrap_or_else(|error| panic!("real frame {index} was refused: {error}"));
+        }
+
+        // The terminal frame is admitted structurally -- field set, num_turns
+        // including the synthetic turn, `tool_use` stop reason, and a
+        // schema-valid structured_output -- and is then refused on the one
+        // thing that should refuse it: the captured turn answered a trivial
+        // prompt, so its proposal names no gate. A parse or transport failure
+        // would report a different reason.
+        let error = machine
+            .ingest_line(terminal)
+            .expect_err("a proposal naming no admitted gate must not be admitted");
+        assert!(
+            error.to_string().contains("gate_ids differ from admission"),
+            "expected semantic gate refusal, got: {error}"
+        );
+    }
+
+    #[test]
+    fn real_capture_carries_the_frames_that_used_to_be_refused() {
+        // Guards the fixture itself: if a future capture replaces this one and
+        // drops these shapes, the regressions they cover stop being covered.
+        let text = REAL_CAPTURE;
+        assert!(
+            text.contains("\"rate_limit_event\""),
+            "capture must exercise the quota telemetry frame"
+        );
+        assert!(
+            text.contains("\"StructuredOutput\""),
+            "capture must exercise the schema-output tool"
+        );
+        assert!(
+            text.contains("\"tool_use_result\""),
+            "capture must exercise a real tool result echo"
+        );
+        assert!(
+            text.contains("\"analytics_disabled\": false")
+                || text.contains("\"analytics_disabled\":false"),
+            "capture must show a real account reporting telemetry enabled"
+        );
+    }
+
+    #[test]
+    fn the_frozen_conformance_profile_still_refuses_the_real_turn() {
+        // The relaxations are scoped to the dogfood profile. The frozen V1
+        // conformance subject must be unchanged: it still refuses a real
+        // 2.1.266 init, which is exactly why the dogfood profile exists.
+        // Built at the frozen version so construction succeeds and the refusal
+        // below is about the frame, not the pin.
+        let mut machine = ClaudeStreamTranscript::new_with_profile(
+            AgentSessionId::new(KERNEL_SESSION),
+            InvocationId::new(INVOCATION),
+            REAL_CWD,
+            OBSERVED_CLAUDE_SCHEMA_VERSION,
+            vec![GATE.into()],
+            TranscriptProfile::ConformanceV1,
+        )
+        .expect("conformance machine");
+        let _ = machine
+            .user_message("Reply with exactly: OK")
+            .expect("prompt");
+        let first = &frames()[0];
+        assert!(
+            machine.ingest_line(first).is_err(),
+            "conformance profile must not silently gain dogfood tolerance"
+        );
+    }
+}

@@ -176,6 +176,33 @@ pub fn schema_source() -> &'static str {
     ))
 }
 
+/// The same schema, projected into the dialect a provider CLI will accept.
+///
+/// The canonical contract declares `"$schema":
+/// "https://json-schema.org/draft/2020-12/schema"`. Claude Code 2.1.266 refuses
+/// that argument outright -- `--json-schema is not a valid JSON Schema: no
+/// schema with key or ref "https://json-schema.org/draft/2020-12/schema"` --
+/// and exits before the turn starts, so the whole dogfood path could never
+/// return a proposal. Observed by running the real CLI on 2026-09-09.
+///
+/// Only the `$schema` declaration is dropped. Every constraint, `$id`, and the
+/// key order of the canonical document are preserved, so what the provider is
+/// asked to satisfy is exactly what [`PatchProposal::validate`] enforces.
+///
+/// # Errors
+///
+/// `PROPOSAL_PARSE_FAILED` if the canonical schema stops being a JSON object.
+pub fn schema_source_for_provider() -> Result<String, HarnessError> {
+    let mut value: serde_json::Value = serde_json::from_str(schema_source())
+        .map_err(|error| invalid(format!("canonical proposal schema is not JSON: {error}")))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| invalid("canonical proposal schema is not an object"))?;
+    object.remove("$schema");
+    serde_json::to_string(&value)
+        .map_err(|error| invalid(format!("provider schema projection failed: {error}")))
+}
+
 fn validate_operations(operations: &[PatchOperation]) -> Result<(), HarnessError> {
     if operations.is_empty() || operations.len() > MAX_OPERATIONS {
         return Err(invalid(format!(

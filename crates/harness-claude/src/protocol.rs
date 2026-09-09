@@ -39,6 +39,16 @@ pub const DOGFOOD_MAX_ASSISTANT_MESSAGES: u64 = 512;
 /// on the wire.
 pub const READ_ONLY_TOOL_ALLOWLIST: [&str; 3] = ["Read", "Glob", "Grep"];
 
+/// Tools a dogfood read-only turn may advertise.
+///
+/// `StructuredOutput` is how the CLI delivers `--json-schema` output: passing
+/// that flag makes `system/init` report it alongside the read-only three
+/// (observed on 2.1.266: `["Glob","Grep","Read","StructuredOutput"]`). It is
+/// marked read-only by the CLI and writes nothing, so admitting it does not
+/// widen authority -- but omitting it made every schema-bearing turn
+/// unparseable, which is the only way a proposal can be returned at all.
+pub const DOGFOOD_TOOL_ALLOWLIST: [&str; 4] = ["Read", "Glob", "Grep", "StructuredOutput"];
+
 /// Which transcript contract one turn is parsed under.
 ///
 /// The two profiles are not interchangeable and a transcript never changes
@@ -82,6 +92,27 @@ impl TranscriptProfile {
     pub const fn admits_tool_use(self) -> bool {
         matches!(self, Self::DogfoodReadOnlyV0)
     }
+
+    /// Tools this profile admits in `system/init` and in tool requests.
+    #[must_use]
+    pub const fn tool_allowlist(self) -> &'static [&'static str] {
+        match self {
+            Self::ConformanceV1 => &READ_ONLY_TOOL_ALLOWLIST,
+            Self::DogfoodReadOnlyV0 => &DOGFOOD_TOOL_ALLOWLIST,
+        }
+    }
+
+    /// Whether non-authority vendor fields may appear on a frame.
+    ///
+    /// The frozen conformance subject stays byte-exact. The dogfood profile
+    /// parses a real, moving CLI: closed field sets there turn every vendor
+    /// release into a protocol error that looks like a provider fault, so
+    /// unknown NON-AUTHORITY keys are ignored while every authority-bearing
+    /// field stays exactly checked.
+    #[must_use]
+    pub const fn admits_vendor_fields(self) -> bool {
+        matches!(self, Self::DogfoodReadOnlyV0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,10 +150,19 @@ pub struct ClaudeStreamTranscript {
     pub(super) seen_frames: BTreeSet<String>,
     pub(super) seen_event_ids: BTreeSet<String>,
     pub(super) seen_message_ids: BTreeSet<String>,
+    /// The most recent assistant message id. A real streaming turn delivers
+    /// one logical message as several frames that share an id, one per content
+    /// block, so a repeat of the CURRENT id is a continuation while a repeat
+    /// of an OLDER id is still a replay and still refused.
+    pub(super) last_message_id: Option<String>,
     pub(super) seen_tool_use_ids: BTreeSet<String>,
     pub(super) outstanding_tool_use_ids: BTreeSet<String>,
     pub(super) inbound_frames: u64,
     pub(super) assistant_messages: u64,
+    /// Synthetic `user` frames the CLI injected (e.g. the structured-output
+    /// enforcement notice). They are not model output, but the CLI counts
+    /// them in `num_turns`, so the terminal bound must know about them.
+    pub(super) synthetic_user_frames: u64,
     pub(super) normalizer: EventNormalizer,
     pub(super) outcome: Option<ClaudeStreamOutcome>,
 }
@@ -213,10 +253,12 @@ impl ClaudeStreamTranscript {
             seen_frames: BTreeSet::new(),
             seen_event_ids: BTreeSet::new(),
             seen_message_ids: BTreeSet::new(),
+            last_message_id: None,
             seen_tool_use_ids: BTreeSet::new(),
             outstanding_tool_use_ids: BTreeSet::new(),
             inbound_frames: 0,
             assistant_messages: 0,
+            synthetic_user_frames: 0,
             normalizer,
             outcome: None,
         })
@@ -348,8 +390,44 @@ fn valid_kernel_id(value: &str) -> bool {
     valid_native_id(value)
 }
 
+/// A provider-reported model identifier.
+///
+/// Model names are a vendor namespace, not our identifier namespace: Anthropic
+/// ships `claude-opus-5[1m]`, whose brackets [`valid_native_id`] refuses. The
+/// value is only ever echoed into events and compared for equality, never used
+/// as a path, argument, or key, so the two extra characters widen no authority
+/// -- but refusing them refused every turn served by that model.
+fn valid_model_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_ID_BYTES
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'[' | b']')
+        })
+}
+
 fn valid_cwd(value: &str) -> bool {
     value.starts_with('/') && value.len() <= 4096 && !value.contains('\0') && !value.contains("//")
+}
+
+/// Whether an assistant message's model is the session's model.
+///
+/// `system/init` reports the SELECTED model, which for a context-window
+/// variant carries a bracketed suffix (`claude-opus-5[1m]`), while every
+/// assistant message reports the BASE model the API served
+/// (`claude-opus-5`). Byte equality therefore never holds for such a session,
+/// and the frozen contract's equality check refused every turn served by one.
+///
+/// The rule is exact, not a prefix match: the message model must equal the
+/// session model, or the session model must be exactly the message model
+/// followed by a single bracketed suffix.
+pub(super) fn model_matches(session_model: &str, message_model: &str) -> bool {
+    if session_model == message_model {
+        return true;
+    }
+    let Some(rest) = session_model.strip_prefix(message_model) else {
+        return false;
+    };
+    rest.starts_with('[') && rest.ends_with(']') && !rest.contains("][") && rest.len() > 2
 }
 
 pub(super) fn exact_fields(
@@ -373,7 +451,7 @@ pub(super) fn basic_event_subject(object: &Map<String, Value>) -> Option<(&str, 
 pub(super) fn event_subject(object: &Map<String, Value>) -> Option<(&str, &str, &str)> {
     let (uuid, session_id) = basic_event_subject(object)?;
     let model = object.get("model")?.as_str()?;
-    if !valid_uuid(uuid) || !valid_uuid(session_id) || !valid_native_id(model) {
+    if !valid_uuid(uuid) || !valid_uuid(session_id) || !valid_model_id(model) {
         return None;
     }
     Some((uuid, session_id, model))
@@ -405,7 +483,13 @@ pub(super) fn empty_optional_array(object: &Map<String, Value>, key: &str) -> bo
         .is_none_or(|value| value.as_array().is_some_and(Vec::is_empty))
 }
 
-pub(super) fn valid_result_common(object: &Map<String, Value>) -> bool {
+/// Validate the fields every `result` frame shares.
+///
+/// `admits_vendor_fields` relaxes only the closed-set rule: a real build adds
+/// timing and accounting keys (`first_content_frame_ms`, `queued_turn_count`,
+/// `subagent_stats`, `time_to_request_ms`, `ttft_stream_ms` on 2.1.266) that
+/// carry no admission meaning. Every value check below stays exact.
+pub(super) fn valid_result_common(object: &Map<String, Value>, admits_vendor_fields: bool) -> bool {
     let required = [
         "type",
         "subtype",
@@ -432,7 +516,12 @@ pub(super) fn valid_result_common(object: &Map<String, Value>) -> bool {
         "fast_mode_disabled_reason",
         "terminal_reason",
     ];
-    exact_fields(object, &required, &optional)
+    let fields_ok = if admits_vendor_fields {
+        required.iter().all(|key| object.contains_key(*key))
+    } else {
+        exact_fields(object, &required, &optional)
+    };
+    fields_ok
         && object.get("duration_ms").and_then(Value::as_u64).is_some()
         && object
             .get("duration_api_ms")
