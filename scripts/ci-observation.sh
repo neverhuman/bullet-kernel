@@ -47,7 +47,11 @@ record_tool() {
   shift
   local value
   if command -v "$1" >/dev/null 2>&1; then
-    value="$("$@" 2>/dev/null | head -n 1)"
+    # `set -o pipefail` is in force, so a probe that exits nonzero makes the
+    # command substitution itself fail and `set -e` kills the script before any
+    # guard below runs. The runner image has `cargo` but not `cargo nextest`,
+    # which is exactly that case.
+    value="$("$@" 2>/dev/null | head -n 1)" || value=""
     if [[ -n "$value" ]]; then
       tool_versions="$(jq -c --arg key "$key" --arg value "$value" '. + {($key): $value}' <<<"$tool_versions")"
     fi
