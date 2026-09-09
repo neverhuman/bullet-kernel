@@ -95,13 +95,9 @@ pub fn dispatch_dogfood_turn(
         ));
     }
 
-    // The transcript is constructed and seeded BEFORE the provider is spawned.
-    // Its constructor refuses an empty or malformed gate selection, and the
-    // provider turn costs real money: a refusal that can only be discovered
-    // after the spawn is a refusal that bills the operator for nothing. The
-    // containment chdirs the child into its own clone destination, so the cwd
-    // the provider reports in system/init is the in-sandbox path, never the
-    // host workdir this process sees.
+    // Validate and seed the transcript before attempting capture, so invalid
+    // gates or prompts do not launch a child. Containment can change its cwd;
+    // bind system/init to the expected in-sandbox path supplied by the caller.
     let mut transcript = ClaudeStreamTranscript::new_with_profile(
         request.session_id.clone(),
         request.invocation_id.clone(),
@@ -116,10 +112,10 @@ pub fn dispatch_dogfood_turn(
         .map_err(DogfoodDispatchError::before_spawn)?;
 
     let capture = capture_turn(factory, &prepared, &request.canaries)
-        .map_err(DogfoodDispatchError::before_spawn)?;
-    // Everything below this line runs after the provider has been billed, so
-    // every refusal carries the observed turn facts for a durable record.
-    let observed = ObservedTurn {
+        .map_err(DogfoodDispatchError::CaptureUnavailable)?;
+    // Capture supplies child-process facts; provider execution and billing
+    // are not established merely by launching the factory's command.
+    let mut observed = ObservedTurn {
         exit_code: capture.exit_code,
         wall_ms: capture.wall_ms,
         timed_out: capture.timed_out,
@@ -129,28 +125,34 @@ pub fn dispatch_dogfood_turn(
         stdout_lines: capture.stdout_lines.clone(),
         stderr: capture.stderr.clone(),
     };
-    let after = |error: HarnessError| DogfoodDispatchError::AfterTurn {
-        error,
-        observed: Box::new(observed.clone()),
-    };
-
     let mut events: Vec<AgentEvent> = Vec::new();
     for line in &capture.stdout_lines {
         if line.is_empty() {
             continue;
         }
-        events.extend(transcript.ingest_line(line).map_err(&after)?);
+        let batch = transcript
+            .ingest_line(line)
+            .map_err(|error| after_turn(&observed, error))?;
+        if let Some(cost) =
+            extract_cost_micro_usd(&batch).map_err(|error| after_turn(&observed, error))?
+        {
+            observed.total_cost_micro_usd = Some(cost);
+        }
+        events.extend(batch);
     }
-    // Cost is observable from the ingested events even when the turn is about
-    // to be refused, so a failed run still reports what it spent.
-    let observed = ObservedTurn {
-        total_cost_micro_usd: extract_cost_micro_usd(&events),
-        ..observed
-    };
-    let after = |error: HarnessError| DogfoodDispatchError::AfterTurn {
-        error,
-        observed: Box::new(observed.clone()),
-    };
+    let after = |error| after_turn(&observed, error);
+    if observed.timed_out {
+        return Err(after(HarnessError::Timeout {
+            seconds: request.wall_timeout.as_secs(),
+        }));
+    }
+    if observed.exit_code != Some(0) {
+        return Err(after(HarnessError::ProviderFailure {
+            provider: "claude".into(),
+            exit: observed.exit_code,
+            reason: "captured child did not exit successfully".into(),
+        }));
+    }
     let outcome = transcript.outcome().map_err(&after)?;
     let proposal = match outcome {
         ClaudeStreamOutcome::Proposal(proposal) => proposal.clone(),
@@ -185,13 +187,13 @@ pub fn dispatch_dogfood_turn(
     })
 }
 
-/// Facts observed about a provider turn that actually ran. Present on every
-/// refusal that follows the spawn, so billed work is never silently lost.
+/// Child-process facts returned by a successful capture operation.
+/// Capture failures can lack these facts; cost is validated reported telemetry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObservedTurn {
     /// Child exit status, when the child was reaped.
     pub exit_code: Option<i32>,
-    /// Wall-clock duration of the turn.
+    /// Wall-clock duration reported by capture.
     pub wall_ms: u64,
     /// Whether the wall timeout fired.
     pub timed_out: bool,
@@ -208,24 +210,27 @@ pub struct ObservedTurn {
     pub stderr: String,
 }
 
-/// Why a dogfood dispatch did not produce a proposal, and whether the
-/// provider had already been spawned when it was decided.
+/// Why a dogfood dispatch did not produce a proposal and which capture
+/// facts are available. This classification does not establish billing.
 #[derive(Clone, Debug)]
 pub enum DogfoodDispatchError {
-    /// Refused before the provider process started. No spend occurred.
+    /// Refused before calling the command factory or capture operation.
     BeforeSpawn(HarnessError),
-    /// The provider ran to completion and the turn was then refused. The
-    /// caller must persist `observed` so the spend is recorded.
+    /// Capture was attempted but returned no usable facts. Child execution,
+    /// partial output, cessation and usage are unavailable at this boundary.
+    CaptureUnavailable(HarnessError),
+    /// Capture returned facts and the dispatch was then refused. The caller
+    /// can retain those facts without inferring provider execution or spend.
     AfterTurn {
         /// The refusal.
         error: HarnessError,
-        /// What the billed turn did. Boxed to keep the `Err` variant small.
+        /// Available capture facts. Boxed to keep the `Err` variant small.
         observed: Box<ObservedTurn>,
     },
 }
 
 impl DogfoodDispatchError {
-    /// Wrap a refusal decided before any provider process existed.
+    /// Wrap a refusal decided before this dispatch calls capture.
     #[must_use]
     pub fn before_spawn(error: HarnessError) -> Self {
         Self::BeforeSpawn(error)
@@ -235,15 +240,17 @@ impl DogfoodDispatchError {
     #[must_use]
     pub fn error(&self) -> &HarnessError {
         match self {
-            Self::BeforeSpawn(error) | Self::AfterTurn { error, .. } => error,
+            Self::BeforeSpawn(error)
+            | Self::CaptureUnavailable(error)
+            | Self::AfterTurn { error, .. } => error,
         }
     }
 
-    /// Turn facts, present only when the provider had already run.
+    /// Child-process facts, present only when capture returned them.
     #[must_use]
     pub fn observed(&self) -> Option<&ObservedTurn> {
         match self {
-            Self::BeforeSpawn(_) => None,
+            Self::BeforeSpawn(_) | Self::CaptureUnavailable(_) => None,
             Self::AfterTurn { observed, .. } => Some(observed),
         }
     }
@@ -253,9 +260,12 @@ impl std::fmt::Display for DogfoodDispatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BeforeSpawn(error) => write!(formatter, "{error}"),
+            Self::CaptureUnavailable(error) => {
+                write!(formatter, "capture facts unavailable: {error}")
+            }
             Self::AfterTurn { error, observed } => write!(
                 formatter,
-                "{error} (provider ran: exit {:?}, {} ms)",
+                "{error} (captured child: exit {:?}, {} ms)",
                 observed.exit_code, observed.wall_ms
             ),
         }
@@ -286,7 +296,14 @@ fn extract_response(events: &[AgentEvent]) -> String {
     text
 }
 
-fn extract_cost_micro_usd(events: &[AgentEvent]) -> Option<u64> {
+fn after_turn(observed: &ObservedTurn, error: HarnessError) -> DogfoodDispatchError {
+    DogfoodDispatchError::AfterTurn {
+        error,
+        observed: Box::new(observed.clone()),
+    }
+}
+
+fn extract_cost_micro_usd(events: &[AgentEvent]) -> Result<Option<u64>, HarnessError> {
     for event in events {
         if event.kind != AgentEventKind::UsageReported {
             continue;
@@ -297,11 +314,19 @@ fn extract_cost_micro_usd(events: &[AgentEvent]) -> Option<u64> {
             .and_then(serde_json::Value::as_f64)
         {
             if usd.is_finite() && usd >= 0.0 {
-                return Some((usd * 1_000_000.0).round() as u64);
+                let rounded = (usd * 1_000_000.0).round();
+                // u64::MAX rounds up to 2^64 as f64; use an exclusive bound.
+                if !rounded.is_finite() || rounded >= u64::MAX as f64 {
+                    return Err(HarnessError::Protocol {
+                        provider: "claude".into(),
+                        reason: "reported cost cannot be represented in micro-USD".into(),
+                    });
+                }
+                return Ok(Some(rounded as u64));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 #[cfg(test)]
