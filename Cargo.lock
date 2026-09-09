@@ -545,6 +545,7 @@ dependencies = [
 name = "bullet-runner"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bullet-application",
  "bullet-domain",
  "bullet-effects-core",
@@ -557,6 +558,7 @@ dependencies = [
  "bullet-verifier-core",
  "chrono",
  "clap",
+ "futures",
  "hex",
  "rusqlite",
  "rustix",

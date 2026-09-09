@@ -2,8 +2,9 @@
 
 use super::{commands, events, SqliteLedger};
 use bullet_application::{
-    CommandDispatchClaim, CommandDispatchDisposition, CommandDispatchError, CommandDispatchStore,
-    CommandRecord, CommandRequest, ComponentCommandCompletionV1,
+    is_supported_dispatch_kind, CommandDispatchClaim, CommandDispatchDisposition,
+    CommandDispatchError, CommandDispatchStore, CommandRecord, CommandRequest,
+    ComponentCommandCompletionV1,
 };
 use bullet_domain::{CommandId, CommandPhase, Digest, RunnerId};
 use rusqlite::{params, Connection, Transaction};
@@ -112,7 +113,7 @@ fn claim_next(
         restore_epoch,
     );
 
-    if request.kind != "run_demo" {
+    if !is_supported_dispatch_kind(&request.kind) {
         refuse_unsupported(
             &transaction,
             fail_after,

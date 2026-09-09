@@ -4,6 +4,7 @@
 //! the deterministic gate, and reports the exact candidate.
 
 mod protocol;
+mod signed_in_cli;
 mod supervisor;
 
 use bullet_application::dogfood_run::{CredentialSpec, DogfoodReadOnlyOptions};
@@ -62,7 +63,7 @@ struct Args {
     /// a REAL contained provider turn and requires the dogfood admission flags
     /// below. There is no fallback: a real provider with missing admission
     /// refuses, it never degrades to the simulator.
-    #[arg(long, default_value = "sim", value_parser = ["sim", "claude", "codex", "cursor"])]
+    #[arg(long, default_value = "sim", value_parser = ["sim", "claude", "codex", "cursor", "agy", "antigravity"])]
     provider: String,
     /// Provider-native model id. Required for a real provider; `sim` may omit it.
     #[arg(long)]
@@ -102,6 +103,9 @@ struct Args {
     /// maximum attempt seconds.
     #[arg(long)]
     dogfood_wall_timeout_secs: Option<u64>,
+    /// Absolute signed-in Codex/Cursor/agy executable. Never a simulator.
+    #[arg(long)]
+    signed_in_executable: Option<PathBuf>,
     /// Root for private clones and runtime dirs.
     #[arg(long)]
     workspace_root: PathBuf,
@@ -149,13 +153,17 @@ fn adapter_for(provider: &str, args: &Args) -> Result<Arc<dyn HarnessAdapter>, S
             Arc::new(bullet_application::dogfood_adapter::DogfoodClaudeAdapter::new(options))
                 as Arc<dyn HarnessAdapter>
         }),
-        "codex" => {
+        "codex" | "cursor" | "agy" | "antigravity" => {
             require_model(args)?;
-            Ok(Arc::new(bullet_harness_codex::CodexAdapter::new()))
-        }
-        "cursor" => {
-            require_model(args)?;
-            Ok(Arc::new(bullet_harness_cursor::CursorAdapter::new()))
+            let executable = args.signed_in_executable.clone().ok_or_else(|| {
+                "--signed-in-executable is required for a signed-in provider".to_string()
+            })?;
+            signed_in_cli::SignedInCliAdapter::new(
+                args.provider.clone(),
+                executable,
+                args.model.clone().unwrap_or_default(),
+            )
+            .map(|adapter| Arc::new(adapter) as Arc<dyn HarnessAdapter>)
         }
         other => Err(format!("unavailable provider {other}")),
     }

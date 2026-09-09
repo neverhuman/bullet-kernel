@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 mod artifacts;
 #[path = "receipt/bounded_output.rs"]
 mod bounded_output;
+#[path = "receipt/coding.rs"]
+pub(crate) mod coding;
 #[path = "receipt/preservation.rs"]
 mod preservation;
 #[path = "receipt/provider.rs"]
@@ -39,6 +41,13 @@ pub(super) struct AdmittedReceipt {
 }
 
 impl AdmittedReceipt {
+    pub(super) fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            raw_sha256: hex::encode(Sha256::digest(bytes)),
+            receipt_digest: Digest::of(bytes),
+        }
+    }
+
     pub(super) fn raw_sha256(&self) -> &str {
         &self.raw_sha256
     }
@@ -94,10 +103,7 @@ fn admit_inner(
         .validate()
         .worker("COMMAND_RECEIPT_INVALID", "validate expected command claim")?;
     let bytes = artifacts::read_receipt(path, run_root)?;
-    let admitted = AdmittedReceipt {
-        raw_sha256: hex::encode(Sha256::digest(&bytes)),
-        receipt_digest: Digest::of(&bytes),
-    };
+    let admitted = AdmittedReceipt::from_bytes(&bytes);
     if expected.is_some_and(|(raw, digest)| {
         raw != admitted.raw_sha256 || digest != admitted.receipt_digest
     }) {

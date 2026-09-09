@@ -3,12 +3,16 @@
 use super::claim_fd::SealedClaim;
 use super::error::{WorkerContext, WorkerError};
 use super::manifest::AdmittedManifest;
+use bullet_application::{CommandDispatchClaim, RunCodingPayload, RUN_CODING_KIND, RUN_DEMO_KIND};
 use std::io::Read;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+#[path = "child/coding.rs"]
+pub(crate) mod coding;
 
 const OUTPUT_LIMIT: u64 = 256 * 1024;
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -18,6 +22,24 @@ pub(super) struct ChildOutput {
     pub(super) status: ExitStatus,
     pub(super) stdout: Vec<u8>,
     pub(super) stderr: Vec<u8>,
+}
+
+pub(super) fn run_claimed(
+    manifest: &AdmittedManifest,
+    claim: &CommandDispatchClaim,
+    sealed: &SealedClaim,
+    run_root: &Path,
+    receipt: &Path,
+    deadline: Duration,
+) -> Result<ChildOutput, WorkerError> {
+    match claim.request.kind.as_str() {
+        RUN_DEMO_KIND => run_transaction(manifest, sealed, run_root, receipt, deadline),
+        RUN_CODING_KIND => run_coding(manifest, claim, sealed, run_root, receipt, deadline),
+        other => Err(WorkerError::input(
+            "COMMAND_KIND_UNSUPPORTED",
+            format!("worker has no native handler for {other}"),
+        )),
+    }
 }
 
 pub(super) fn run_transaction(
@@ -60,6 +82,60 @@ pub(super) fn run_transaction(
         "spawn exact transaction child",
     )?;
     ProcessGuard::new(child).wait_with_output(deadline)
+}
+
+fn run_coding(
+    manifest: &AdmittedManifest,
+    claim: &CommandDispatchClaim,
+    sealed: &SealedClaim,
+    run_root: &Path,
+    receipt: &Path,
+    deadline: Duration,
+) -> Result<ChildOutput, WorkerError> {
+    let payload = RunCodingPayload::parse(&claim.request.payload)
+        .map_err(|error| WorkerError::input("COMMAND_CODING_PAYLOAD_INVALID", error.to_string()))?;
+    let mut args = coding::coding_runner_args(&payload)?;
+    args.extend([
+        "--data-dir".into(),
+        run_root.join("runner-journal").display().to_string(),
+    ]);
+    validate_child_roots(run_root, receipt)?;
+    enable_subreaper()?;
+    let mut command = Command::new(manifest.runner.procfd_path());
+    command
+        .env_clear()
+        .env(
+            "PATH",
+            std::env::var("BULLET_HARNESS_PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
+        )
+        .env("HOME", need_env("BULLET_HARNESS_HOME")?)
+        .env("BULLET_COMMAND_CLAIM_FD", sealed.fd().to_string())
+        .env("BULLET_COMMAND_BINARY_MANIFEST_DIGEST", manifest.sha256())
+        .env("BULLET_DATA_DIR", run_root.join("data"))
+        .env("BULLET_GITD_BIN", manifest.gitd.original())
+        .env("BULLET_GITD_SHA256", manifest.gitd.sha256())
+        .env("TRANSACTION_OFFLINE_RECEIPT", receipt)
+        .args(&args)
+        .current_dir(run_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let child = command
+        .spawn()
+        .worker("COMMAND_CHILD_SPAWN_FAILED", "spawn exact coding runner")?;
+    let output = ProcessGuard::new(child).wait_with_output(deadline)?;
+    coding::write_coding_observation(receipt, claim.command_id.as_str(), &payload, &output)?;
+    Ok(output)
+}
+
+pub(super) fn need_env(name: &str) -> Result<String, WorkerError> {
+    std::env::var(name).map_err(|_| {
+        WorkerError::input(
+            "COMMAND_CODING_HARNESS_UNBOUND",
+            format!("{name} is required to start a native coding runner"),
+        )
+    })
 }
 
 fn validate_child_roots(run_root: &Path, receipt: &Path) -> Result<(), WorkerError> {

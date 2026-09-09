@@ -2,6 +2,10 @@
 
 use super::MemoryLedger;
 use crate::commands::COMMAND_RECONCILED_EVENT;
+use crate::nonce_ledger::NonceState;
+use crate::run_coding::{
+    plan_run_coding_admission, CodingAdmissionView, RunCodingPayload, RUN_CODING_KIND,
+};
 use crate::{CommandRecord, CommandRequest, LedgerError, OutboxItem};
 use bullet_domain::{CommandId, CommandPhase, DomainError};
 
@@ -55,6 +59,7 @@ impl MemoryLedger {
                     None,
                 );
             }
+            self.admit_run_coding_impl(request, existed)?;
             Ok(record)
         })();
         match transaction {
@@ -273,5 +278,76 @@ impl MemoryLedger {
             acked_at: None,
         });
         Ok(seq)
+    }
+
+    pub(super) fn admit_run_coding_impl(
+        &mut self,
+        request: &CommandRequest,
+        existed: bool,
+    ) -> Result<(), LedgerError> {
+        if request.kind != RUN_CODING_KIND {
+            return Ok(());
+        }
+        let payload = RunCodingPayload::parse(&request.payload)?;
+        let authority_epoch = self
+            .authority
+            .as_ref()
+            .map_or(1, crate::NormalizedAuthority::authority_epoch);
+        let used_quota = self.budget_reservations.values().copied().sum();
+        let existing_reservation = self
+            .budget_reservations
+            .get(&payload.quota_reservation)
+            .map(|amount| (payload.quota_reservation.clone(), *amount));
+        if !existed && !self.authority_nonces.contains_key(&payload.launch_nonce) {
+            self.authority_nonces.insert(
+                payload.launch_nonce.clone(),
+                (request.digest().to_hex(), false),
+            );
+        }
+        let nonce = self
+            .authority_nonces
+            .get(&payload.launch_nonce)
+            .map(|(digest, consumed)| {
+                (
+                    digest.clone(),
+                    if *consumed {
+                        NonceState::Consumed
+                    } else {
+                        NonceState::Issued
+                    },
+                )
+            });
+        let view = CodingAdmissionView {
+            authority_epoch,
+            used_quota,
+            existing_reservation,
+            nonce,
+        };
+        let Some(plan) = plan_run_coding_admission(request, existed, &view)? else {
+            return Ok(());
+        };
+        let row = self
+            .authority_nonces
+            .get_mut(&plan.consume_nonce)
+            .ok_or_else(|| LedgerError::Store("run_coding launch nonce is absent".into()))?;
+        if row.0 != request.digest().to_hex() || row.1 {
+            return Err(LedgerError::Store(
+                "run_coding launch nonce is not issued for this request".into(),
+            ));
+        }
+        row.1 = true;
+        self.budget_reservations
+            .insert(plan.reservation.0, plan.reservation.1);
+        Ok(())
+    }
+
+    /// Issue one authority nonce for in-process coding admission tests.
+    pub fn issue_coding_nonce(&mut self, key: &str, digest: &str) -> Result<(), LedgerError> {
+        if self.authority_nonces.contains_key(key) {
+            return Err(LedgerError::Store("nonce already issued".into()));
+        }
+        self.authority_nonces
+            .insert(key.to_string(), (digest.to_string(), false));
+        Ok(())
     }
 }

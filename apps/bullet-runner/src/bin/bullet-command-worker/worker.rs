@@ -3,8 +3,10 @@
 use super::claim_fd::SealedClaim;
 use super::error::WorkerError;
 use super::manifest::AdmittedManifest;
+use super::receipt::coding::admit_coding_observation;
 use super::receipt::{admit_receipt, readback_retained_receipt, AdmittedReceipt};
 use super::state::{Stage, StateStore, WorkerState};
+use bullet_application::RUN_CODING_KIND;
 use bullet_application::{CommandDispatchClaim, CommandRecord, ComponentCommandCompletionV1};
 use bullet_domain::{CommandPhase, Digest, RunnerId};
 use bullet_runner_core::SignedLeaseRpcClient;
@@ -128,6 +130,29 @@ async fn acquire_claim<C: DispatchPort>(
     }
 }
 
+fn admit_current_receipt(
+    receipt_path: &std::path::Path,
+    run_root: &std::path::Path,
+    state: &WorkerState,
+    manifest_sha256: &str,
+    expected: Option<(&str, bullet_domain::Digest)>,
+) -> Result<AdmittedReceipt, WorkerError> {
+    if state.claim.request.kind == RUN_CODING_KIND {
+        admit_coding_observation(receipt_path, run_root, &state.claim, expected)
+    } else if let Some((raw, digest)) = expected {
+        readback_retained_receipt(
+            receipt_path,
+            run_root,
+            &state.claim,
+            manifest_sha256,
+            raw,
+            digest,
+        )
+    } else {
+        admit_receipt(receipt_path, run_root, &state.claim, manifest_sha256)
+    }
+}
+
 fn admit_or_execute(
     store: &StateStore,
     manifest: &AdmittedManifest,
@@ -141,14 +166,15 @@ fn admit_or_execute(
         Stage::Claimed => {
             if !has_child_material {
                 let sealed = SealedClaim::create(&state.claim)?;
-                let output = super::child::run_transaction(
+                let output = super::child::run_claimed(
                     manifest,
+                    &state.claim,
                     &sealed,
                     &run_root,
                     &receipt_path,
                     deadline,
                 )?;
-                if !output.status.success() {
+                if state.claim.request.kind != RUN_CODING_KIND && !output.status.success() {
                     return Err(WorkerError::input(
                         "COMMAND_CHILD_FAILED",
                         format!(
@@ -160,19 +186,21 @@ fn admit_or_execute(
                 }
                 let _bounded_stdout = output.stdout;
             }
-            admit_receipt(&receipt_path, &run_root, &state.claim, manifest.sha256())?
+            admit_current_receipt(&receipt_path, &run_root, &state, manifest.sha256(), None)?
         }
-        Stage::ReceiptRetained => readback_retained_receipt(
+        Stage::ReceiptRetained => admit_current_receipt(
             &receipt_path,
             &run_root,
-            &state.claim,
+            &state,
             manifest.sha256(),
-            state.receipt_sha256.as_deref().ok_or_else(|| {
-                WorkerError::input("COMMAND_STATE_INVALID", "retained receipt SHA-256 absent")
-            })?,
-            state.receipt_digest.ok_or_else(|| {
-                WorkerError::input("COMMAND_STATE_INVALID", "retained receipt digest absent")
-            })?,
+            Some((
+                state.receipt_sha256.as_deref().ok_or_else(|| {
+                    WorkerError::input("COMMAND_STATE_INVALID", "retained receipt SHA-256 absent")
+                })?,
+                state.receipt_digest.ok_or_else(|| {
+                    WorkerError::input("COMMAND_STATE_INVALID", "retained receipt digest absent")
+                })?,
+            )),
         )?,
         Stage::SettledUnknown => {
             return Err(WorkerError::input(

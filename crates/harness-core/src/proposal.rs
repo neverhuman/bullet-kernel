@@ -12,7 +12,7 @@ use unicode_normalization::UnicodeNormalization;
 /// Frozen cross-repository schema version.
 pub const PATCH_PROPOSAL_SCHEMA_VERSION: u32 = 1;
 /// Maximum operations in one proposal.
-pub const MAX_OPERATIONS: usize = 1_024;
+pub const MAX_OPERATIONS: usize = 128;
 /// Maximum UTF-8 bytes in one whole-file write.
 pub const MAX_CONTENT_BYTES: usize = 1_048_576;
 /// Maximum admitted gates in one proposal.

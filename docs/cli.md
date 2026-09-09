@@ -39,6 +39,9 @@ spawn a provider. Nothing here produces `LIVE_PROOF` or `RELEASE_PROOF`.
 | `mission materialize` / `mission status` | materialize one plan revision into the local ledger (same seed + input replays the same ids; same seed + different input refuses) / print the stored graph for one mission |
 | `run show` / `run print-preimages` | verify and render one run receipt (recomputes the body digest; follows the embedded selection-receipt chain link) / emit BLAKE3 preimages for paths at an exact base commit; see below |
 | `dogfood read-only` | one contained read-only dogfood compose under ADR 0015; not a release profile, not live-conformance; see below |
+| `coding submit` | POST one `run_coding` envelope to loopback farmd (same shape as Portal Control Tower). Requires `--bootstrap-token` or `--session-cookie` plus `--csrf`, plus `--account`, `--provider` ∈ `claude\|codex\|cursor\|antigravity`, and `--model`. Never selects `sim`. Prints the durable command JSON. |
+| `coding status <id>` | GET the same command subject from farmd using `--session-cookie` |
+| `coding stop` | typed `STOP_UNIMPLEMENTED` and exit 2; does not SIGKILL a provider |
 
 ## `authority keygen`
 
@@ -197,12 +200,27 @@ Exit codes: `0` a receipt was written; `78` designed-neutral (missing input,
 namespaces unavailable, containment unavailable); `1` typed refusal (live
 admission enabled, binding/enrollment mismatch, fixture key, argv drift).
 
+## `coding submit` / `status` / `stop`
+
+Loopback farmd ingress for a durable `run_coding` command. This is not
+`dogfood read-only` (that compose still bypasses farmd and is Claude-only).
+It is not session steer, interrupt, or a coordinator fleet: Operating HOLD
+and farmd T4a remain open, and `coding stop` is `STOP_UNIMPLEMENTED`.
+
+The worker executes `run_coding` by spawning `bullet-runner` with
+operator-bound `BULLET_HARNESS_*` environment (workspace, lease socket,
+signed-in executable or Claude dogfood paths, `HOME`). Missing binding is
+`COMMAND_CODING_HARNESS_UNBOUND` and does not fall back to `SimAdapter` or
+`transaction_offline`. A finished coding child retains a
+`CODING_HARNESS_OBSERVATION` (`cost: UNPRICED`), not `COMPONENT_PROOF` and
+not Evidence.
+
 ## Daemons and process bins
 
 | Binary | Flags | Notes |
 | --- | --- | --- |
 | `bullet-farmd` | `--data-dir` (default `./target/demo`), `--bind` (default `127.0.0.1:7420`; non-loopback refused), `--portal-origin <exact loopback origin>`, `--worker-token-file <protected file>`, `--reap-interval-ms <1..=500>`, `--lease-transport-socket <abs>` with durable `--lease-peer-registry` + `--lease-transport-key` (0700 parent, 0600 key); debug builds also expose `--fixture-lease-peer-registration <runner:epoch>` | routes in [`README.md`](../README.md#farmd-routes); the internal reconciler is inert without the worker token; the socket refuses without durable local registry/key (or the debug-only fixture) |
-| `bullet-runner` | `--lease-socket`, `--farmd-uid`, `--socket-gid`, `--lease-recovery` admit `SignedLeaseRpcClient::new_admitted`; missing any lease input returns typed `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE`; explicit Candidate request/key, workspace/preservation, source/base, identity, scope/gates and idempotency inputs are also required; `--provider` accepts `sim`, `claude`, `codex` and `cursor`, and a real provider requires the `--dogfood-*` admission inputs and a positive `--dogfood-max-budget-usd`, refusing `PROVIDER_ADMISSION_INCOMPLETE` before any other admission rather than degrading to the simulator | HTTP `/v1/leases/*` stays unmounted; `HttpLeaseClient` remains unreachable |
+| `bullet-runner` | `--lease-socket`, `--farmd-uid`, `--socket-gid`, `--lease-recovery` admit `SignedLeaseRpcClient::new_admitted`; missing any lease input returns typed `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE`; explicit Candidate request/key, workspace/preservation, source/base, identity, scope/gates and idempotency inputs are also required; `--provider` accepts `sim`, `claude`, `codex`, `cursor`, `agy`, and `antigravity`. `claude` still requires the `--dogfood-*` admission inputs and a positive `--dogfood-max-budget-usd`. `codex`/`cursor`/`agy`/`antigravity` require `--signed-in-executable` and `--model` and never construct `SimAdapter`. Incomplete admission is `PROVIDER_ADMISSION_INCOMPLETE` | HTTP `/v1/leases/*` stays unmounted; `HttpLeaseClient` remains unreachable |
 | `bullet-verifier` | arguments are ignored | always refuses before reading stdin with `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE`; emits no evidence |
 | `bullet-verifier-fixture` | non-default `fixture-executor` feature; `--stdin` fixture JSON | credential-free component-test executor; output is explicitly `COMPONENT_PROOF`, `UNSIGNED_FIXTURE`, and ineligible for independent Evidence |
 | `bullet-effects` | no arguments, or `serve <durable-queue-dir>` | no arguments run a component `LocalBareForge` loss/reconciliation demo; `serve` processes at most one UNKNOWN job to `QUARANTINED` and reports `live_forge_success:false` |

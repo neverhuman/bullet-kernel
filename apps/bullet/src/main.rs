@@ -1,6 +1,7 @@
 //! Bullet Farm CLI.
 
 mod authority;
+mod coding;
 mod contracts;
 #[path = "demo_live/mod.rs"]
 mod demo_synthetic;
@@ -78,6 +79,11 @@ enum Commands {
         /// value pay for its size.
         #[command(subcommand)]
         command: Box<dogfood::DogfoodCommands>,
+    },
+    /// Submit and read durable `run_coding` commands on loopback farmd.
+    Coding {
+        #[command(subcommand)]
+        command: coding::CodingCommands,
     },
 }
 
@@ -183,6 +189,7 @@ fn run(command: Commands) -> Result<(), String> {
         Commands::Provider { .. } => unreachable!("provider is handled in main"),
         Commands::Transaction { .. } => unreachable!("transaction is handled in main"),
         Commands::Dogfood { .. } => unreachable!("dogfood is handled in main"),
+        Commands::Coding { .. } => unreachable!("coding is handled in main"),
         Commands::Farm { command } => match command {
             FarmCommands::Init => {
                 let dir = data_dir();
@@ -255,6 +262,7 @@ fn main() -> ExitCode {
     match cli.command {
         Commands::Provider { command } => provider::run(command),
         Commands::Dogfood { command } => dogfood::run(*command),
+        Commands::Coding { command } => coding::run(command),
         Commands::Transaction { json } => {
             if !json {
                 eprintln!("bullet: TRANSACTION_PROOF_UNAVAILABLE: --json is required");

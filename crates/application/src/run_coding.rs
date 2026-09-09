@@ -26,6 +26,8 @@ pub enum CodingProvider {
     Codex,
     /// Cursor Agent.
     Cursor,
+    /// Google Antigravity (`agy`).
+    Antigravity,
 }
 
 impl CodingProvider {
@@ -36,6 +38,7 @@ impl CodingProvider {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Cursor => "cursor",
+            Self::Antigravity => "antigravity",
         }
     }
 }

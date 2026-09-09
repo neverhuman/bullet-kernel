@@ -4,7 +4,7 @@ use super::lease_time;
 use bullet_application::{IssuedNonce, NonceError, NonceState};
 use chrono::DateTime;
 use rusqlite::types::Value;
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 struct StoredRow {
     digest: String,
@@ -16,11 +16,21 @@ pub(super) fn issue(
     key: &str,
     digest: &str,
 ) -> Result<IssuedNonce, NonceError> {
-    let requested = IssuedNonce::validated(key, digest)?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store)?;
-    if let Some(existing) = get(&tx, key)? {
+    let requested = issue_in(&tx, key, digest)?;
+    tx.commit().map_err(store)?;
+    Ok(requested)
+}
+
+pub(super) fn issue_in(
+    tx: &Transaction<'_>,
+    key: &str,
+    digest: &str,
+) -> Result<IssuedNonce, NonceError> {
+    let requested = IssuedNonce::validated(key, digest)?;
+    if let Some(existing) = get(tx, key)? {
         if existing.state == NonceState::Consumed {
             return Err(NonceError::Consumed(key.into()));
         }
@@ -29,7 +39,7 @@ pub(super) fn issue(
         }
         return Err(NonceError::SubjectMismatch(key.into()));
     }
-    let issued_at = database_time(&tx)?;
+    let issued_at = database_time(tx)?;
     tx.execute(
         "INSERT INTO authority_nonces
          (nonce_key, request_digest, issued_at, consumed_at)
@@ -37,23 +47,27 @@ pub(super) fn issue(
         params![key, digest, issued_at],
     )
     .map_err(store)?;
-    tx.commit().map_err(store)?;
     Ok(requested)
 }
 
 pub(super) fn consume(conn: &mut Connection, key: &str, digest: &str) -> Result<(), NonceError> {
-    let requested = IssuedNonce::validated(key, digest)?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store)?;
-    let existing = get(&tx, key)?.ok_or_else(|| NonceError::NotFound(key.into()))?;
+    consume_in(&tx, key, digest)?;
+    tx.commit().map_err(store)
+}
+
+pub(super) fn consume_in(tx: &Transaction<'_>, key: &str, digest: &str) -> Result<(), NonceError> {
+    let requested = IssuedNonce::validated(key, digest)?;
+    let existing = get(tx, key)?.ok_or_else(|| NonceError::NotFound(key.into()))?;
     if existing.state == NonceState::Consumed {
         return Err(NonceError::Consumed(key.into()));
     }
     if existing.digest != requested.digest {
         return Err(NonceError::SubjectMismatch(key.into()));
     }
-    let consumed_at = database_time(&tx)?;
+    let consumed_at = database_time(tx)?;
     let changed = tx
         .execute(
             "UPDATE authority_nonces SET consumed_at = ?2
@@ -66,12 +80,19 @@ pub(super) fn consume(conn: &mut Connection, key: &str, digest: &str) -> Result<
             "conditional consume for {key} matched {changed} rows"
         )));
     }
-    tx.commit().map_err(store)
+    Ok(())
+}
+
+pub(super) fn inspect(
+    conn: &Connection,
+    key: &str,
+) -> Result<Option<(String, NonceState)>, NonceError> {
+    IssuedNonce::validate_key(key)?;
+    Ok(get(conn, key)?.map(|row| (row.digest, row.state)))
 }
 
 pub(super) fn state(conn: &Connection, key: &str) -> Result<Option<NonceState>, NonceError> {
-    IssuedNonce::validate_key(key)?;
-    Ok(get(conn, key)?.map(|row| row.state))
+    Ok(inspect(conn, key)?.map(|(_, state)| state))
 }
 
 fn get(conn: &Connection, key: &str) -> Result<Option<StoredRow>, NonceError> {

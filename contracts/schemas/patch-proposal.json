@@ -15,7 +15,7 @@
     "operations": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 1024,
+      "maxItems": 128,
       "items": {
         "type": "object",
         "additionalProperties": false,

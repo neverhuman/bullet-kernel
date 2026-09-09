@@ -52,6 +52,8 @@ pub struct MemoryLedger {
     lease_transport_grants: BTreeMap<String, String>,
     lease_transport_settlements: BTreeMap<String, String>,
     lease_transport_nonces: BTreeMap<String, MemoryTransportNonce>,
+    authority_nonces: BTreeMap<String, (String, bool)>,
+    budget_reservations: BTreeMap<String, u64>,
     authority: Option<NormalizedAuthority>,
     fail_after_writes: Option<u32>,
     simulation_clock_millis: i64,
