@@ -15,5 +15,6 @@ printf '%s  %s\n' "$expected" "$archive" | sha256sum --check --status
 mkdir -p "$tools_dir"
 tar -xzf "$archive" -C "$tools_dir" --strip-components=1 \
   "ripgrep-${version}-${target}/rg"
-[[ "$("$tools_dir/rg" --version | head -n1)" == "ripgrep ${version}" ]]
+# `rg --version` reports `ripgrep 14.1.1 (rev ...)`, so match the prefix.
+[[ "$("$tools_dir/rg" --version | head -n1)" == "ripgrep ${version}"* ]]
 printf '%s\n' "$tools_dir" >>"${GITHUB_PATH:?GITHUB_PATH is required}"
