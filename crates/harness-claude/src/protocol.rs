@@ -157,6 +157,11 @@ pub struct ClaudeStreamTranscript {
     pub(super) last_message_id: Option<String>,
     pub(super) seen_tool_use_ids: BTreeSet<String>,
     pub(super) outstanding_tool_use_ids: BTreeSet<String>,
+    /// Tool requests naming a tool OUTSIDE the allowlist. The runtime is
+    /// expected to refuse each one; its result must arrive with
+    /// `is_error: true`. A success for any id in this set means an unadmitted
+    /// tool actually ran, and that poisons the transcript.
+    pub(super) refused_tool_use_ids: BTreeSet<String>,
     pub(super) inbound_frames: u64,
     pub(super) assistant_messages: u64,
     /// Synthetic `user` frames the CLI injected (e.g. the structured-output
@@ -256,6 +261,7 @@ impl ClaudeStreamTranscript {
             last_message_id: None,
             seen_tool_use_ids: BTreeSet::new(),
             outstanding_tool_use_ids: BTreeSet::new(),
+            refused_tool_use_ids: BTreeSet::new(),
             inbound_frames: 0,
             assistant_messages: 0,
             synthetic_user_frames: 0,

@@ -33,7 +33,20 @@ impl ClaudeStreamTranscript {
         let Some(name) = item.get("name").and_then(Value::as_str) else {
             return self.fail("read-only tool request lacks a name");
         };
-        if !valid_native_id(tool_use_id) || !self.profile.tool_allowlist().contains(&name) {
+        if !valid_native_id(tool_use_id) {
+            return self.fail("read-only tool request exceeds admission");
+        }
+        // A request naming a tool outside the allowlist is not, by itself, an
+        // escape: the runtime refuses it. Claude Code in plan mode routinely
+        // asks for `Write` to save its plan file and is told "No such tool
+        // available: Write. Write is disabled for this session" -- observed on
+        // 2.1.266. Poisoning on the REQUEST made real turns fail at random
+        // after they had been billed, and it graded the containment by what
+        // the model wanted rather than by what it got. The request is recorded
+        // instead, and its result is required to be an error below: an
+        // unadmitted tool that actually SUCCEEDS still poisons the transcript.
+        let admitted = self.profile.tool_allowlist().contains(&name);
+        if !admitted && !self.profile.admits_vendor_fields() {
             return self.fail("read-only tool request exceeds admission");
         }
         if self.seen_tool_use_ids.contains(tool_use_id)
@@ -44,9 +57,13 @@ impl ClaudeStreamTranscript {
         self.seen_tool_use_ids.insert(tool_use_id.to_string());
         self.outstanding_tool_use_ids
             .insert(tool_use_id.to_string());
+        if !admitted {
+            self.refused_tool_use_ids.insert(tool_use_id.to_string());
+        }
         Ok(json!({
             "tool_use_id": tool_use_id,
             "name": name,
+            "admitted": admitted,
             "authoritative": false,
         }))
     }
@@ -164,6 +181,12 @@ impl ClaudeStreamTranscript {
                 .get("is_error")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            // The security property, stated exactly: no tool outside the
+            // allowlist may ever report success. A refusal is the containment
+            // working; a success is an escape.
+            if self.refused_tool_use_ids.remove(tool_use_id) && !failed {
+                return self.fail("a tool outside the read-only allowlist reported success");
+            }
             let kind = if failed {
                 AgentEventKind::ToolFailed
             } else {

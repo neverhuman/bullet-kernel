@@ -273,18 +273,31 @@ fn write_capable_tools_are_refused_under_the_dogfood_profile() {
 }
 
 #[test]
-fn a_tool_named_outside_the_allowlist_is_refused_even_after_a_clean_init() {
+fn a_tool_named_outside_the_allowlist_cannot_succeed_after_a_clean_init() {
+    // This test used to assert that the REQUEST itself was refused. That rule
+    // was wrong against a real runtime: Claude Code in plan mode asks for
+    // `Write` to save its plan file and is told "No such tool available", so
+    // the old rule failed real turns after they had been billed while grading
+    // containment by what the model wanted rather than what it got. The
+    // property that matters is unchanged and is asserted here: a tool outside
+    // the allowlist may be asked for, and may never report success.
     let mut machine = dogfood_machine(ENROLLED_VERSION);
     establish(
         &mut machine,
         ENROLLED_VERSION,
         json!(["Read", "Glob", "Grep"]),
     );
+    machine
+        .ingest_line(&line(&assistant_tool_use("Bash")))
+        .expect("the request is recorded so its refusal can be required");
+    let error = machine
+        .ingest_line(&line(&tool_result(Some(false))))
+        .expect_err("a write-capable tool reporting success must be refused");
     assert!(
-        machine
-            .ingest_line(&line(&assistant_tool_use("Bash")))
-            .is_err(),
-        "a tool_use naming a write-capable tool must be refused"
+        error
+            .to_string()
+            .contains("outside the read-only allowlist reported success"),
+        "unexpected reason: {error}"
     );
 }
 
@@ -536,6 +549,97 @@ mod real_capture {
         assert!(
             machine.ingest_line(first).is_err(),
             "conformance profile must not silently gain dogfood tolerance"
+        );
+    }
+}
+
+/// The read-only guarantee stated exactly: a tool outside the allowlist may be
+/// REQUESTED (the runtime refuses it) but may never report SUCCESS.
+mod unadmitted_tool_requests {
+    use super::*;
+
+    fn machine() -> ClaudeStreamTranscript {
+        ClaudeStreamTranscript::new_with_profile(
+            AgentSessionId::new(KERNEL_SESSION),
+            InvocationId::new(INVOCATION),
+            CWD,
+            ENROLLED_VERSION,
+            vec![GATE.into()],
+            TranscriptProfile::DogfoodReadOnlyV0,
+        )
+        .expect("dogfood machine")
+    }
+
+    fn started() -> ClaudeStreamTranscript {
+        let mut machine = machine();
+        let _ = machine.user_message("go").expect("prompt");
+        machine
+            .ingest_line(&line(&init_event(
+                ENROLLED_VERSION,
+                json!(["Read", "Glob", "Grep"]),
+            )))
+            .expect("init");
+        machine
+    }
+
+    #[test]
+    fn a_refused_write_request_does_not_poison_the_turn() {
+        // Observed on 2.1.266: plan mode asks for `Write` to save its plan file
+        // and the runtime answers "No such tool available: Write. Write is
+        // disabled for this session". Refusing the transcript on the REQUEST
+        // graded the containment by what the model wanted rather than by what
+        // it got, and killed real turns after they had been billed.
+        let mut machine = started();
+        machine
+            .ingest_line(&line(&assistant_tool_use("Write")))
+            .expect("an unadmitted request is recorded, not fatal");
+        machine
+            .ingest_line(&line(&tool_result(Some(true))))
+            .expect("its refusal is the containment working");
+    }
+
+    #[test]
+    fn an_unadmitted_tool_that_succeeds_still_poisons_the_turn() {
+        // The property that actually matters: if a tool outside the allowlist
+        // ever reports success, something escaped and the turn is not read-only.
+        let mut machine = started();
+        machine
+            .ingest_line(&line(&assistant_tool_use("Write")))
+            .expect("request recorded");
+        let error = machine
+            .ingest_line(&line(&tool_result(Some(false))))
+            .expect_err("a successful unadmitted tool must poison the transcript");
+        assert!(
+            error
+                .to_string()
+                .contains("outside the read-only allowlist reported success"),
+            "unexpected reason: {error}"
+        );
+    }
+
+    #[test]
+    fn the_frozen_conformance_profile_still_refuses_the_request_itself() {
+        let mut machine = ClaudeStreamTranscript::new_with_profile(
+            AgentSessionId::new(KERNEL_SESSION),
+            InvocationId::new(INVOCATION),
+            CWD,
+            OBSERVED_CLAUDE_SCHEMA_VERSION,
+            vec![GATE.into()],
+            TranscriptProfile::ConformanceV1,
+        )
+        .expect("conformance machine");
+        let _ = machine.user_message("go").expect("prompt");
+        machine
+            .ingest_line(&line(&init_event(
+                OBSERVED_CLAUDE_SCHEMA_VERSION,
+                json!(["Read", "Glob", "Grep"]),
+            )))
+            .expect("init");
+        assert!(
+            machine
+                .ingest_line(&line(&assistant_tool_use("Write")))
+                .is_err(),
+            "conformance must not gain the dogfood tolerance"
         );
     }
 }
