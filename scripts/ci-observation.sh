@@ -48,8 +48,15 @@ record_tool() {
   local value
   if command -v "$1" >/dev/null 2>&1; then
     value="$("$@" 2>/dev/null | head -n 1)"
-    [[ -n "$value" ]] && tool_versions="$(jq -c --arg key "$key" --arg value "$value" '. + {($key): $value}' <<<"$tool_versions")"
+    if [[ -n "$value" ]]; then
+      tool_versions="$(jq -c --arg key "$key" --arg value "$value" '. + {($key): $value}' <<<"$tool_versions")"
+    fi
   fi
+  # A version probe is best effort. `cargo` exists on the runner image while
+  # `cargo nextest` does not, so the probe produced no output, the `&&` chain
+  # returned 1, that became the function's status, and `set -e` killed the
+  # whole observation. Record what is present and say nothing about the rest.
+  return 0
 }
 record_tool git git --version
 record_tool rustc rustc --version
