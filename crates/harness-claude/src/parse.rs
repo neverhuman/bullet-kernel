@@ -5,8 +5,8 @@ mod tools;
 
 use crate::protocol::{
     basic_event_subject, empty_array, empty_optional_array, event_subject, exact_fields,
-    model_matches, protocol, provider_error_reason, unique_string_array, valid_native_id,
-    valid_uuid, ClaudeStreamTranscript, Phase, TranscriptProfile, MAX_ASSISTANT_CONTENT_ITEMS,
+    model_matches, protocol, unique_string_array, valid_native_id, valid_uuid,
+    ClaudeStreamTranscript, Phase, TranscriptProfile, MAX_ASSISTANT_CONTENT_ITEMS,
     MAX_STREAM_JSON_FRAME_BYTES, READ_ONLY_TOOL_ALLOWLIST,
 };
 use bullet_harness_core::{decode_strict_json, AgentEvent, AgentEventKind, HarnessError};
@@ -41,7 +41,7 @@ impl ClaudeStreamTranscript {
         }
         let value: Value = match decode_strict_json(line) {
             Ok(value) => value,
-            Err(error) => return self.fail(format!("malformed stream-JSON: {error}")),
+            Err(_) => return self.fail("malformed stream-JSON"),
         };
         let Some(object) = value.as_object() else {
             return self.fail("stream-JSON frame is not an object");
@@ -73,7 +73,7 @@ impl ClaudeStreamTranscript {
             // emits it unprompted on a subscription account; it still counts
             // against the frame budget above.
             Some("rate_limit_event") if self.profile.admits_vendor_fields() => Ok(Vec::new()),
-            Some(other) => self.fail(format!("unadmitted stream-JSON type {other:?}")),
+            Some(_) => self.fail("unadmitted stream-JSON type"),
             None => self.fail("stream-JSON frame lacks string type"),
         }
     }
@@ -240,25 +240,30 @@ impl ClaudeStreamTranscript {
         } else {
             exact_fields(object, &envelope_required, &["error"])
         };
-        // The CLI reports its own failures as a synthetic assistant frame
-        // carrying `error` and `is_api_error_message`. Refusing those as a
-        // malformed envelope is technically true and practically useless: the
-        // operator is told the shape is wrong when the actual fact is "Not
-        // logged in", or a rate limit, or an expired token. Say what the
-        // provider said.
-        if let Some(reason) = provider_error_reason(object) {
-            return self.fail(format!("the provider refused the turn: {reason}"));
-        }
-        if !envelope_ok
-            || !object.get("parent_tool_use_id").is_some_and(Value::is_null)
-            || !object.get("error").is_none_or(Value::is_null)
-        {
+        if !envelope_ok || !object.get("parent_tool_use_id").is_some_and(Value::is_null) {
             return self.fail("assistant envelope is not an exact main-session message");
         }
         let Some((uuid, session_id)) = basic_event_subject(object) else {
             return self.fail("assistant has invalid event subject");
         };
+        if !valid_uuid(uuid) {
+            return self.fail("assistant has invalid event subject");
+        }
         self.require_native_session(session_id)?;
+        // Provider text and tags are untrusted, including after JSON decoding.
+        // Refuse errors without turning their detail into public diagnostics or
+        // admitting synthetic message bodies, usage, or a terminal outcome.
+        if !object.get("error").is_none_or(Value::is_null)
+            || object.get("is_api_error_message").and_then(Value::as_bool) == Some(true)
+        {
+            return self.fail("provider reported an assistant error; detail withheld");
+        }
+        if !object
+            .get("is_api_error_message")
+            .is_none_or(|value| value.is_null() || value.as_bool() == Some(false))
+        {
+            return self.fail("assistant error marker is malformed");
+        }
         let Some(message) = object.get("message").and_then(Value::as_object) else {
             return self.fail("assistant.message is not an object");
         };

@@ -8,6 +8,9 @@ use bullet_harness_core::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
+mod result_fields;
+pub(super) use result_fields::valid_result_common;
+
 /// Exact installed build whose embedded schema source was observed offline.
 ///
 /// This is not a live conformance or executable-admission claim.
@@ -487,103 +490,4 @@ pub(super) fn empty_optional_array(object: &Map<String, Value>, key: &str) -> bo
     object
         .get(key)
         .is_none_or(|value| value.as_array().is_some_and(Vec::is_empty))
-}
-
-/// Validate the fields every `result` frame shares.
-///
-/// `admits_vendor_fields` relaxes only the closed-set rule: a real build adds
-/// timing and accounting keys (`first_content_frame_ms`, `queued_turn_count`,
-/// `subagent_stats`, `time_to_request_ms`, `ttft_stream_ms` on 2.1.266) that
-/// carry no admission meaning. Every value check below stays exact.
-pub(super) fn valid_result_common(object: &Map<String, Value>, admits_vendor_fields: bool) -> bool {
-    let required = [
-        "type",
-        "subtype",
-        "uuid",
-        "session_id",
-        "duration_ms",
-        "duration_api_ms",
-        "is_error",
-        "num_turns",
-        "stop_reason",
-        "total_cost_usd",
-        "usage",
-        "modelUsage",
-        "permission_denials",
-    ];
-    let optional = [
-        "result",
-        "structured_output",
-        "errors",
-        "api_error_status",
-        "ttft_ms",
-        "deferred_tool_use",
-        "fast_mode_state",
-        "fast_mode_disabled_reason",
-        "terminal_reason",
-    ];
-    let fields_ok = if admits_vendor_fields {
-        required.iter().all(|key| object.contains_key(*key))
-    } else {
-        exact_fields(object, &required, &optional)
-    };
-    fields_ok
-        && object.get("duration_ms").and_then(Value::as_u64).is_some()
-        && object
-            .get("duration_api_ms")
-            .and_then(Value::as_u64)
-            .is_some()
-        && object
-            .get("num_turns")
-            .and_then(Value::as_u64)
-            .is_some_and(|turns| turns > 0)
-        && object
-            .get("total_cost_usd")
-            .and_then(Value::as_f64)
-            .is_some_and(|cost| cost.is_finite() && cost >= 0.0)
-        && object.get("usage").is_some_and(Value::is_object)
-        && object.get("modelUsage").is_some_and(Value::is_object)
-        && object
-            .get("permission_denials")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
-        && object
-            .get("terminal_reason")
-            .is_none_or(|reason| reason.is_null() || reason.is_string())
-}
-
-/// The provider's own reason for refusing a turn, when it reported one.
-///
-/// `claude` reports startup and API failures as a synthetic assistant frame:
-/// `is_api_error_message: true`, a short `error` tag, `model: "<synthetic>"`,
-/// and the human-readable cause as the frame's only text block. Reading that
-/// text back is the difference between "assistant envelope is not an exact
-/// main-session message" and "Not logged in".
-pub(super) fn provider_error_reason(object: &Map<String, Value>) -> Option<String> {
-    let flagged = object
-        .get("is_api_error_message")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let tag = object.get("error").and_then(Value::as_str);
-    if !flagged && tag.is_none() {
-        return None;
-    }
-    let text = object
-        .get("message")
-        .and_then(Value::as_object)
-        .and_then(|message| message.get("content"))
-        .and_then(Value::as_array)
-        .and_then(|content| {
-            content
-                .iter()
-                .filter_map(|item| item.as_object()?.get("text")?.as_str())
-                .find(|text| !text.trim().is_empty())
-        })
-        .map(str::trim);
-    match (tag, text) {
-        (Some(tag), Some(text)) => Some(format!("{tag}: {text}")),
-        (Some(tag), None) => Some(tag.to_owned()),
-        (None, Some(text)) => Some(text.to_owned()),
-        (None, None) => Some("the provider reported an API error with no detail".to_owned()),
-    }
 }
