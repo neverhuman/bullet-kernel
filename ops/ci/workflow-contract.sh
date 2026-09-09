@@ -65,13 +65,13 @@ expect_global_action_count() {
 expected_context_digest() {
   case "$1" in
     header) printf '%s\n' 4c4f307636e38761db26d62f4dfa81ddd69c161d14c48a8e2fab25b741c729b0 ;;
-    preflight) printf '%s\n' 27e9a021702b1f2f000d0bdff459e664ccc8cac7a746cf3d0e54c60dcfa2b225 ;;
-    fast) printf '%s\n' 0059a0451f5e0d1bed388030dd997e9e9096d670d800f3669037676b67d5ffa0 ;;
-    lint) printf '%s\n' 20a034924d4b9b1665d0bcd1d2825bc1cd57ffc70aeaa11da58fd356b4bec038 ;;
-    contract) printf '%s\n' 7a3c15047e212633d56ee5787a74891ae4283ec58795c469ec429e40f5d9da70 ;;
-    security) printf '%s\n' 15e5e5aceec8f0255af37993c8b7067e17e1f2d0089f8a230dd49416fb559914 ;;
-    docs) printf '%s\n' d9cc1e81b45c3bef36efe7955142924c1eb6b3ac4b4fbf18f9018c72bed63c2a ;;
-    required) printf '%s\n' b4dff6def32376ff8c26152c4026456995fa1b3e59298fecb2348456f8dfec9a ;;
+    preflight) printf '%s\n' 724530aa098c182f00b6d2b491e88e4023231282d130d84896a862ffc0041f39 ;;
+    fast) printf '%s\n' c8a742d1f2fa2d946928318c0d62807f2eaeb6b750435ad52c71bb5b34f8c67c ;;
+    lint) printf '%s\n' 4ccc38b927188c0acd0d3fa6e92cdab2e13dbd95cb07238d6e6b3ff21c399b10 ;;
+    contract) printf '%s\n' 0364cba18f2252a4957320523d1f510f8768825f81b0962025ea53c376256d49 ;;
+    security) printf '%s\n' 04cfdf6285d6c4cd8e5fc33386fc07ddd6356be28d8177129156380bfd890ede ;;
+    docs) printf '%s\n' de88f2cd760763739d4523850e1d81146cef7e30c36221996dabb8aee889f96e ;;
+    required) printf '%s\n' 0f37994093e5a4a261cabf88ae4aecccf1f19ff0f052d96735a2d1e46e9fb891 ;;
     *) return 2 ;;
   esac
 }
@@ -300,9 +300,9 @@ validate_required_workflow() {
     [[ -z "$(job_environment "$block")" ]] \
       || { refuse HOSTED_EXECUTION_ENV_DRIFT "$lane"; return 1; }
     case "$lane" in
-      preflight|docs) expected_steps=5 ;;
-      fast|contract) expected_steps=6 ;;
-      lint|security) expected_steps=7 ;;
+      preflight|docs) expected_steps=6 ;;
+      fast|contract) expected_steps=7 ;;
+      lint|security) expected_steps=8 ;;
     esac
     [[ "$(rg -c '^      - ' <<<"$block")" -eq "$expected_steps" ]] \
       || { refuse HOSTED_STEP_INVENTORY_DRIFT "$lane"; return 1; }
@@ -336,7 +336,7 @@ validate_required_workflow() {
   required="$(workflow_job_block "$workflow" required)"
   [[ "$(rg -Fxc '    runs-on: ubuntu-24.04' <<<"$required")" -eq 1 ]] \
     || { refuse HOSTED_RUNNER_DRIFT required; return 1; }
-  [[ "$(rg -c '^      - ' <<<"$required")" -eq 8 &&
+  [[ "$(rg -c '^      - ' <<<"$required")" -eq 9 &&
      "$(rg -Fxc '    if: ${{ always() }}' <<<"$required")" -eq 1 &&
      "$(rg -Fxc '    needs: [preflight, fast, lint, contract, security, docs]' <<<"$required")" -eq 1 ]] \
     || { refuse HOSTED_REQUIRED_JOB_DRIFT required; return 1; }
@@ -389,7 +389,7 @@ validate_required_workflow() {
   [[ "$actual" == "$expected" ]] \
     || { refuse HOSTED_ARCHIVE_LAYOUT_DRIFT "$actual"; return 1; }
   actual="$(sha256sum "$workflow" | awk '{ print $1 }')"
-  [[ "$actual" == 5e45f68e8a682b8f474ff73bfa0b35545af3a77f3a13534fa4f462c6e1e1451d ]] \
+  [[ "$actual" == 355d2a54a9fa4032f8b6309bda8f2cbeca0b485ddb7d668dc669d9212461dab8 ]] \
     || { refuse HOSTED_REQUIRED_CONTEXT_DRIFT "$actual"; return 1; }
 }
 
