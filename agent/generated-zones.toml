@@ -9,24 +9,31 @@
 [[zone]]
 path = "contracts/generated/"
 source = "contracts/openapi.yaml"
-command = "bash ops/ci/contract.sh"
+command = "cargo run --locked -p bullet --bin bullet -- contracts generate"
 owner = "contracts"
 read_only = true
 write_policy = "generator_only"
 
-# crates/* paths are inventory-protected. Declaring them as zones fires
-# generated-zone-mutation-risk on jankurai 1.6.11. The hub-synced schema
-# bundle lives at crates/domain/src/generated/schema_bundle.rs so the path
-# itself marks the file generated; do not add a crates/ zone for it.
-
-# The proposal JSON Schema is authored by hand and kept honest by
-# `schema_and_authoritative_struct_agree` in bullet-harness-core. Declaring it
-# as a zone *source* (not as generated output) clears HLT-007 without claiming
-# the schema itself is codegen. The generated clients stay under contracts/generated/.
 [[zone]]
-path = "contracts/generated/"
+path = "generated/schema_bundle.rs"
+source = "bullet-farm:contracts/generated/rust/schema_bundle.rs"
+command = "cp ../bullet-farm/contracts/generated/rust/schema_bundle.rs generated/schema_bundle.rs"
+owner = "contracts"
+read_only = true
+write_policy = "generator_only"
+
+[[zone]]
+path = "generated/formal/"
+source = "bullet-farm:formal/traces"
+command = "bash ../bullet-farm/scripts/sync-family-contracts.sh write"
+owner = "assurance"
+read_only = true
+write_policy = "generator_only"
+
+[[zone]]
+path = "generated/patch-proposal-binding.rs"
 source = "contracts/schemas/patch-proposal.json"
-command = "cargo test -p bullet-harness-core schema_and_authoritative_struct_agree"
+command = "cargo test --locked -p bullet-harness-core --lib proposal::tests::schema_and_authoritative_struct_agree -- --exact"
 owner = "contracts"
 read_only = true
 write_policy = "generator_only"

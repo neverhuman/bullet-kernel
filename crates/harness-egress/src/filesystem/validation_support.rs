@@ -62,7 +62,9 @@ pub(super) fn validate_owner_parent_custody(
     Ok(())
 }
 
-pub(super) fn validate_destinations(profile: &FilesystemSandboxProfileV0) -> Result<(), EgressError> {
+pub(super) fn validate_destinations(
+    profile: &FilesystemSandboxProfileV0,
+) -> Result<(), EgressError> {
     let mut destinations = vec![
         PathBuf::from(PROVIDER_DESTINATION),
         PathBuf::from(SCHEMA_DESTINATION),

@@ -399,4 +399,3 @@ fn open_private_directory(
         identity,
     })
 }
-

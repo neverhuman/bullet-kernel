@@ -8,7 +8,7 @@ and `DomainError`. Every value here is reproducible from its inputs alone.
   mutating clock. The exact forbidden import list is `agent/boundaries.toml`
   (`[rust] forbidden_domain_imports`). Durable writes belong in
   `crates/adapters`, effects in `crates/effects`.
-- `src/generated/schema_bundle.rs` is hub-synced generated code. Never
+- `generated/schema_bundle.rs` (repo root) is hub-synced generated code. Never
   hand-edit it; repair it from `bullet-farm` with
   `bash scripts/sync-family-contracts.sh`.
 - Every error variant carries a stable `reason_code()`. Those strings are a wire

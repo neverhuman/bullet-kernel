@@ -54,7 +54,10 @@ struct WireBinding {
     operation: String,
 }
 
-pub(super) fn budget_micro_usd(requested: Option<f64>, enrolled_max: u64) -> Result<u64, DogfoodRunError> {
+pub(super) fn budget_micro_usd(
+    requested: Option<f64>,
+    enrolled_max: u64,
+) -> Result<u64, DogfoodRunError> {
     let Some(usd) = requested else {
         return Ok(enrolled_max);
     };
@@ -156,7 +159,9 @@ pub(super) struct PassportedRuntime {
 /// the exact provider size bound that replaces the blanket 64 MiB ceiling.
 /// Outside the prefix nothing changes. The passport file lives beside the
 /// immutable tree at `<deployment_root>.passport.json`.
-pub(super) fn passported_runtime(executable: &Path) -> Result<Option<PassportedRuntime>, DogfoodRunError> {
+pub(super) fn passported_runtime(
+    executable: &Path,
+) -> Result<Option<PassportedRuntime>, DogfoodRunError> {
     let prefix = Path::new(RUNTIME_DEPLOYMENT_PREFIX);
     let Ok(relative) = executable.strip_prefix(prefix) else {
         return Ok(None);
