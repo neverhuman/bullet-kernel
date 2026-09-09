@@ -21,13 +21,12 @@ contracts, SQLite adapters. The machine-readable half of this binding is
 
 ## Generated zones
 
-Do not hand-edit a `generator_only` zone. `generated/schema_bundle.rs`
-and `generated/formal/` are hub-synced;
+Do not hand-edit a `generator_only` zone. `generated/schema_bundle.rs`,
+`crates/adapters/tests/fixtures/formal/`, and the two policy fixtures declared
+in `agent/generated-zones.toml` are hub-synced;
 `contracts/generated/` is emitted from `contracts/openapi.yaml`. Repair them
 from the source with the `command` recorded next to the zone in
 `agent/generated-zones.toml`, never by editing the output.
-`generated/patch-proposal-binding.rs` is the generated zone whose `source` is
-the authored `contracts/schemas/patch-proposal.json`.
 `cargo run --locked -p bullet --bin bullet -- contracts check` checks OpenAPI client drift;
 `bash ../bullet-farm/scripts/sync-family-contracts.sh check` compares the Hub
 copies without writing them. The offline contract lane is a separate protocol
