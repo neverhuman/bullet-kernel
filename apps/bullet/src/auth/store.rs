@@ -71,8 +71,9 @@ impl CredentialStore {
         if bytes.len() > 1_048_576 {
             return Err("COMMAND_JOURNAL_TOO_LARGE".into());
         }
-        let record = serde_json::from_slice(&bytes)
-            .map_err(|_| "COMMAND_JOURNAL_CORRUPT: preserve the original request record")?;
+        let record = serde_json::from_slice::<bullet_harness_core::strict_json::StrictJson>(&bytes)
+            .map_err(|_| "COMMAND_JOURNAL_CORRUPT: preserve the original request record")?
+            .0;
         // A previous writer may have died after writing but before either sync.
         file.sync_all()
             .map_err(|_| "COMMAND_JOURNAL_SYNC_UNKNOWN")?;
@@ -379,10 +380,17 @@ mod tests {
         drop(store);
         let store = CredentialStore::open(&dir).unwrap();
         assert_eq!(store.load_command(&id).unwrap(), Some(record));
-        std::fs::write(dir.join(format!("{}.json", id.as_str())), b"partial").unwrap();
-        assert!(store
-            .load_command(&id)
-            .unwrap_err()
-            .starts_with("COMMAND_JOURNAL_CORRUPT"));
+        for damaged in [
+            b"partial".as_slice(),
+            b"{\"content\":\"\xff\"}",
+            br#"{"payload":"PRIVATE_CANARY","payload":"replacement"}"#,
+            br#"{"envelope":{"payload":{"content":"PRIVATE_CANARY","content":"replacement"}}}"#,
+            br#"{"payload":"PRIVATE_CANARY","\u0070ayload":"replacement"}"#,
+        ] {
+            std::fs::write(dir.join(format!("{}.json", id.as_str())), damaged).unwrap();
+            let error = store.load_command(&id).unwrap_err();
+            assert!(error.starts_with("COMMAND_JOURNAL_CORRUPT"));
+            assert!(!error.contains("PRIVATE_CANARY"));
+        }
     }
 }
