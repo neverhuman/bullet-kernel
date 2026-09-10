@@ -80,7 +80,7 @@ enum Commands {
         #[command(subcommand)]
         command: Box<dogfood::DogfoodCommands>,
     },
-    /// Submit and read durable `run_coding` commands on loopback farmd.
+    /// Submit, read, and project durable `run_coding` commands on loopback farmd.
     Coding {
         #[command(subcommand)]
         command: coding::CodingCommands,

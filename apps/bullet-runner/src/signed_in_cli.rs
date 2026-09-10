@@ -230,7 +230,7 @@ impl HarnessAdapter for SignedInCliAdapter {
     }
 
     async fn terminate(&self, _s: &SessionHandle) -> HarnessResult<Ack> {
-        Ok(Ack { acknowledged: true })
+        Err(unsupported(&self.provider, "terminate"))
     }
 
     fn events(&self, _session: &SessionHandle) -> HarnessEventStream {

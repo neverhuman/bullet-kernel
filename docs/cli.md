@@ -39,8 +39,11 @@ spawn a provider. Nothing here produces `LIVE_PROOF` or `RELEASE_PROOF`.
 | `mission materialize` / `mission status` | materialize one plan revision into the local ledger (same seed + input replays the same ids; same seed + different input refuses) / print the stored graph for one mission |
 | `run show` / `run print-preimages` | verify and render one run receipt (recomputes the body digest; follows the embedded selection-receipt chain link) / emit BLAKE3 preimages for paths at an exact base commit; see below |
 | `dogfood read-only` | one contained read-only dogfood compose under ADR 0015; not a release profile, not live-conformance; see below |
-| `coding submit` | POST one `run_coding` envelope to loopback farmd (same shape as Portal Control Tower). Requires `--bootstrap-token` or `--session-cookie` plus `--csrf`, plus `--account`, `--provider` ∈ `claude\|codex\|cursor\|antigravity`, and `--model`. Never selects `sim`. Prints the durable command JSON. |
+| `coding submit` | POST one `run_coding` envelope to loopback farmd (same shape as Portal Control Tower). Requires `--bootstrap-token` or `--session-cookie` plus `--csrf`, plus `--account`, `--provider` ∈ `claude\|codex\|cursor\|antigravity`, and `--model`. Never selects `sim`. Prints the durable command JSON; a TTY also prints a labeled status card unless `--json` or `NO_COLOR`. |
 | `coding status <id>` | GET the same command subject from farmd using `--session-cookie` |
+| `coding board` | one-shot labeled board from `/health` plus authenticated `GET /api/v1/{fleet,sessions,outbox}`; optional `--command`. Empty fleet is zero lease rows, not a green multi-agent process. `--json` emits the raw projection objects. |
+| `coding watch` | poll the same board; `--interval-ms` must be ≥ 1 (`WATCH_INTERVAL_INVALID` otherwise). Not a coordinator fleet. |
+| `coding harness-check` | report `BULLET_HARNESS_*` PRESENT/ABSENT without spawning a provider. Exit 2 when unbound (`COMMAND_CODING_HARNESS_UNBOUND`). |
 | `coding stop` | typed `STOP_UNIMPLEMENTED` and exit 2; does not SIGKILL a provider |
 
 ## `authority keygen`
@@ -200,12 +203,16 @@ Exit codes: `0` a receipt was written; `78` designed-neutral (missing input,
 namespaces unavailable, containment unavailable); `1` typed refusal (live
 admission enabled, binding/enrollment mismatch, fixture key, argv drift).
 
-## `coding submit` / `status` / `stop`
+## `coding submit` / `status` / `board` / `watch` / `harness-check` / `stop`
 
 Loopback farmd ingress for a durable `run_coding` command. This is not
 `dogfood read-only` (that compose still bypasses farmd and is Claude-only).
 It is not session steer, interrupt, or a coordinator fleet: Operating HOLD
 and farmd T4a remain open, and `coding stop` is `STOP_UNIMPLEMENTED`.
+`board` and `watch` read the existing farmd GET projections and print saturated
+status colors **plus** textual labels (`HOLD`, `LIVE`, `EXPIRED`, `UNKNOWN`).
+`NO_COLOR` or a non-TTY stdout disables ANSI. Reads other than `/health` need
+the `bullet_session` cookie (see [`operator-reads.md`](operator-reads.md)).
 
 The worker executes `run_coding` by spawning `bullet-runner` with
 operator-bound `BULLET_HARNESS_*` environment (workspace, lease socket,

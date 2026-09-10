@@ -3,11 +3,14 @@
 //! Same envelope as Portal Control Tower. Never constructs a simulator.
 //! `stop` is typed unimplemented until farmd exposes durable cancel.
 
+mod harness;
+mod http;
+mod render;
+
 use clap::Subcommand;
 use serde_json::{json, Value};
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::process::ExitCode;
+use std::thread;
 use std::time::Duration;
 
 const CSRF_HEADER: &str = "X-Bullet-CSRF";
@@ -43,6 +46,9 @@ pub(crate) enum CodingCommands {
         /// Expected authority revision.
         #[arg(long, default_value_t = 1)]
         expected_revision: u64,
+        /// JSON only, even on a TTY.
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
     /// GET one durable command subject.
     Status {
@@ -52,6 +58,38 @@ pub(crate) enum CodingCommands {
         session_cookie: String,
         /// Exact command id (`cmd_` + 64 hex).
         id: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// One-shot farmd projection board. Empty fleet is zero rows, not a green fleet.
+    Board {
+        #[arg(long, default_value = "http://127.0.0.1:7420")]
+        farmd: String,
+        #[arg(long)]
+        session_cookie: String,
+        /// Optional durable command id to include.
+        #[arg(long)]
+        command: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Poll the same board. Not a coordinator fleet and not session steer.
+    Watch {
+        #[arg(long, default_value = "http://127.0.0.1:7420")]
+        farmd: String,
+        #[arg(long)]
+        session_cookie: String,
+        #[arg(long)]
+        command: Option<String>,
+        #[arg(long, default_value_t = 1000)]
+        interval_ms: u64,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Report BULLET_HARNESS_* bind without spawning a provider.
+    HarnessCheck {
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
     /// Durable session stop. Not implemented; do not SIGKILL as success.
     Stop,
@@ -65,6 +103,7 @@ pub(crate) fn run(command: CodingCommands) -> ExitCode {
             );
             ExitCode::from(2)
         }
+        CodingCommands::HarnessCheck { json } => print_harness(json),
         CodingCommands::Submit {
             farmd,
             origin,
@@ -75,57 +114,148 @@ pub(crate) fn run(command: CodingCommands) -> ExitCode {
             provider,
             model,
             expected_revision,
+            json,
         } => match submit(
             &farmd,
             &origin,
-            bootstrap_token.as_deref(),
-            session_cookie.as_deref(),
-            csrf.as_deref(),
-            &account,
-            &provider,
-            &model,
-            expected_revision,
+            SubmitRequest {
+                bootstrap_token: bootstrap_token.as_deref(),
+                session_cookie: session_cookie.as_deref(),
+                csrf: csrf.as_deref(),
+                account: &account,
+                provider: &provider,
+                model: &model,
+                expected_revision,
+            },
         ) {
             Ok(body) => {
-                println!("{body}");
+                emit(
+                    &body.to_string(),
+                    Some(&render::format_command_card(
+                        &body,
+                        render::color_wanted(json),
+                    )),
+                    json,
+                );
                 ExitCode::SUCCESS
             }
-            Err(error) => {
-                eprintln!("bullet: {error}");
-                ExitCode::FAILURE
-            }
+            Err(error) => fail(error),
         },
         CodingCommands::Status {
             farmd,
             session_cookie,
             id,
+            json,
         } => match status(&farmd, &session_cookie, &id) {
             Ok(body) => {
-                println!("{body}");
+                emit(
+                    &body.to_string(),
+                    Some(&render::format_command_card(
+                        &body,
+                        render::color_wanted(json),
+                    )),
+                    json,
+                );
                 ExitCode::SUCCESS
             }
-            Err(error) => {
-                eprintln!("bullet: {error}");
-                ExitCode::FAILURE
+            Err(error) => fail(error),
+        },
+        CodingCommands::Board {
+            farmd,
+            session_cookie,
+            command,
+            json,
+        } => match load_board(&farmd, &session_cookie, command.as_deref()) {
+            Ok(board) => {
+                print_board(&board, json);
+                ExitCode::SUCCESS
             }
+            Err(error) => fail(error),
+        },
+        CodingCommands::Watch {
+            farmd,
+            session_cookie,
+            command,
+            interval_ms,
+            json,
+        } => match admit_interval(interval_ms) {
+            Ok(interval) => loop {
+                match load_board(&farmd, &session_cookie, command.as_deref()) {
+                    Ok(board) => {
+                        if !json && render::color_wanted(false) {
+                            print!("{}", render::screen_home(true));
+                        }
+                        print_board(&board, json);
+                    }
+                    Err(error) => eprintln!("bullet: {error}"),
+                }
+                thread::sleep(Duration::from_millis(interval));
+            },
+            Err(error) => fail(error),
         },
     }
 }
 
-fn submit(
-    farmd: &str,
-    origin: &str,
-    bootstrap_token: Option<&str>,
-    session_cookie: Option<&str>,
-    csrf: Option<&str>,
-    account: &str,
-    provider: &str,
-    model: &str,
+fn fail(error: String) -> ExitCode {
+    eprintln!("bullet: {error}");
+    ExitCode::FAILURE
+}
+
+fn emit(json_body: &str, card: Option<&str>, json_only: bool) {
+    if !json_only && render::color_wanted(false) {
+        if let Some(card) = card {
+            println!("{card}");
+        }
+    }
+    println!("{json_body}");
+}
+
+fn print_board(board: &render::Board, json_only: bool) {
+    if json_only {
+        println!("{}", board.json());
+        return;
+    }
+    println!(
+        "{}",
+        render::format_board(board, render::color_wanted(false))
+    );
+}
+
+fn print_harness(json_only: bool) -> ExitCode {
+    let report = harness::from_env();
+    if json_only {
+        println!("{}", report.json());
+    } else {
+        println!(
+            "{}",
+            render::format_harness(&report, render::color_wanted(false))
+        );
+    }
+    if report.outcome == "BOUND" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    }
+}
+
+struct SubmitRequest<'a> {
+    bootstrap_token: Option<&'a str>,
+    session_cookie: Option<&'a str>,
+    csrf: Option<&'a str>,
+    account: &'a str,
+    provider: &'a str,
+    model: &'a str,
     expected_revision: u64,
-) -> Result<String, String> {
-    let (cookie, csrf) = match (session_cookie, csrf, bootstrap_token) {
+}
+
+fn submit(farmd: &str, origin: &str, request: SubmitRequest<'_>) -> Result<Value, String> {
+    let (cookie, csrf) = match (
+        request.session_cookie,
+        request.csrf,
+        request.bootstrap_token,
+    ) {
         (Some(cookie), Some(csrf), _) => (cookie.to_string(), csrf.to_string()),
-        (_, _, Some(token)) => exchange_bootstrap(farmd, origin, token)?,
+        (_, _, Some(token)) => http::exchange_bootstrap(farmd, origin, token)?,
         _ => {
             return Err(
                 "coding submit requires --bootstrap-token or both --session-cookie and --csrf"
@@ -133,8 +263,13 @@ fn submit(
             )
         }
     };
-    let envelope = run_coding_envelope(account, provider, model, expected_revision)?;
-    let response = request(
+    let envelope = run_coding_envelope(
+        request.account,
+        request.provider,
+        request.model,
+        request.expected_revision,
+    )?;
+    let response = http::request(
         farmd,
         "POST",
         "/api/v1/commands",
@@ -151,52 +286,60 @@ fn submit(
             response.status, response.body
         ));
     }
-    eprintln!("bullet: session_cookie={cookie}");
-    eprintln!("bullet: csrf={csrf}");
-    Ok(response.body.to_string())
+    Ok(response.body)
 }
 
-fn status(farmd: &str, session_cookie: &str, id: &str) -> Result<String, String> {
+fn status(farmd: &str, session_cookie: &str, id: &str) -> Result<Value, String> {
     let path = format!("/api/v1/commands/{id}");
-    let response = request(farmd, "GET", &path, &[("Cookie", session_cookie)], None)?;
+    let response = http::request(farmd, "GET", &path, &[("Cookie", session_cookie)], None)?;
     if response.status != 200 {
         return Err(format!(
             "farmd command status returned HTTP {}: {}",
             response.status, response.body
         ));
     }
-    Ok(response.body.to_string())
+    Ok(response.body)
 }
 
-fn exchange_bootstrap(farmd: &str, origin: &str, token: &str) -> Result<(String, String), String> {
-    let response = request(
-        farmd,
-        "POST",
-        "/api/v1/auth/bootstrap",
-        &[("Origin", origin)],
-        Some(&json!({ "bootstrap_token": token })),
-    )?;
+fn read_projection(farmd: &str, cookie: &str, path: &str) -> Result<Value, String> {
+    let response = http::request(farmd, "GET", path, &[("Cookie", cookie)], None)?;
     if response.status != 200 {
         return Err(format!(
-            "farmd bootstrap returned HTTP {}: {}",
+            "{path} HTTP {}: {}",
             response.status, response.body
         ));
     }
-    let csrf = response.body["csrf_token"]
-        .as_str()
-        .ok_or("farmd bootstrap omitted csrf_token")?
-        .to_string();
-    let cookie = response
-        .set_cookie
-        .ok_or("farmd bootstrap omitted Set-Cookie")?
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .to_string();
-    if cookie.is_empty() {
-        return Err("farmd bootstrap cookie pair was empty".into());
+    Ok(response.body)
+}
+
+fn load_board(
+    farmd: &str,
+    session_cookie: &str,
+    command_id: Option<&str>,
+) -> Result<render::Board, String> {
+    let health = match http::request(farmd, "GET", "/health", &[], None) {
+        Ok(response) if response.status == 200 => Ok(response.body),
+        Ok(response) => Err(format!(
+            "/health HTTP {}: {}",
+            response.status, response.body
+        )),
+        Err(error) => Err(error),
+    };
+    Ok(render::Board {
+        health,
+        fleet: read_projection(farmd, session_cookie, "/api/v1/fleet"),
+        sessions: read_projection(farmd, session_cookie, "/api/v1/sessions"),
+        outbox: read_projection(farmd, session_cookie, "/api/v1/outbox"),
+        command: command_id.map(|id| status(farmd, session_cookie, id)),
+        harness: harness::from_env(),
+    })
+}
+
+fn admit_interval(interval_ms: u64) -> Result<u64, String> {
+    if interval_ms == 0 {
+        return Err("WATCH_INTERVAL_INVALID: interval must be >= 1ms".into());
     }
-    Ok((cookie, csrf))
+    Ok(interval_ms)
 }
 
 fn run_coding_envelope(
@@ -235,102 +378,6 @@ fn random_hex(bytes: usize) -> Result<String, String> {
     Ok(buffer.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-struct HttpResponse {
-    status: u16,
-    body: Value,
-    set_cookie: Option<String>,
-}
-
-fn request(
-    farmd: &str,
-    method: &str,
-    path: &str,
-    headers: &[(&str, &str)],
-    body: Option<&Value>,
-) -> Result<HttpResponse, String> {
-    let (host, port) = parse_loopback(farmd)?;
-    let payload = body.map(Value::to_string).unwrap_or_default();
-    let mut message = format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\n");
-    if !payload.is_empty() {
-        message.push_str("Content-Type: application/json\r\n");
-    }
-    for (name, value) in headers {
-        message.push_str(&format!("{name}: {value}\r\n"));
-    }
-    message.push_str(&format!(
-        "Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-        payload.len()
-    ));
-    let mut stream = TcpStream::connect((host.as_str(), port))
-        .map_err(|error| format!("connect {farmd}: {error}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .and_then(|_| stream.set_write_timeout(Some(Duration::from_secs(10))))
-        .map_err(|error| format!("farmd socket timeout: {error}"))?;
-    stream
-        .write_all(message.as_bytes())
-        .map_err(|error| format!("write farmd: {error}"))?;
-    let mut bytes = Vec::new();
-    stream
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("read farmd: {error}"))?;
-    parse_http(&bytes)
-}
-
-fn parse_loopback(farmd: &str) -> Result<(String, u16), String> {
-    let rest = farmd
-        .strip_prefix("http://")
-        .ok_or("farmd must be an http:// loopback URL")?;
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .ok_or("farmd URL is missing a host")?;
-    let addr: std::net::SocketAddr = authority
-        .parse()
-        .map_err(|_| "farmd must contain an explicit loopback address and port")?;
-    if !addr.ip().is_loopback() {
-        return Err("farmd must be loopback".into());
-    }
-    Ok((addr.ip().to_string(), addr.port()))
-}
-
-fn parse_http(bytes: &[u8]) -> Result<HttpResponse, String> {
-    let text = String::from_utf8_lossy(bytes);
-    let (head, body) = text
-        .split_once("\r\n\r\n")
-        .ok_or("farmd response omitted the header terminator")?;
-    let status = head
-        .split_whitespace()
-        .nth(1)
-        .and_then(|value| value.parse().ok())
-        .ok_or("farmd response omitted an HTTP status")?;
-    let set_cookie = head.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case("set-cookie")
-            .then(|| value.trim().to_string())
-    });
-    let body = decode_body(body);
-    Ok(HttpResponse {
-        status,
-        body,
-        set_cookie,
-    })
-}
-
-fn decode_body(body: &str) -> Value {
-    if body.trim().is_empty() {
-        return Value::Null;
-    }
-    if let Ok(value) = serde_json::from_str(body) {
-        return value;
-    }
-    let unchunked: String = body
-        .lines()
-        .filter(|line| !line.trim().is_empty() && u64::from_str_radix(line.trim(), 16).is_err())
-        .collect();
-    serde_json::from_str(&unchunked).unwrap_or(Value::Null)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,20 +397,56 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("rsv_"));
+        let empty = render::Board {
+            health: Ok(json!({"status": "ok"})),
+            fleet: Ok(json!({
+                "data": {"authority_time": "t0", "leases": [], "ready_queue": []},
+                "as_of_sequence": 0
+            })),
+            sessions: Ok(json!({"data": {"attempts": [], "state_counts": []}})),
+            outbox: Ok(json!({"data": {"items": []}})),
+            command: None,
+            harness: harness::inspect(&[]),
+        };
+        let text = render::format_board(&empty, false);
+        assert!(text.contains("HOLD"));
+        assert!(text.contains("LIVE"));
+        assert!(text.contains("live 0"));
+        assert!(text.contains("STOP_UNIMPLEMENTED"));
+        assert!(text.contains("empty fleet is zero lease rows"));
+        assert!(!text.contains('\u{1b}'));
+        assert!(admit_interval(0)
+            .unwrap_err()
+            .contains("WATCH_INTERVAL_INVALID"));
+        assert_eq!(admit_interval(1000).unwrap(), 1000);
     }
 
     #[test]
     fn simulator_name_is_refused_before_http() {
         let error = run_coding_envelope("acct", "sim", "none", 1).unwrap_err();
         assert!(error.contains("COMMAND_CODING_SIM_REFUSED"));
+        let report = harness::inspect(&[]);
+        assert_eq!(report.outcome, "UNBOUND");
+        assert!(report
+            .rows
+            .iter()
+            .any(|(name, state)| name == "BULLET_HARNESS_HOME" && *state == "ABSENT"));
+        let bound = harness::inspect(
+            &harness::REQUIRED
+                .iter()
+                .map(|name| (*name, Some("set".into())))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(bound.outcome, "BOUND");
+        assert!(!render::color_wanted(true));
     }
 
     #[test]
     fn loopback_parser_refuses_public_hosts() {
-        assert!(parse_loopback("http://8.8.8.8:7420").is_err());
-        assert!(parse_loopback("https://127.0.0.1:7420").is_err());
+        assert!(http::parse_loopback("http://8.8.8.8:7420").is_err());
+        assert!(http::parse_loopback("https://127.0.0.1:7420").is_err());
         assert_eq!(
-            parse_loopback("http://127.0.0.1:7420").unwrap(),
+            http::parse_loopback("http://127.0.0.1:7420").unwrap(),
             ("127.0.0.1".into(), 7420)
         );
     }
