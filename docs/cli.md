@@ -72,6 +72,13 @@ fsynced before acknowledgement. Do not obtain bootstrap credentials from logs or
 pass them as command arguments. Existing, corrupt, linked or displaced files
 produce explicit refusal instead of being overwritten.
 
+Credential reads use a short shared lock, allowing simultaneous CLI and TUI
+readers. `auth status` releases this lock before waiting for HTTP. Login,
+revocation, forgetting credentials and request-journal writes retain exclusive
+custody; an overlapping client receives `AUTH_BUSY` while a writer owns the
+store. A TUI keeps its loaded session until it detaches; it does not silently
+adopt credentials from a subsequent login.
+
 Submission prints a nonsecret journaled command ID before sending. After response
 loss, run `bullet coding status <id>` with the same state directory, or retry the
 exact input and idempotency key, or use `bullet coding retry <id>`. Preserve the journal when the outcome is unknown.

@@ -105,9 +105,7 @@ pub(crate) fn run(command: AuthCommands) -> Result<(), String> {
         AuthCommands::Status {
             state_dir: directory,
         } => {
-            let store = CredentialStore::open(&state_dir(directory)?)?;
-            let credentials = store
-                .load()?
+            let credentials = CredentialStore::read_credentials(&state_dir(directory)?)?
                 .ok_or("AUTH_REQUIRED: run bullet auth login")?;
             let view = session::status(&credentials)?;
             println!(

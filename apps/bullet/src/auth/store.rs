@@ -123,6 +123,16 @@ impl CredentialStore {
     }
 
     pub(crate) fn open(path: &Path) -> Result<Self, String> {
+        Self::open_locked(path, FlockOperation::NonBlockingLockExclusive)
+    }
+
+    /// Read one private snapshot without excluding other readers. The shared
+    /// guard never escapes this function, so callers cannot write through it.
+    pub(crate) fn read_credentials(path: &Path) -> Result<Option<Credentials>, String> {
+        Self::open_locked(path, FlockOperation::NonBlockingLockShared)?.load()
+    }
+
+    fn open_locked(path: &Path, operation: FlockOperation) -> Result<Self, String> {
         let directory = private_directory(path)?;
         private_metadata(&directory, true)?;
         let lock = openat(
@@ -133,7 +143,7 @@ impl CredentialStore {
         )
         .map_err(|_| "AUTH_LOCK_UNSAFE")?;
         private_metadata(&lock, false)?;
-        flock(&lock, FlockOperation::NonBlockingLockExclusive)
+        flock(&lock, operation)
             .map_err(|_| "AUTH_BUSY: another client owns the credential store")?;
         Ok(Self {
             directory,
@@ -143,6 +153,7 @@ impl CredentialStore {
     }
 
     pub(crate) fn load(&self) -> Result<Option<Credentials>, String> {
+        self.require_current_path()?;
         let descriptor = match openat(
             &self.directory,
             "session.json",
@@ -165,6 +176,7 @@ impl CredentialStore {
         let credentials: Credentials =
             serde_json::from_slice(&bytes).map_err(|_| "AUTH_STORE_INVALID")?;
         credentials.validate()?;
+        self.require_current_path()?;
         Ok(Some(credentials))
     }
 
@@ -319,6 +331,63 @@ mod tests {
         );
         reopened.forget().unwrap();
         assert!(reopened.load().unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_credential_readers_share_custody_and_exclude_writers() {
+        let temp = private_temp();
+        let dir = temp.path().join("operator");
+        CredentialStore::open(&dir)
+            .unwrap()
+            .save(&credentials())
+            .unwrap();
+        let ready = std::sync::Barrier::new(7);
+        let release = std::sync::Barrier::new(7);
+        std::thread::scope(|scope| {
+            for _ in 0..6 {
+                let (dir, ready, release) = (&dir, &ready, &release);
+                scope.spawn(move || {
+                    let guard =
+                        CredentialStore::open_locked(dir, FlockOperation::NonBlockingLockShared);
+                    ready.wait();
+                    release.wait();
+                    let guard = guard.unwrap();
+                    assert_eq!(guard.load().unwrap().unwrap().cookie, credentials().cookie);
+                });
+            }
+            ready.wait();
+            let snapshot = CredentialStore::read_credentials(&dir);
+            let writer = CredentialStore::open(&dir);
+            release.wait();
+            assert_eq!(snapshot.unwrap().unwrap().cookie, credentials().cookie);
+            assert!(writer.err().unwrap().starts_with("AUTH_BUSY"));
+        });
+        // A returned snapshot owns no lock; writes can proceed immediately.
+        let snapshot = CredentialStore::read_credentials(&dir).unwrap().unwrap();
+        CredentialStore::open(&dir).unwrap().forget().unwrap();
+        assert_eq!(snapshot.cookie, credentials().cookie);
+        assert!(CredentialStore::read_credentials(&dir).unwrap().is_none());
+    }
+
+    #[test]
+    fn credential_snapshot_refuses_active_writer_and_displaced_directory() {
+        let temp = private_temp();
+        let dir = temp.path().join("operator");
+        let writer = CredentialStore::open(&dir).unwrap();
+        writer.save(&credentials()).unwrap();
+        assert!(CredentialStore::read_credentials(&dir)
+            .err()
+            .unwrap()
+            .starts_with("AUTH_BUSY"));
+        drop(writer);
+        let reader =
+            CredentialStore::open_locked(&dir, FlockOperation::NonBlockingLockShared).unwrap();
+        std::fs::rename(&dir, temp.path().join("displaced")).unwrap();
+        assert!(reader
+            .load()
+            .err()
+            .unwrap()
+            .starts_with("AUTH_STORE_PATH_CHANGED"));
     }
 
     #[test]
