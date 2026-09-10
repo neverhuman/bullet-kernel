@@ -5,6 +5,78 @@ use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
 #[test]
+fn auth_status_releases_credential_custody_before_waiting_for_http() {
+    use crate::auth::store::CredentialStore;
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    CredentialStore::open(directory.path())
+        .unwrap()
+        .save(&Credentials {
+            schema_version: 1,
+            farmd: endpoint.clone(),
+            origin: endpoint,
+            cookie: format!("bullet_session=ses_{}", "a".repeat(64)),
+            csrf: format!("csrf_{}", "b".repeat(64)),
+        })
+        .unwrap();
+    let path = directory.path().to_path_buf();
+    let client = std::thread::spawn(move || {
+        crate::auth::run(crate::auth::AuthCommands::Status {
+            state_dir: Some(path),
+        })
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut socket = loop {
+        match listener.accept() {
+            Ok((socket, _)) => break socket,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
+            Err(e) => panic!("accept failed: {e}"),
+        }
+        assert!(Instant::now() < deadline, "status did not reach HTTP");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    socket
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    socket
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut request = Vec::new();
+    while !request.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        socket.read_exact(&mut byte).unwrap();
+        request.push(byte[0]);
+        assert!(request.len() < 16_384);
+    }
+    // Both results are captured while Status is blocked awaiting the server.
+    let snapshot = CredentialStore::read_credentials(directory.path());
+    let writer = CredentialStore::open(directory.path());
+    let writer_available = writer.is_ok();
+    drop(writer);
+    let body = json!({
+        "status":"AUTHENTICATED", "operator_id":format!("opr_{}", "1".repeat(64)),
+        "session_id":format!("sid_{}", "2".repeat(64)),
+        "issued_at":"2026-09-10T00:00:00Z", "expires_at":"2026-09-10T08:00:00Z"
+    })
+    .to_string();
+    write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+    assert!(client.join().unwrap().is_ok());
+    assert!(request.starts_with(b"GET /api/v1/auth/session HTTP/1.1\r\n"));
+    assert!(snapshot.unwrap().is_some(), "status excluded other readers");
+    assert!(
+        writer_available,
+        "status held credential custody across HTTP"
+    );
+}
+
+#[test]
 fn revocation_requires_the_observed_identity_and_exact_authenticated_empty_request() {
     for outcome in [
         "valid",

@@ -32,8 +32,7 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     use std::time::{Duration, Instant};
 
     let directory = crate::auth::state_dir(args.state_dir)?;
-    let credentials = crate::auth::store::CredentialStore::open(&directory)?
-        .load()?
+    let credentials = crate::auth::store::CredentialStore::read_credentials(&directory)?
         .ok_or("AUTH_REQUIRED: run bullet auth login")?;
     let mut state = model::Model::default();
     state.update(crate::client::operator_snapshot(&credentials));

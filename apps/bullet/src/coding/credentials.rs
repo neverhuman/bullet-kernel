@@ -26,8 +26,7 @@ impl ConnectionArgs {
     #[cfg(unix)]
     pub(super) fn load(self) -> Result<Session, String> {
         let path = crate::auth::state_dir(self.state_dir)?;
-        let session = crate::auth::store::CredentialStore::open(&path)?
-            .load()?
+        let session = crate::auth::store::CredentialStore::read_credentials(&path)?
             .ok_or("AUTH_REQUIRED: run bullet auth login")?;
         if self
             .farmd
