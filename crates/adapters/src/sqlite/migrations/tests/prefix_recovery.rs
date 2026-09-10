@@ -6,7 +6,9 @@ fn verify_schema_twenty_two_refusals() {
             conn.pragma_update(None, "journal_mode", "WAL").unwrap();
             conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
         }
-        let version = if mode.starts_with("25") {
+        let version = if mode.starts_with("26") {
+            26
+        } else if mode.starts_with("25") {
             25
         } else if mode.starts_with("24") {
             24
@@ -127,7 +129,7 @@ fn assert_typed_prefix_inspection(
         let schema = inspected.expect("authentic prefix produces a typed inspection");
         assert_eq!(
             schema.schema_state(),
-            super::SchemaState::UpgradeRequired { from: 22, to: 25 }
+            super::SchemaState::UpgradeRequired { from: 22, to: 26 }
         );
         assert!(super::valid_digest(schema.schema_digest()));
         assert_ne!(schema.schema_digest(), super::schema_contract_digest());
@@ -173,10 +175,13 @@ fn verify_schema_twenty_two_wal_refusal() {
         "24-hot",
         "25-wal",
         "25-hot",
+        "26-wal",
+        "26-hot",
         "22-super-hot",
         "23-super-hot",
         "24-super-hot",
         "25-super-hot",
+        "26-super-hot",
         "22-large-hot",
         "22-large-page-wal",
         "22-large-size-wal",
@@ -267,7 +272,7 @@ fn verify_crashed_schema(mode: &str) {
     }
     for _ in 0..2 {
         let opened = SqliteLedger::open(&path);
-        if mode.starts_with("25") && !mode.contains("super") {
+        if mode.starts_with("26") && !mode.contains("super") {
             drop(opened.unwrap_or_else(|error| panic!("current recovery failed: {mode}: {error}")));
             continue;
         }

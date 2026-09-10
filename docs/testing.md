@@ -13,11 +13,11 @@ that aggregator fail.
 
 | Partition | Selected | Meaning |
 | --- | ---: | --- |
-| standalone | 1195 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
+| standalone | 1215 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
 | egress | 3 | the exact host-dependent namespace/nftables/CONNECT-proxy identities; only the capability-admitted `egress` lane executes them |
 | contract | 34 | four offline provider protocol binaries plus `bullet-test-simulation` |
 | family | 9 | five `transaction_demo` identities plus `heartbeat_stale`, `kill_retry`, `loop_sim`, and `synthetic_e2e` |
-| total | 1241 | exact union of the four disjoint partitions above |
+| total | 1261 | exact union of the four disjoint partitions above |
 
 `ops/ci/inventory-test.sh` independently lists all four partitions, requires
 every set to be nonzero, checks pairwise disjointness and exact union,
@@ -30,7 +30,10 @@ The September 10 inventory includes durable operator-session and command-owner
 fixtures, response-loss/restart discovery, private bootstrap custody, generated
 client validation, duplicate decoded JSON-key refusal before durable admission,
 authenticated remote mission reads with malformed/absent subject refusals,
-and actual CLI/TUI child-process checks. These tests use
+immutable task/dependency/run acceptance with per-boundary rollback, typed constraint refusals,
+missing-run/orphan-dependency corruption, task-file and journal identity checks,
+and actual CLI/TUI child-process checks. The task CLI also runs against the real daemon
+through login, restart, exact retry and empty-cache discovery. These tests use
 disposable local identities and explicitly synthetic task data; they do not
 establish installed provider execution or release eligibility. Inventory
 enumeration alone is not a successful test execution.
@@ -157,7 +160,7 @@ provider conformance.
 
 | Lane | Scope |
 | --- | --- |
-| `fast` | exactly 1195 standalone nextest identities, all executed with zero skipped |
+| `fast` | exactly 1215 standalone nextest identities, all executed with zero skipped |
 | `lint` | rustfmt, all-target Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow policy, inventory/observation/nightly meta-tests |
 | `contract` | exactly 34 offline provider-contract and simulation tests |
 | `security` | current-tree gitleaks 8.21.2; full cargo-deny 0.19.8 advisories/bans/licenses/sources with independently proved RustSec freshness; zizmor 1.25.2 |

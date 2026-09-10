@@ -145,11 +145,16 @@ fn discovery_refuses_inconsistent_pages_instead_of_reporting_empty_success() {
 fn discovery_correlates_available_journal_before_returning_server_subjects() {
     let temp = private_temp();
     let session = session(temp.path());
+    let payload = super::super::task::payload(
+        super::super::task::fixture(),
+        "acct",
+        "codex",
+        "model",
+        None,
+    )
+    .unwrap();
     let input = super::super::SubmitRequest {
-        account: "acct",
-        provider: "codex",
-        model: "model",
-        expected_revision: 1,
+        payload: &payload,
         idempotency_key: Some("discovery-journal"),
     };
     let (_, request) = journal::prepare(&session, &input).unwrap();

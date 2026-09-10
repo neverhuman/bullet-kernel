@@ -4,6 +4,7 @@ mod authority;
 mod authority_scope;
 mod backup;
 mod candidate_preparation;
+mod coding_tasks;
 mod command_dispatch;
 mod commands;
 mod context;

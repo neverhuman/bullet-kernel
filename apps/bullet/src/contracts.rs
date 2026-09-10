@@ -19,6 +19,8 @@ const RUNTIME_SCHEMA_ROOTS: &[&str] = &[
     "BootstrapResponse",
     "CommandDiscoveryView",
     "CommandStatus",
+    "CodingRunView",
+    "RunCodingTaskPayload",
     "ContextLineageView",
     "EventEnvelope",
     "FleetView",

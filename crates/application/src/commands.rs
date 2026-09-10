@@ -1,6 +1,7 @@
 //! Durable, idempotent commands. Success is not printed before the postcondition.
 
-use crate::run_coding::{is_supported_dispatch_kind, RunCodingPayload, RUN_CODING_KIND};
+use crate::coding_tasks::CodingSubmission;
+use crate::run_coding::{is_supported_dispatch_kind, RUN_CODING_KIND};
 use bullet_domain::{CommandId, CommandPhase, Digest, DomainError};
 use serde::{Deserialize, Serialize};
 
@@ -159,7 +160,7 @@ impl CommandRequest {
         validate_text("command kind", &self.kind, MAX_COMMAND_KIND_BYTES, true)?;
         validate_json("command payload", &self.payload)?;
         if self.kind == RUN_CODING_KIND {
-            RunCodingPayload::parse(&self.payload)?;
+            CodingSubmission::parse(&self.payload)?;
         }
         Ok(())
     }

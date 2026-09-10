@@ -29,7 +29,7 @@ Evidence classes follow
 | `crates/mcp-mock`, `crates/test-simulation` | in-process mocks and harness tapes for the contract lane |
 | `apps/bullet-farmd` | loopback-only HTTP + SSE daemon; routes in the table below |
 | `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
-| `apps/bullet` | CLI: `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; command details are in [`docs/cli.md`](docs/cli.md) |
+| `apps/bullet` | CLI: authenticated `auth`, `coding`, remote `mission` and read-only `tui`; advanced `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; command details are in [`docs/cli.md`](docs/cli.md) |
 | `apps/bullet-runner` | attempt runner with explicit peer/recovery and Candidate inputs; missing lease admission refuses. `--provider sim` is the deterministic simulator; `--provider claude` drives a real contained turn through the dogfood admission and refuses by name when any input is missing, never falling back to the simulator; `codex` and `cursor` construct and then refuse at `start` |
 | `apps/bullet-verifier` | product verifier boundary; always returns the typed `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE` refusal without reading a job. The default-off `bullet-verifier-fixture` accepts unsigned fixture JSON only with `fixture-executor`; every fixture outcome is component-only, unsigned, non-independent, and transaction-gate-ineligible |
 | `apps/bullet-effects` | no-argument component demo over `LocalBareForge`; `serve <durable-queue-dir>` processes one UNKNOWN job only to `QUARANTINED`, never fabricated forge success |
@@ -58,6 +58,7 @@ gates the generated client against the complete OpenAPI document.
 | GET | `/api/v1/commands` | yes | bounded discovery of the current operator’s commands |
 | POST | `/api/v1/commands` | yes | authenticated command submission records `PENDING` |
 | GET | `/api/v1/commands/{id}` | yes | command status |
+| GET | `/api/v1/commands/{id}/coding` | yes | owned coding task, run and queue blockers from one atomic snapshot |
 | POST | `/internal/v1/commands/{id}/reconcile` | no | worker-bearer reconciler, outside the public contract |
 | GET | `/api/v1/operator-snapshot` | yes | operator surfaces from one atomic ledger snapshot |
 | GET | `/api/v1/outbox` | yes | outbox snapshot |

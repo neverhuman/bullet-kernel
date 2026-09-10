@@ -136,7 +136,7 @@ pub(super) fn submit_command(
     let transaction = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(store)?;
-    let record = submit_command_in(&transaction, fail_after, request)?;
+    let record = submit_command_in(&transaction, fail_after, request, None)?;
     transaction.commit().map_err(store)?;
     Ok(record)
 }
@@ -145,6 +145,7 @@ pub(super) fn submit_command_in(
     transaction: &Transaction<'_>,
     fail_after: &mut Option<u8>,
     request: &CommandRequest,
+    operator: Option<&str>,
 ) -> Result<CommandRecord, LedgerError> {
     request.validate()?;
     let existed = get_command(transaction, &request.idempotency_key)?.is_some();
@@ -187,7 +188,7 @@ pub(super) fn submit_command_in(
     if existed {
         admission::verify_replay(transaction, request)?;
     } else {
-        admission::admit_run_coding(transaction, request)?;
+        admission::admit_run_coding(transaction, fail_after, request, operator)?;
     }
     fail_boundary(fail_after)?;
     Ok(record)

@@ -23,11 +23,16 @@ fn status_reconciles_the_saved_request_and_refuses_same_id_foreign_payloads() {
                 csrf: format!("csrf_{}", "b".repeat(64)),
             },
         };
+        let payload = super::super::task::payload(
+            super::super::task::fixture(),
+            "acct",
+            "codex",
+            "model",
+            None,
+        )
+        .unwrap();
         let input = SubmitRequest {
-            account: "acct",
-            provider: "codex",
-            model: "model",
-            expected_revision: 1,
+            payload: &payload,
             idempotency_key: Some("lost-response"),
         };
         let (_, request) = prepare(&session, &input).unwrap();
@@ -97,20 +102,34 @@ fn retries_after_client_restart_reuse_all_original_authority_bytes() {
             csrf: format!("csrf_{}", "b".repeat(64)),
         },
     };
-    let mut input = SubmitRequest {
-        account: "acct",
-        provider: "codex",
-        model: "model",
-        expected_revision: 1,
-        idempotency_key: Some("retry-key"),
+    let envelope = serde_json::json!({"idempotency_key":"retry-key","kind":"run_coding","payload":{
+        "account_id":"acct","provider":"codex","model":"model","expected_revision":1,
+        "launch_nonce":"ab".repeat(32),"quota_reservation":format!("rsv_{}","cd".repeat(32)),"quota_units":1,
+        "allocated_run":bullet_domain::RunnerId::from_seed("historical-cli").as_str()}});
+    let original = CommandRequest::new("retry-key", "run_coding", &envelope["payload"]).unwrap();
+    let store = crate::auth::store::CredentialStore::open(&session.directory).unwrap();
+    let record = Journal {
+        schema_version: 1,
+        farmd: session.farmd.clone(),
+        origin: session.origin.clone(),
+        envelope: envelope.clone(),
     };
-    let (first, request) = prepare(&session, &input).unwrap();
-    let (retry, _) = prepare(&session, &input).unwrap();
-    assert_eq!(first, retry);
-    input.model = "changed";
-    assert!(prepare(&session, &input)
-        .unwrap_err()
-        .contains("IDEMPOTENCY_CONFLICT"));
+    store
+        .record_command(&original.id(), &serde_json::to_value(record).unwrap())
+        .unwrap();
+    drop(store);
+    let request = reconciliation_request(&session, original.id().as_str())
+        .unwrap()
+        .unwrap();
+    let retry = reconciliation_request(&session, original.id().as_str())
+        .unwrap()
+        .unwrap();
+    assert_eq!(request, original);
+    assert_eq!(retry, original);
+    assert_eq!(
+        serde_json::from_str::<Value>(&request.payload).unwrap(),
+        envelope["payload"]
+    );
     let response = serde_json::json!({"id":request.id().as_str(),"kind":"run_coding","payload_digest":request.digest().to_hex()});
     assert!(correlate(&request, &response).is_ok());
     let mut wrong = response;
@@ -132,4 +151,84 @@ fn terminal_json_escapes_untrusted_controls_without_changing_the_value() {
     assert!(!safe.contains('\u{009b}'));
     assert!(!safe.contains('\u{202e}'));
     assert_eq!(serde_json::from_str::<Value>(&safe).unwrap(), value);
+}
+
+#[test]
+fn task_journal_retry_preserves_intent_and_refuses_changed_task_model_or_effort() {
+    let temp = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let session = Session {
+        directory: temp.path().join("state"),
+        credentials: crate::auth::store::Credentials {
+            schema_version: 1,
+            farmd: "http://127.0.0.1:7420".into(),
+            origin: "http://127.0.0.1:7420".into(),
+            cookie: format!("bullet_session=ses_{}", "a".repeat(64)),
+            csrf: format!("csrf_{}", "b".repeat(64)),
+        },
+    };
+    let original = super::super::task::payload(
+        super::super::task::fixture(),
+        "acct",
+        "codex",
+        "model",
+        Some("high"),
+    )
+    .unwrap();
+    let input = SubmitRequest {
+        payload: &original,
+        idempotency_key: Some("task-retry"),
+    };
+    let (first, request) = prepare(&session, &input).unwrap();
+    assert_eq!(prepare(&session, &input).unwrap().0, first);
+    for changed in [
+        {
+            let mut p = original.clone();
+            p.task.objective = "Different task".into();
+            p
+        },
+        {
+            let mut p = original.clone();
+            p.selection.model = "another-model".into();
+            p
+        },
+        {
+            let mut p = original.clone();
+            p.selection.effort = None;
+            p
+        },
+    ] {
+        assert!(prepare(
+            &session,
+            &SubmitRequest {
+                payload: &changed,
+                idempotency_key: Some("task-retry")
+            }
+        )
+        .unwrap_err()
+        .contains("IDEMPOTENCY_CONFLICT"));
+    }
+    assert_eq!(
+        reconciliation_request(&session, request.id().as_str())
+            .unwrap()
+            .unwrap(),
+        request
+    );
+    let file = session.directory.join(format!("{}.json", request.id()));
+    let bytes = std::fs::read_to_string(&file).unwrap();
+    for absent in [
+        "ses_",
+        "csrf_",
+        "launch_nonce",
+        "quota_reservation",
+        "allocated_run",
+    ] {
+        assert!(!bytes.contains(absent));
+    }
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
 }

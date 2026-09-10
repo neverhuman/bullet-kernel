@@ -140,6 +140,105 @@ impl ApiModel for CommandEnvelope {
     const SCHEMA_NAME: &'static str = "CommandEnvelope";
 }
 
+pub type CodingTaskRevisionId = String;
+
+pub type CodingRunId = String;
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodingTaskBudget {
+    pub r#max_invocations: u64,
+    pub r#max_cost_microusd: u64,
+}
+
+impl ApiModel for CodingTaskBudget {
+    const SCHEMA_NAME: &'static str = "CodingTaskBudget";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodingTaskContract {
+    pub r#title: String,
+    pub r#objective: String,
+    pub r#repository_id: RepositoryId,
+    pub r#base_commit: String,
+    pub r#scope_paths: Vec<String>,
+    pub r#acceptance_criteria: Vec<String>,
+    pub r#gate_ids: Vec<String>,
+    pub r#dependencies: Vec<CodingTaskRevisionId>,
+    pub r#budget: CodingTaskBudget,
+    pub r#deadline_unix_ms: u64,
+}
+
+impl ApiModel for CodingTaskContract {
+    const SCHEMA_NAME: &'static str = "CodingTaskContract";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodingRuntimeSelection {
+    pub r#account_id: String,
+    pub r#provider: String,
+    pub r#model: String,
+    pub r#effort: Option<String>,
+}
+
+impl ApiModel for CodingRuntimeSelection {
+    const SCHEMA_NAME: &'static str = "CodingRuntimeSelection";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunCodingTaskPayload {
+    pub r#schema_version: String,
+    pub r#task: CodingTaskContract,
+    pub r#selection: CodingRuntimeSelection,
+}
+
+impl ApiModel for RunCodingTaskPayload {
+    const SCHEMA_NAME: &'static str = "RunCodingTaskPayload";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodingQueueBlocker {
+    pub r#code: String,
+    pub r#subject: Option<String>,
+}
+
+impl ApiModel for CodingQueueBlocker {
+    const SCHEMA_NAME: &'static str = "CodingQueueBlocker";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodingRunView {
+    pub r#command: CommandStatus,
+    pub r#run_id: CodingRunId,
+    pub r#task_revision_id: CodingTaskRevisionId,
+    pub r#task: CodingTaskContract,
+    pub r#selection: CodingRuntimeSelection,
+    pub r#accepted_at: String,
+    pub r#blockers: Vec<CodingQueueBlocker>,
+}
+
+impl ApiModel for CodingRunView {
+    const SCHEMA_NAME: &'static str = "CodingRunView";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodingRunSnapshot {
+    pub r#data: CodingRunView,
+    pub r#as_of_sequence: u64,
+    pub r#observed_at: String,
+    pub r#source: String,
+}
+
+impl ApiModel for CodingRunSnapshot {
+    const SCHEMA_NAME: &'static str = "CodingRunSnapshot";
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandStatus {

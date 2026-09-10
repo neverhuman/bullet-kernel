@@ -24,6 +24,19 @@ fn request(key: &str) -> CommandRequest {
 fn coding(key: &str) -> CommandRequest {
     CommandRequest::new(key,"run_coding",&serde_json::json!({"account_id":"acct-fixture","provider":"claude","model":"fixture-model","expected_revision":1,"launch_nonce":"ab".repeat(32),"quota_reservation":format!("rsv_{}","cd".repeat(32)),"quota_units":3,"allocated_run":RunnerId::from_seed("fixture-run").to_string()})).unwrap()
 }
+// Reconstruct a pre-v2 owned record; the public ingress must not create one now.
+fn historical_coding(
+    ledger: &mut SqliteLedger,
+    operator: &str,
+    request: &CommandRequest,
+) -> OperatorCommandSnapshot {
+    let command = ledger.submit_command(request).unwrap();
+    ledger.conn.execute("INSERT INTO operator_command_ownership(command_id,operator_id,submitted_sequence,request_digest,admitted_at) SELECT ?1,?2,seq,?3,at FROM events WHERE kind='command_submitted' AND body=?1", params![command.id.as_str(),operator,command.payload_digest.to_hex()]).unwrap();
+    ledger
+        .get_operator_command(operator, &command.id)
+        .unwrap()
+        .unwrap()
+}
 fn counts(ledger: &SqliteLedger) -> Vec<i64> {
     [
         "commands",
@@ -54,7 +67,7 @@ fn owner_and_admission_effects_roll_back_together_at_every_boundary() {
         ledger.set_command_submission_failpoint(boundary);
         assert!(
             ledger
-                .submit_operator_command(&operator, &coding("rollback"))
+                .submit_operator_command(&operator, &request("rollback"))
                 .is_err(),
             "boundary {boundary}"
         );
@@ -67,9 +80,9 @@ fn owner_and_admission_effects_roll_back_together_at_every_boundary() {
             .commands
             .is_empty());
         reopened
-            .submit_operator_command(&operator, &coding("rollback"))
+            .submit_operator_command(&operator, &request("rollback"))
             .unwrap();
-        assert_eq!(counts(&reopened), [1, 1, 1, 1, 1, 1]);
+        assert_eq!(counts(&reopened), [1, 1, 1, 1, 0, 0]);
     }
 }
 #[test]
@@ -79,7 +92,7 @@ fn exact_coding_retry_after_terminal_phase_and_epoch_change_has_no_new_admission
     let mut ledger = SqliteLedger::open(&path).unwrap();
     let operator = register(&mut ledger);
     let request = coding("lost-response");
-    let admitted = ledger.submit_operator_command(&operator, &request).unwrap();
+    let admitted = historical_coding(&mut ledger, &operator, &request);
     let runner = RunnerId::from_seed("fixture-runner");
     let claim = ledger
         .claim_next_command_dispatch(&runner, 1, AT)

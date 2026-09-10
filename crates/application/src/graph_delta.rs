@@ -26,6 +26,10 @@ pub enum GraphDeltaCommandResult {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GraphDeltaFailure {
+    /// Typed task constraint refusal, preserved without parsing error text.
+    CodingTask {
+        reason: crate::coding_tasks::CodingTaskRefusal,
+    },
     /// Durable store or logical lookup failure.
     Store { message: String },
     /// Persisted pre-1.0 schema is not supported by this binary.
@@ -55,6 +59,7 @@ impl GraphDeltaFailure {
     #[must_use]
     pub fn from_error(error: &LedgerError) -> Self {
         match error {
+            LedgerError::CodingTask(reason) => Self::CodingTask { reason: *reason },
             LedgerError::Store(message) => Self::Store {
                 message: message.clone(),
             },
@@ -98,6 +103,7 @@ impl GraphDeltaFailure {
     #[must_use]
     pub fn into_error(self) -> LedgerError {
         match self {
+            Self::CodingTask { reason } => reason.into(),
             Self::Store { message } => LedgerError::Store(message),
             Self::UnsupportedSchema { detail } => LedgerError::UnsupportedSchema { detail },
             Self::InvalidId { message } => DomainError::InvalidId(message).into(),

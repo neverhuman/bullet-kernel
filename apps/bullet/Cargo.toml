@@ -43,4 +43,6 @@ tempfile.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
+bullet-farmd.workspace = true
 vt100 = "=0.16.2"

@@ -30,9 +30,10 @@ pub(super) fn oldest_pending(
 ) -> Result<Option<(u64, CommandId, String)>, CommandDispatchError> {
     let raw: Option<(i64, String, String)> = conn
         .query_row(
-            "SELECT seq, command_id, payload FROM outbox
-             WHERE kind = 'command_dispatch' AND phase = 'pending'
-             ORDER BY seq LIMIT 1",
+            "SELECT o.seq, o.command_id, o.payload FROM outbox o
+             WHERE o.kind = 'command_dispatch' AND o.phase = 'pending'
+               AND NOT EXISTS (SELECT 1 FROM coding_runs r WHERE r.command_id=o.command_id)
+             ORDER BY o.seq LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
@@ -56,6 +57,7 @@ pub(super) fn exact_request(
 ) -> Result<CommandRequest, CommandDispatchError> {
     let request = CommandRequest::from_json(&record.idempotency_key, &record.kind, &record.payload)
         .map_err(dispatch_store)?;
+    require_legacy_dispatch(&request)?;
     request.matches(record).map_err(dispatch_store)?;
     let encoded = serde_json::to_string(&request).map_err(dispatch_store)?;
     let rows = outbox::for_command(conn, &record.id).map_err(dispatch_ledger)?;
@@ -193,6 +195,7 @@ fn decode_claim(
         .ok_or_else(|| dispatch_store("claim command is absent"))?;
     let request = CommandRequest::from_json(&record.idempotency_key, &record.kind, &record.payload)
         .map_err(dispatch_store)?;
+    require_legacy_dispatch(&request)?;
     let claim = CommandDispatchClaim {
         schema_version: COMMAND_DISPATCH_CLAIM_SCHEMA.into(),
         claim_id: raw.0,
@@ -216,6 +219,18 @@ fn decode_claim(
     };
     claim.validate()?;
     Ok(claim)
+}
+
+fn require_legacy_dispatch(request: &CommandRequest) -> Result<(), CommandDispatchError> {
+    if bullet_application::coding_tasks::task_payload(request)
+        .map_err(dispatch_store)?
+        .is_some()
+    {
+        return Err(dispatch_store(
+            "task intent cannot carry legacy dispatch authority",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn fingerprint(conn: &Connection) -> Result<(u64, u64, u64), CommandDispatchError> {

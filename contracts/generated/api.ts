@@ -79,6 +79,63 @@ export type CommandEnvelope = {
   };
 };
 
+export type CodingTaskRevisionId = string;
+
+export type CodingRunId = string;
+
+export type CodingTaskBudget = {
+  max_invocations: number;
+  max_cost_microusd: number;
+};
+
+export type CodingTaskContract = {
+  title: string;
+  objective: string;
+  repository_id: RepositoryId;
+  base_commit: string;
+  scope_paths: string[];
+  acceptance_criteria: string[];
+  gate_ids: string[];
+  dependencies: CodingTaskRevisionId[];
+  budget: CodingTaskBudget;
+  deadline_unix_ms: number;
+};
+
+export type CodingRuntimeSelection = {
+  account_id: string;
+  provider: "claude" | "codex" | "cursor" | "antigravity";
+  model: string;
+  effort: string | null;
+};
+
+export type RunCodingTaskPayload = {
+  schema_version: string;
+  task: CodingTaskContract;
+  selection: CodingRuntimeSelection;
+};
+
+export type CodingQueueBlocker = {
+  code: string;
+  subject: string | null;
+};
+
+export type CodingRunView = {
+  command: CommandStatus;
+  run_id: CodingRunId;
+  task_revision_id: CodingTaskRevisionId;
+  task: CodingTaskContract;
+  selection: CodingRuntimeSelection;
+  accepted_at: string;
+  blockers: CodingQueueBlocker[];
+};
+
+export type CodingRunSnapshot = {
+  data: CodingRunView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: string;
+};
+
 export type CommandStatus = {
   id: CommandId;
   status: "PENDING" | "APPLIED" | "VERIFIED" | "FAILED" | "UNKNOWN";
@@ -709,6 +766,221 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
         "patch_digest"
       ],
       "type": "object"
+    },
+    "CodingQueueBlocker": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^CODING_[A-Z_]+$",
+          "type": "string"
+        },
+        "subject": {
+          "maxLength": 256,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "subject"
+      ],
+      "type": "object"
+    },
+    "CodingRunId": {
+      "pattern": "^crn_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "CodingRunView": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "blockers": {
+          "items": {
+            "$ref": "#/$defs/CodingQueueBlocker"
+          },
+          "maxItems": 80,
+          "type": "array"
+        },
+        "command": {
+          "$ref": "#/$defs/CommandStatus"
+        },
+        "run_id": {
+          "$ref": "#/$defs/CodingRunId"
+        },
+        "selection": {
+          "$ref": "#/$defs/CodingRuntimeSelection"
+        },
+        "task": {
+          "$ref": "#/$defs/CodingTaskContract"
+        },
+        "task_revision_id": {
+          "$ref": "#/$defs/CodingTaskRevisionId"
+        }
+      },
+      "required": [
+        "command",
+        "run_id",
+        "task_revision_id",
+        "task",
+        "selection",
+        "accepted_at",
+        "blockers"
+      ],
+      "type": "object"
+    },
+    "CodingRuntimeSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "effort": {
+          "maxLength": 32,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "claude",
+            "codex",
+            "cursor",
+            "antigravity"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "provider",
+        "model",
+        "effort"
+      ],
+      "type": "object"
+    },
+    "CodingTaskBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "max_cost_microusd": {
+          "maximum": 1000000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_invocations": {
+          "maximum": 16,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_invocations",
+        "max_cost_microusd"
+      ],
+      "type": "object"
+    },
+    "CodingTaskContract": {
+      "additionalProperties": false,
+      "description": "Immutable requested work. String bounds are additionally enforced in UTF-8 bytes by admission. Paths must be normalized repository-relative paths; dependencies name previously accepted revisions owned by this operator. Repository identity is a selector, not a grant to access it.\n",
+      "properties": {
+        "acceptance_criteria": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "base_commit": {
+          "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$",
+          "type": "string"
+        },
+        "budget": {
+          "$ref": "#/$defs/CodingTaskBudget"
+        },
+        "deadline_unix_ms": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "dependencies": {
+          "items": {
+            "$ref": "#/$defs/CodingTaskRevisionId"
+          },
+          "maxItems": 64,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "gate_ids": {
+          "items": {
+            "pattern": "^gat_[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "objective": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "type": "string"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "scope_paths": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "title": {
+          "maxLength": 240,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "objective",
+        "repository_id",
+        "base_commit",
+        "scope_paths",
+        "acceptance_criteria",
+        "gate_ids",
+        "dependencies",
+        "budget",
+        "deadline_unix_ms"
+      ],
+      "type": "object"
+    },
+    "CodingTaskRevisionId": {
+      "pattern": "^ctr_[0-9a-f]{64}$",
+      "type": "string"
     },
     "CommandDiscoveryView": {
       "additionalProperties": false,
@@ -1776,6 +2048,27 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       "pattern": "^rep_[0-9a-f]{64}$",
       "type": "string"
     },
+    "RunCodingTaskPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "bullet.run-coding.v2",
+          "type": "string"
+        },
+        "selection": {
+          "$ref": "#/$defs/CodingRuntimeSelection"
+        },
+        "task": {
+          "$ref": "#/$defs/CodingTaskContract"
+        }
+      },
+      "required": [
+        "schema_version",
+        "task",
+        "selection"
+      ],
+      "type": "object"
+    },
     "RunnerId": {
       "pattern": "^run_[0-9a-f]{64}$",
       "type": "string"
@@ -1907,6 +2200,8 @@ export const PUBLIC_API_RUNTIME_REFS = {
   BootstrapResponse: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/BootstrapResponse",
   CommandDiscoveryView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandDiscoveryView",
   CommandStatus: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandStatus",
+  CodingRunView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CodingRunView",
+  RunCodingTaskPayload: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/RunCodingTaskPayload",
   ContextLineageView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ContextLineageView",
   EventEnvelope: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/EventEnvelope",
   FleetView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/FleetView",

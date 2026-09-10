@@ -213,9 +213,9 @@ fn verify_applied_migrations(conn: &Connection) -> Result<SchemaState, LedgerErr
         .map_err(store)?;
     let schema = match rows.len() {
         count if count == MIGRATIONS.len() => SchemaState::Current,
-        22..=24 if MIGRATIONS.len() == 25 => SchemaState::UpgradeRequired {
+        22..=25 if MIGRATIONS.len() == 26 => SchemaState::UpgradeRequired {
             from: i64::try_from(rows.len()).map_err(store)?,
-            to: 25,
+            to: 26,
         },
         _ => {
             return Err(unsupported(

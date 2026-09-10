@@ -36,7 +36,7 @@ fn valid_owner(operator: &str) -> Result<()> {
     }
     Ok(())
 }
-fn require_operator(conn: &Connection, operator: &str) -> Result<()> {
+pub(super) fn require_operator(conn: &Connection, operator: &str) -> Result<()> {
     valid_owner(operator)?;
     let admitted: bool = conn
         .query_row(
@@ -60,7 +60,10 @@ fn require_operator(conn: &Connection, operator: &str) -> Result<()> {
     }
     Ok(())
 }
-fn owner(conn: &Connection, id: &CommandId) -> std::result::Result<Option<String>, LedgerError> {
+pub(super) fn owner(
+    conn: &Connection,
+    id: &CommandId,
+) -> std::result::Result<Option<String>, LedgerError> {
     conn.query_row(
         "SELECT operator_id FROM operator_command_ownership WHERE command_id=?1",
         [id.as_str()],
@@ -70,7 +73,7 @@ fn owner(conn: &Connection, id: &CommandId) -> std::result::Result<Option<String
     .map_err(store)
 }
 
-fn checked_record(
+pub(super) fn checked_record(
     conn: &Connection,
     id: &CommandId,
 ) -> std::result::Result<CommandRecord, LedgerError> {
@@ -130,8 +133,20 @@ impl OperatorCommandStore for SqliteLedger {
             return Err(Error::OwnershipConflict);
         }
         require_operator(&tx, operator)?;
-        let record =
-            commands::submit_command_in(&tx, &mut self.command_submission_fail_after, request)?;
+        if !exists
+            && request.kind == bullet_application::RUN_CODING_KIND
+            && bullet_application::coding_tasks::task_payload(request)
+                .map_err(LedgerError::from)?
+                .is_none()
+        {
+            return Err(Error::ObsoleteCodingShape);
+        }
+        let record = commands::submit_command_in(
+            &tx,
+            &mut self.command_submission_fail_after,
+            request,
+            Some(operator),
+        )?;
         if !exists {
             let inserted=tx.execute("INSERT INTO operator_command_ownership (command_id,operator_id,submitted_sequence,request_digest,admitted_at)
                 SELECT ?1,?2,seq,?3,at FROM events WHERE kind='command_submitted' AND body=?1 AND stream_id=?1 AND correlation_id=?1",
