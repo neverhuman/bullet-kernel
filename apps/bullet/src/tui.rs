@@ -140,7 +140,7 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         .map(crate::client::terminal_text)
         .unwrap_or_default()
         .replace('\'', "'\\''");
-    let path = crate::client::terminal_text(&directory.to_string_lossy()).replace('\'', "'\\''");
+    let path = reconnect_state_dir(&directory);
     println!(
         "DETACHED: durable work continues. Reconnect: bullet tui --state-dir '{path}'{}",
         if subject.is_empty() {
@@ -150,6 +150,18 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         }
     );
     Ok(())
+}
+
+#[cfg(unix)]
+fn reconnect_state_dir(directory: &std::path::Path) -> String {
+    let raw = crate::client::terminal_text(&directory.to_string_lossy()).replace('\'', "'\\''");
+    let Ok(home) = std::env::var("HOME") else {
+        return raw;
+    };
+    let home = crate::client::terminal_text(&home);
+    raw.strip_prefix(&home)
+        .map(|rest| format!("$HOME{rest}"))
+        .unwrap_or(raw)
 }
 
 #[cfg(unix)]
