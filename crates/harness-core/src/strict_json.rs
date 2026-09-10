@@ -9,6 +9,19 @@ use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 use std::fmt;
 
+/// A JSON value whose deserializer rejects duplicate decoded keys at every depth.
+/// Use with a framework's JSON extractor to retain its content-type and size checks.
+pub struct StrictJson(pub Value);
+
+impl<'de> serde::Deserialize<'de> for StrictJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        StrictValueSeed.deserialize(deserializer).map(Self)
+    }
+}
+
 /// Decode exactly one JSON value while rejecting duplicate object keys at any depth.
 ///
 /// # Errors
