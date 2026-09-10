@@ -10,6 +10,7 @@ use bullet_application::operator_commands::{
     OperatorCommandError, OperatorCommandSnapshot, OperatorCommandStore,
 };
 use bullet_application::{CommandRecord, CommandRequest};
+use bullet_harness_core::strict_json::StrictJson;
 
 pub(crate) mod discovery;
 use bullet_domain::{CommandId, CommandPhase};
@@ -36,14 +37,16 @@ pub(crate) struct CommandStatus {
 pub(crate) async fn submit(
     State(state): State<SharedState>,
     headers: HeaderMap,
-    body: Result<Json<CommandEnvelope>, JsonRejection>,
+    body: Result<Json<StrictJson>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let operator = {
         let auth = state.auth.lock().await;
         auth.authorize_mutation(&headers)?;
         auth.authorize_session(&headers)?.operator_id
     };
-    let body = body.map_err(|_| ApiError::invalid_json())?.0;
+    let value = body.map_err(|_| ApiError::invalid_json())?.0 .0;
+    let body: CommandEnvelope =
+        serde_json::from_value(value).map_err(|_| ApiError::invalid_json())?;
     let request = CommandRequest::new(body.idempotency_key, body.kind, &body.payload)?;
     let snapshot = state
         .ledger
