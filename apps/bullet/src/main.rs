@@ -61,7 +61,7 @@ enum Commands {
         #[command(subcommand)]
         command: authority::AuthorityCommands,
     },
-    /// Materialize one plan revision into the local ledger and read it back.
+    /// Browse authenticated missions; explicit local component materialization is also available.
     Mission {
         #[command(subcommand)]
         command: mission::MissionCommands,
@@ -285,7 +285,7 @@ fn main() -> ExitCode {
         other => match run(other) {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => {
-                eprintln!("bullet: {message}");
+                eprintln!("bullet: {}", client::terminal_text(&message));
                 ExitCode::FAILURE
             }
         },

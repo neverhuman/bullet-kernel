@@ -3,11 +3,11 @@
 Status: current source components; not an installed or release-qualified operator workflow
 Owner: Bullet Farm maintainers
 Last reviewed: 2026-09-10
-Source of truth: `apps/bullet/src/{main,auth,client,coding,tui,transaction,authority,provider,maintenance,contracts}.rs`,
+Source of truth: `apps/bullet/src/{main,auth,client,coding,mission,tui,transaction,authority,provider,maintenance,contracts}.rs`,
 their supporting modules, `apps/bullet/src/authority/mint.rs`, and the process-bin sources below.
-<!-- bullet-doc-review:v1 subject=b9d39619dcbc9f19ef2017eff57a55d19b1bfea5 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
+<!-- bullet-doc-review:v1 subject=b7642078ea9ff3a823483a4386ac1a217c35b5d4 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
 
-`auth`, `coding` and `tui` consume the loopback daemon. The local ledger helpers
+`auth`, `coding`, remote `mission` reads and `tui` consume the loopback daemon. The local ledger helpers
 and guarded provider qualification paths remain separate. The operator controls
 below have component proofs; they do not establish installed provider execution,
 independent verification, integration or release acceptance. Operating HOLD
@@ -37,7 +37,8 @@ continues until its actual predecessor admission and operator checkpoint.
 | `authority keygen` | create the operator launch-grant signing key; see below |
 | `authority mint-launch-grant` | mint one signed launch grant from the durable active lease; see below |
 | `provider live-conformance` | run the guarded 13-step live path for one provider; see below |
-| `mission materialize` / `mission status` | materialize one plan revision into the local ledger (same seed + input replays the same ids; same seed + different input refuses) / print the stored graph for one mission |
+| `mission list` / `mission status --mission <id>` | read the mission list or one stored graph from an authenticated atomic operator snapshot; `--json` retains its sequence, time and source |
+| `mission materialize` / `mission status --data-dir <directory> --mission <id>` | explicit local component helpers: materialize a plan revision (same seed + input replays the same ids; changed input refuses) / print the local stored graph |
 | `run show` / `run print-preimages` | verify and render one run receipt (recomputes the body digest; follows the embedded selection-receipt chain link) / emit BLAKE3 preimages for paths at an exact base commit; see below |
 | `dogfood read-only` | one contained read-only dogfood compose under ADR 0015; not a release profile, not live-conformance; see below |
 | `auth login` | exchange one-time bootstrap using hidden input, or `--stdin`; save private credentials for the selected loopback `--farmd` and exact allowed `--origin` |
@@ -63,7 +64,7 @@ allowed Origin. HTTP destinations must be explicit numeric loopback addresses.
 
 The default private directory is `$XDG_STATE_HOME/bullet/operator`, falling back
 to `$HOME/.local/state/bullet/operator`. `--state-dir` selects another absolute
-private directory for auth, coding and TUI commands. Its owner-only credentials
+private directory for auth, coding, remote mission and TUI commands. Its owner-only credentials
 are serialized with a file lock, validated through directory descriptors and
 fsynced before acknowledgement. Do not obtain bootstrap credentials from logs or
 pass them as command arguments. Existing, corrupt, linked or displaced files
@@ -83,6 +84,14 @@ different input or endpoint for an existing key is a conflict. Human output
 separates the server phase from independently unchecked receipt verification;
 terminal control sequences in untrusted data are escaped. Explicit JSON output
 preserves its value while escaping unsafe terminal characters.
+
+`bullet mission list` and `bullet mission status --mission <id>` use the saved
+authenticated destination and one validated atomic snapshot per invocation.
+`--state-dir` selects the credential store; optional `--farmd` must exactly match
+its saved destination. Missing missions and malformed responses fail explicitly.
+These reads do not open a local ledger. For legacy component inspection, supply
+`mission status --data-dir <directory> --mission <id>`; local mode rejects
+`--state-dir`, `--farmd` and `--json`. Materialization remains a local helper.
 
 The TUI uses Ctrl+K for navigation, Tab for panes, arrows or j/k for selection,
 Enter for details, Escape for back, `?` for help, and `r` for refresh. Ctrl+C

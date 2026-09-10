@@ -1,8 +1,8 @@
-//! `bullet mission`: materialize one plan revision into the local ledger and
-//! read a mission graph back. Both verbs admit `--data-dir` through the same
-//! private-directory path as `farm init` and open the ledger only through the
-//! SQLite adapter. Every refusal carries a stable reason code before any
-//! detail text; success prints exactly one canonical JSON line.
+//! Authenticated mission views and explicit local component materialization.
+//! Remote reads share the console's atomic generated-model consumer. The
+//! historical --data-dir path remains an explicit local maintenance operation.
+
+mod remote;
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::{
@@ -31,7 +31,9 @@ pub(super) enum MissionCommands {
     /// Materialize one plan revision. Replaying the same seed and input prints
     /// the same ids; the same seed with a different input is refused.
     Materialize(MaterializeArgs),
-    /// Print the stored graph for one materialized mission.
+    /// Discover missions in the authenticated daemon snapshot.
+    List(remote::RemoteArgs),
+    /// Read one mission from the daemon, or explicitly from a local data directory.
     Status(StatusArgs),
 }
 
@@ -58,12 +60,14 @@ pub(super) struct MaterializeArgs {
 /// Inputs for `mission status`.
 #[derive(Args)]
 pub(super) struct StatusArgs {
-    /// Absolute, caller-owned 0700 Kernel data directory.
-    #[arg(long)]
-    data_dir: PathBuf,
-    /// Mission id printed by `mission materialize`.
+    /// Explicit local component ledger; conflicts with remote connection flags.
+    #[arg(long, conflicts_with_all = ["state_dir", "farmd", "json"])]
+    data_dir: Option<PathBuf>,
+    /// Exact mission identity to read.
     #[arg(long)]
     mission: String,
+    #[command(flatten)]
+    remote: remote::RemoteArgs,
 }
 
 /// One JSON line naming every id the materialization produced.
@@ -86,7 +90,11 @@ struct PackageReceipt<'a> {
 pub(super) fn run(command: MissionCommands) -> Result<(), String> {
     match command {
         MissionCommands::Materialize(args) => materialize(&args),
-        MissionCommands::Status(args) => status(&args),
+        MissionCommands::List(args) => remote::list(&args),
+        MissionCommands::Status(args) => match args.data_dir.as_deref() {
+            Some(directory) => local_status(directory, &args.mission),
+            None => remote::status(&args.remote, &args.mission),
+        },
     }
 }
 
@@ -114,17 +122,17 @@ fn materialize(args: &MaterializeArgs) -> Result<(), String> {
     print_line(&receipt)
 }
 
-fn status(args: &StatusArgs) -> Result<(), String> {
-    let mission_id = MissionId::parse(&args.mission)
-        .map_err(|error| format!("{}: {error}", error.reason_code()))?;
-    require_absolute(&args.data_dir)?;
-    if !args.data_dir.join(LEDGER_FILE).is_file() {
+fn local_status(data_dir: &Path, mission: &str) -> Result<(), String> {
+    let mission_id =
+        MissionId::parse(mission).map_err(|error| format!("{}: {error}", error.reason_code()))?;
+    require_absolute(data_dir)?;
+    if !data_dir.join(LEDGER_FILE).is_file() {
         return Err(format!(
             "{LEDGER_ABSENT}: no {LEDGER_FILE} under {}; run `mission materialize` first",
-            args.data_dir.display()
+            data_dir.display()
         ));
     }
-    let ledger = open_ledger(&args.data_dir)?;
+    let ledger = open_ledger(data_dir)?;
     let graph: StoredGraph = ledger
         .get_graph(&mission_id)
         .map_err(ledger_failure)?
@@ -132,7 +140,7 @@ fn status(args: &StatusArgs) -> Result<(), String> {
             format!(
                 "{NOT_FOUND}: mission {} is not materialized under {}",
                 mission_id.as_str(),
-                args.data_dir.display()
+                data_dir.display()
             )
         })?;
     print_line(&graph)
@@ -223,7 +231,7 @@ fn ledger_failure(error: LedgerError) -> String {
 fn print_line(value: &impl Serialize) -> Result<(), String> {
     let line = serde_json::to_string(value)
         .map_err(|error| format!("ENCODING_FAILURE: encode mission output: {error}"))?;
-    println!("{line}");
+    crate::coding::print_json(&line);
     Ok(())
 }
 
