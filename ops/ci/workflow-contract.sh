@@ -67,7 +67,7 @@ expected_context_digest() {
     header) printf '%s\n' 4c4f307636e38761db26d62f4dfa81ddd69c161d14c48a8e2fab25b741c729b0 ;;
     preflight) printf '%s\n' 724530aa098c182f00b6d2b491e88e4023231282d130d84896a862ffc0041f39 ;;
     fast) printf '%s\n' c8a742d1f2fa2d946928318c0d62807f2eaeb6b750435ad52c71bb5b34f8c67c ;;
-    lint) printf '%s\n' 99ce143bb3e619da0d968200a4a5316c1b72218792d9dce78b1f13796174f280 ;;
+    lint) printf '%s\n' bf383056f79c44ab88c9914f2ccfb530129710e20ca9626a5e952d33a5c0c207 ;;
     contract) printf '%s\n' 0364cba18f2252a4957320523d1f510f8768825f81b0962025ea53c376256d49 ;;
     security) printf '%s\n' 04cfdf6285d6c4cd8e5fc33386fc07ddd6356be28d8177129156380bfd890ede ;;
     docs) printf '%s\n' 855016434cd98c694bebeb38ef08a5a670497710aef707179ceb280fb994186e ;;
@@ -304,7 +304,7 @@ validate_required_workflow() {
       fast|contract) expected_steps=7 ;;
       security) expected_steps=8 ;;
       # actionlint has a release installer; b3sum uses its locked Cargo package.
-      lint) expected_steps=10 ;;
+      lint) expected_steps=11 ;;
     esac
     [[ "$(rg -c '^      - ' <<<"$block")" -eq "$expected_steps" ]] \
       || { refuse HOSTED_STEP_INVENTORY_DRIFT "$lane"; return 1; }
@@ -391,7 +391,7 @@ validate_required_workflow() {
   [[ "$actual" == "$expected" ]] \
     || { refuse HOSTED_ARCHIVE_LAYOUT_DRIFT "$actual"; return 1; }
   actual="$(sha256sum "$workflow" | awk '{ print $1 }')"
-  [[ "$actual" == 93fc9bcb7752889a7e37424e514288854b33519b6ec04721071ef79158e21bac ]] \
+  [[ "$actual" == 5ac1b2c114587970e152c0ea8f73a273fec4c2c1512bc2c82aa8acb32ebf48d8 ]] \
     || { refuse HOSTED_REQUIRED_CONTEXT_DRIFT "$actual"; return 1; }
 }
 
