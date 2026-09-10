@@ -13,11 +13,11 @@ const DIM: &str = "\x1b[38;2;157;176;201m";
 const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
 
-pub(super) fn color_wanted(force_plain: bool) -> bool {
+pub(crate) fn color_wanted(force_plain: bool) -> bool {
     !force_plain && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
 }
 
-fn paint(color: bool, code: &str, text: &str) -> String {
+pub(crate) fn paint(color: bool, code: &str, text: &str) -> String {
     let text = crate::client::terminal_text(text);
     if color {
         format!("{BOLD}{code}{text}{RESET}")
@@ -26,7 +26,7 @@ fn paint(color: bool, code: &str, text: &str) -> String {
     }
 }
 
-pub(super) fn status_tone(label: &str) -> &'static str {
+pub(crate) fn status_tone(label: &str) -> &'static str {
     match label {
         "ok" | "live" | "BOUND" | "PRESENT" => GREEN,
         "PENDING" | "APPLIED" | "expired" | "HOLD" | "UNBOUND" | "ABSENT" => GOLD,

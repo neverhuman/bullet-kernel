@@ -9,7 +9,7 @@ mod discovery;
 mod harness;
 pub(crate) mod http;
 mod journal;
-mod render;
+pub(crate) mod render;
 mod task;
 
 pub(crate) use args::CodingCommands;
