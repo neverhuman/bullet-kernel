@@ -152,7 +152,7 @@ fn emit(json_body: &str, card: Option<&str>, json_only: bool) {
     print_json(json_body);
 }
 
-fn print_json(body: &str) {
+pub(crate) fn print_json(body: &str) {
     if std::io::stdout().is_terminal() {
         println!("{}", terminal_json(body));
     } else {
