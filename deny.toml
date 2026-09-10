@@ -20,8 +20,8 @@
 # "unlicensed" escape hatch in cargo-deny 0.19.8 (that key was removed), so a
 # crate publishing no license expression also fails.
 #
-# Deliberately absent, and never relied on, although they appear as alternatives
-# in OR expressions here: CC0-1.0 and MIT-0 (blake3, constant_time_eq),
+# Deliberately absent from the general allow-list, although they appear as
+# alternatives in OR expressions here: CC0-1.0 and MIT-0 (blake3, constant_time_eq),
 # Unlicense (memchr), BSL-1.0 (ryu, ryu-js), BSD-1-Clause (fiat-crypto),
 # LGPL-2.1-or-later (r-efi). Each of those crates is accepted through its
 # permissive branch below, never through the copyleft, business-source, or
@@ -67,8 +67,14 @@ unused-allowed-license = "warn"
 # Inert today because no crate here sets `publish = false`; it keeps the policy
 # correct if one ever does.
 private = { ignore = true }
-# No per-crate exceptions and no clarifications: every crate in this lock
-# satisfies the list above from its own metadata.
+# The offline JSON Schema validator uses referencing -> fluent-uri ->
+# borrow-or-share 0.2.4. Its published LICENSE is MIT No Attribution (MIT-0),
+# matching https://spdx.org/licenses/MIT-0.html. Admit only this exact version;
+# other crates and later versions still need their own license review.
+[[licenses.exceptions]]
+name = "borrow-or-share"
+version = "=0.2.4"
+allow = ["MIT-0"]
 
 [advisories]
 # RustSec advisories are fetched into the workspace's own ignored target

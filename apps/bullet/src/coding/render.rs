@@ -218,28 +218,6 @@ fn error_line(label: &str, error: &str, color: bool) -> String {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn server_command_text_cannot_inject_terminal_sequences() {
-        let body = json!({"status":"PENDING", "kind":"bad\x1b]52;clipboard\x07", "id":"line\r\noverwrite"});
-        let card = format_command_card(&body, false);
-        assert!(!card.contains('\x1b'));
-        assert!(!card.contains('\x07'));
-        assert!(!card.contains('\r'));
-        assert!(card.contains("\\r\\n"));
-        assert!(!error_line("fleet", "server\x1b[2J", false).contains('\x1b'));
-        let verified = format_command_card(
-            &json!({"status":"VERIFIED","kind":"run_demo","id":"id"}),
-            false,
-        );
-        assert!(verified.contains("server phase VERIFIED"));
-        assert!(verified.contains("verification UNKNOWN (receipt unchecked)"));
-        assert!(!verified.contains("ADMITTED"));
-    }
-}
-
 pub(super) fn format_harness(report: &Report, color: bool) -> String {
     let mut lines = vec![format!(
         "harness  {}",
@@ -267,5 +245,27 @@ pub(super) fn screen_home(color: bool) -> &'static str {
         "\x1b[H\x1b[J"
     } else {
         ""
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn server_command_text_cannot_inject_terminal_sequences() {
+        let body = json!({"status":"PENDING", "kind":"bad\x1b]52;clipboard\x07", "id":"line\r\noverwrite"});
+        let card = format_command_card(&body, false);
+        assert!(!card.contains('\x1b'));
+        assert!(!card.contains('\x07'));
+        assert!(!card.contains('\r'));
+        assert!(card.contains("\\r\\n"));
+        assert!(!error_line("fleet", "server\x1b[2J", false).contains('\x1b'));
+        let verified = format_command_card(
+            &json!({"status":"VERIFIED","kind":"run_demo","id":"id"}),
+            false,
+        );
+        assert!(verified.contains("server phase VERIFIED"));
+        assert!(verified.contains("verification UNKNOWN (receipt unchecked)"));
+        assert!(!verified.contains("ADMITTED"));
     }
 }

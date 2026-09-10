@@ -2,6 +2,17 @@ use super::*;
 use std::io::Write;
 use std::net::TcpListener;
 
+fn read_request(socket: &mut std::net::TcpStream) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    while !bytes.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        socket.read_exact(&mut byte).unwrap();
+        bytes.push(byte[0]);
+        assert!(bytes.len() < 4096);
+    }
+    bytes
+}
+
 fn serve(response: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
@@ -10,8 +21,7 @@ fn serve(response: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
         socket
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
-        let mut bytes = [0; 4096];
-        socket.read(&mut bytes).unwrap();
+        read_request(&mut socket);
         let _ = socket.write_all(&response);
     });
     (address, handle)
@@ -104,13 +114,7 @@ fn query_pairs_are_encoded_without_changing_the_authority_or_path() {
         socket
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
-        let mut bytes = Vec::new();
-        while !bytes.ends_with(b"\r\n\r\n") {
-            let mut byte = [0];
-            socket.read_exact(&mut byte).unwrap();
-            bytes.push(byte[0]);
-            assert!(bytes.len() < 4096);
-        }
+        let bytes = read_request(&mut socket);
         assert!(String::from_utf8(bytes).unwrap().starts_with(
             "GET /api/v1/commands?after=23&limit=50&hostile=%26after%3D0%23%2F%2Fevil.invalid HTTP/1.1\r\n"
         ));
