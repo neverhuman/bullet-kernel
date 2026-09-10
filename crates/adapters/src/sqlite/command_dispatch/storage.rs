@@ -33,6 +33,7 @@ pub(super) fn oldest_pending(
             "SELECT o.seq, o.command_id, o.payload FROM outbox o
              WHERE o.kind = 'command_dispatch' AND o.phase = 'pending'
                AND NOT EXISTS (SELECT 1 FROM coding_runs r WHERE r.command_id=o.command_id)
+               AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.id=o.command_id AND c.kind='conversation_message')
              ORDER BY o.seq LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -222,6 +223,11 @@ fn decode_claim(
 }
 
 fn require_legacy_dispatch(request: &CommandRequest) -> Result<(), CommandDispatchError> {
+    if request.kind == bullet_application::conversations::CONVERSATION_MESSAGE_KIND {
+        return Err(dispatch_store(
+            "conversation messages cannot carry Runner dispatch authority",
+        ));
+    }
     if bullet_application::coding_tasks::task_payload(request)
         .map_err(dispatch_store)?
         .is_some()

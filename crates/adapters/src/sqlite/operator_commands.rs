@@ -82,12 +82,18 @@ pub(super) fn checked_record(
     let request = CommandRequest::from_json(&record.idempotency_key, &record.kind, &record.payload)
         .map_err(store)?;
     request.matches(&record).map_err(store)?;
-    commands::verify_coding_replay(conn, &request)?;
-    let dispatch = serde_json::to_string(&request).map_err(store)?;
-    let rows = outbox::for_command(conn, id)?;
     let audit = events::command_projection_events(conn, id)?;
-    let claim = command_dispatch::projection_claim(conn, id)?;
-    validate_projection(&record, &dispatch, claim.as_ref(), &rows, &audit)?;
+    if request.kind == bullet_application::conversations::CONVERSATION_MESSAGE_KIND {
+        let operator =
+            owner(conn, id)?.ok_or_else(|| store("conversation command has no owner"))?;
+        super::conversations::verify(conn, &operator, &request, &record)?;
+    } else {
+        commands::verify_coding_replay(conn, &request)?;
+        let dispatch = serde_json::to_string(&request).map_err(store)?;
+        let rows = outbox::for_command(conn, id)?;
+        let claim = command_dispatch::projection_claim(conn, id)?;
+        validate_projection(&record, &dispatch, claim.as_ref(), &rows, &audit)?;
+    }
     let binding: (i64,String,String)=conn.query_row("SELECT submitted_sequence,request_digest,admitted_at FROM operator_command_ownership WHERE command_id=?1", [id.as_str()], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(store)?;
     let sequence = u64::try_from(binding.0).map_err(store)?;
     if sequence == 0

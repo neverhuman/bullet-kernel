@@ -151,7 +151,7 @@
     },
     "ops/ci/nextest-groups-test.sh": {
       "command": "bash ops/ci/nextest-groups-test.sh",
-      "purpose": "prove the fast profile serializes exactly the 21 SQLite migration/schema-identity tests without widening timeouts or reducing coverage"
+      "purpose": "prove the fast profile serializes exactly the 26 SQLite migration/schema-identity tests without widening timeouts or reducing coverage"
     },
     "ops/ci/proof-custody-test.sh": {
       "command": "bash ops/ci/proof-custody-test.sh",

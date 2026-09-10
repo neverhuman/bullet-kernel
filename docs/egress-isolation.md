@@ -2,10 +2,10 @@
 
 Status: committed Linux boundary; `COMPONENT_PROOF` on a capable host
 Owner: Bullet Farm maintainers
-Last reviewed: 2026-09-08 against HEAD `7c2dfac8`
+Last reviewed: 2026-09-10 against source `a2825424`
 Source of truth: `crates/harness-egress/src/{lib,allowlist,decisions,error,namespace,probes,proxy,receipt,request,ruleset,sandbox,tools,tunnel}.rs`;
 consumer: `crates/harness-core/src/admission/signed.rs`
-<!-- bullet-doc-review:v1 subject=8538df6746bef347cb089cda6f65a0f62153fb42 max_distance=25 paths=crates/harness-egress/src/lib.rs,crates/harness-egress/src/sandbox.rs,crates/harness-core/src/admission/signed.rs -->
+<!-- bullet-doc-review:v1 subject=a282542425eb15fefd509c9d317527a2744ae45e max_distance=25 paths=crates/harness-egress/src/lib.rs,crates/harness-egress/src/sandbox.rs,crates/harness-core/src/admission/signed.rs -->
 
 `bullet-harness-egress` launches a provider CLI inside a fresh Linux user +
 network namespace whose only route out is a `slirp4netns` uplink to a

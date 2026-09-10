@@ -71,6 +71,21 @@ impl From<LedgerError> for ApiError {
             LedgerError::Store(detail) => Self::Internal(detail),
             LedgerError::UnsupportedSchema { detail } => Self::UnsupportedSchema(detail),
             LedgerError::Domain(err) => Self::from(err),
+            LedgerError::Conversation(error) => {
+                use bullet_application::conversations::ConversationRefusal;
+                let status = match error {
+                    ConversationRefusal::NotFound => StatusCode::NOT_FOUND,
+                    ConversationRefusal::OperatorIngressRequired => StatusCode::FORBIDDEN,
+                    ConversationRefusal::CursorConflict
+                    | ConversationRefusal::SequenceExhausted => StatusCode::CONFLICT,
+                };
+                Self::protocol(
+                    status,
+                    error.reason_code(),
+                    "The message could not be appended to this conversation.",
+                    error.repair(),
+                )
+            }
             LedgerError::CodingTask(error) => Self::protocol(
                 StatusCode::CONFLICT,
                 error.reason_code(),
@@ -99,6 +114,10 @@ fn title_for(code: &str) -> &'static str {
         "FENCE_REUSE" => "Fence invariant violated",
         "IDEMPOTENCY_CONFLICT" => "Idempotency conflict",
         "COMMAND_OWNERSHIP_CONFLICT" => "Command ownership conflict",
+        "CONVERSATION_NOT_FOUND" => "Conversation not found",
+        "CONVERSATION_CURSOR_CONFLICT" => "Conversation has new messages",
+        "CONVERSATION_SEQUENCE_EXHAUSTED" => "Conversation is full",
+        "CONVERSATION_OPERATOR_INGRESS_REQUIRED" => "Operator authentication required",
         "OPERATOR_COMMAND_REQUEST_INVALID" => "Invalid operator command query",
         "GRAPH_CONFLICT" => "Graph conflict",
         "INVALID_ID" => "Invalid identifier",

@@ -46,6 +46,9 @@ fn malformed_truncated_and_non_utf8_json_are_refused_without_echoing_body() {
         b"secret-not-json".as_slice(),
         b"{\"x\":\"\xff\"}",
         b"{\"incomplete\":",
+        br#"{"status":"PRIVATE_CANARY","status":"ok"}"#,
+        br#"{"messages":[{"role":"PRIVATE_CANARY","role":"user"}]}"#,
+        br#"{"content":"PRIVATE_CANARY","\u0063ontent":"replaced"}"#,
     ] {
         let mut raw = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -56,6 +59,7 @@ fn malformed_truncated_and_non_utf8_json_are_refused_without_echoing_body() {
         let error = response(&raw).err().unwrap();
         assert!(error.starts_with("FARMD_JSON_INVALID"));
         assert!(!error.contains("secret-not-json"));
+        assert!(!error.contains("PRIVATE_CANARY"));
     }
     assert!(response(
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 20\r\n\r\n{}"

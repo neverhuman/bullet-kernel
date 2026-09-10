@@ -132,8 +132,9 @@ pub(crate) fn request_query(
     let body = if status == 204 && bytes.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes)
-            .map_err(|_| "FARMD_JSON_INVALID: response was not valid UTF-8 JSON")?
+        serde_json::from_slice::<bullet_harness_core::strict_json::StrictJson>(&bytes)
+            .map_err(|_| "FARMD_JSON_INVALID: response was not unambiguous UTF-8 JSON")?
+            .0
     };
     Ok(HttpResponse {
         status,

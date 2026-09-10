@@ -47,6 +47,9 @@ pub enum LedgerError {
     /// Requested coding task cannot be accepted under its declared constraints.
     #[error(transparent)]
     CodingTask(#[from] crate::coding_tasks::CodingTaskRefusal),
+    /// A requested message conflicts with an owned conversation's current state.
+    #[error(transparent)]
+    Conversation(#[from] crate::conversations::ConversationRefusal),
 }
 
 impl LedgerError {
@@ -58,6 +61,7 @@ impl LedgerError {
             Self::UnsupportedSchema { .. } => "UNSUPPORTED_SCHEMA",
             Self::Domain(err) => err.reason_code(),
             Self::CodingTask(err) => err.reason_code(),
+            Self::Conversation(err) => err.reason_code(),
         }
     }
 }

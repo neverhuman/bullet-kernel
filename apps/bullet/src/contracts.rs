@@ -3,6 +3,9 @@
 
 mod rust;
 
+#[cfg(test)]
+mod conversations;
+
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 use std::collections::BTreeSet;
@@ -20,6 +23,10 @@ const RUNTIME_SCHEMA_ROOTS: &[&str] = &[
     "CommandDiscoveryView",
     "CommandStatus",
     "CodingRunView",
+    "ConversationIndexView",
+    "ConversationView",
+    "ConversationMessagePayload",
+    "ConversationMessageReceipt",
     "RunCodingTaskPayload",
     "ContextLineageView",
     "EventEnvelope",

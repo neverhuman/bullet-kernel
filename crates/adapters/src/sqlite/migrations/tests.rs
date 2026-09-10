@@ -7,6 +7,8 @@ use tempfile::TempDir;
 
 use crate::test_support::sqlite_fixture;
 
+mod conversations;
+
 fn database() -> (TempDir, std::path::PathBuf) {
     let directory = crate::test_support::private_tempdir();
     let path = directory.path().join("ledger.sqlite3");

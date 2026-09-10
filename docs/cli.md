@@ -5,7 +5,7 @@ Owner: Bullet Farm maintainers
 Last reviewed: 2026-09-10
 Source of truth: `apps/bullet/src/{main,auth,client,coding,mission,tui,transaction,authority,provider,maintenance,contracts}.rs`,
 their supporting modules, `apps/bullet/src/authority/mint.rs`, and the process-bin sources below.
-<!-- bullet-doc-review:v1 subject=07d224e60545bc8e8f6c083c4edf327109304282 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/args.rs,apps/bullet/src/coding/task.rs,apps/bullet-farmd/src/commands/coding.rs,crates/application/src/coding_tasks.rs,crates/application/src/coding_tasks/validation.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
+<!-- bullet-doc-review:v1 subject=6cde6376aca767258b67c29fe3f0434ebcc47c4b max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/args.rs,apps/bullet/src/coding/task.rs,apps/bullet-farmd/src/commands/coding.rs,crates/application/src/coding_tasks.rs,crates/application/src/coding_tasks/validation.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
 
 `auth`, `coding`, remote `mission` reads and `tui` consume the loopback daemon. The local ledger helpers
 and guarded provider qualification paths remain separate. The operator controls
@@ -26,9 +26,9 @@ continues until its actual predecessor admission and operator checkpoint.
 | Command | Effect |
 | --- | --- |
 | `farm init` | on Linux, admit/create a self-owned non-symlink 0700 `<data-dir>`, create `ledger.sqlite`, and run migrations; other platforms refuse |
-| `farm backup --database <existing> --output <absent> --receipt <absent>` | private recovered SQLite snapshot with authentic schema-22/23/24/25/26, foreign-key and integrity checks, then a separate unsigned BLAKE3 receipt; a receipt failure can leave an unusable orphan snapshot |
+| `farm backup --database <existing> --output <absent> --receipt <absent>` | private recovered SQLite snapshot with authentic schema-22/23/24/25/26/27, foreign-key and integrity checks, then a separate unsigned BLAKE3 receipt; a receipt failure can leave an unusable orphan snapshot |
 | `farm reap --database <existing>` | reclaim every writer lease already expired in the offline database; running farmd performs the same maintenance on its own tick |
-| `farm restore --backup <snapshot> --receipt <receipt> --destination <absent>` | verify exact receipt-bound schema-22/23/24/25/26 bytes, preserve schema/authority, advance the restore epoch, publish to an absent destination and read back; the result stays quarantined (normal open refuses) |
+| `farm restore --backup <snapshot> --receipt <receipt> --destination <absent>` | verify exact receipt-bound schema-22/23/24/25/26/27 bytes, preserve schema/authority, advance the restore epoch, publish to an absent destination and read back; the result stays quarantined (normal open refuses) |
 | `demo` | deterministic ledger simulation; writes `<data-dir>/receipts.json`; fails on its own safety checks and unless Candidate/Evidence/Effect all remain unproduced |
 | `demo-synthetic [--target <origin repo>]` | simulator-only integration scaffold; while production authority is unavailable it exits failed with a typed refusal and no Candidate |
 | `transaction --json` | emit the typed `transaction_proof: "ABSENT"`, `transaction_gate_eligible: false` receipt and exit 2; omitting `--json` also refuses |
@@ -103,6 +103,40 @@ data with STALE/UNKNOWN. `NO_COLOR` preserves text labels without color;
 `--once`, redirected output and `TERM=dumb` use a plain snapshot. Current TUI
 updates are polled GETs. Native controls, exact queue blockers and approval
 mutations remain separate unfinished backend/UI obligations.
+
+## Durable conversation API
+
+The shared conversation backend accepts `conversation_message` only through
+authenticated `POST /api/v1/commands`. Its closed
+`bullet.conversation-message.v1` payload contains required `cursor` and `content`.
+A null cursor starts a server-identified thread. A reply supplies the exact
+current `{conversation_id, message_id, sequence}` read from the server; a stale
+cursor returns `CONVERSATION_CURSOR_CONFLICT` without saving another message.
+The original content is preserved, limited to 32768 UTF-8 bytes. Caller-selected
+roles, head identities and execution authority are refused.
+
+An `APPLIED` command receipt confirms the human message and its queued head-turn
+reference were saved atomically with operator ownership and audit records.
+Retrying the exact original command returns that original receipt even after
+the thread advances. Generic outbox/audit rows contain references rather than
+the message text. This acknowledgement establishes neither an assistant reply
+nor successful coding.
+
+`GET /api/v1/conversations` discovers owned threads in stable creation order.
+`GET /api/v1/conversations/{conversation_id}` returns complete messages, the
+current cursor and `HEAD_RUNTIME_BINDING_REQUIRED`. Both support bounded
+`after`/`limit` pages with a snapshot watermark and `Cache-Control: no-store`;
+the index cursor is a creation-event sequence and the message cursor is a
+thread-local sequence. Separate pages are separate snapshots. A revoked
+session cannot read either endpoint. Readers reject inconsistent prior history
+and assistant rows without a validated native outcome.
+
+Schema 27 appends immutable conversation, message and head-request tables.
+Recognized prior schemas return `UPGRADE_REQUIRED` without rewriting their
+files. Guided migration, the native head worker, conversational CLI/Portal
+consumers and Slack/Telegram transport remain separate implementation work.
+These backend tests use isolated synthetic identities and make no live-provider
+or installation claim.
 
 ## `authority keygen`
 
