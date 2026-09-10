@@ -9,6 +9,8 @@ pub(crate) mod store;
 
 #[cfg(unix)]
 use crate::coding::http;
+#[cfg(unix)]
+use crate::coding::render;
 use clap::Subcommand;
 use std::path::PathBuf;
 #[cfg(unix)]
@@ -99,7 +101,14 @@ pub(crate) fn run(command: AuthCommands) -> Result<(), String> {
                 cookie,
                 csrf,
             })?;
-            println!("AUTHENTICATED: credentials saved privately; use bullet auth status to check the session");
+            println!(
+                "{}",
+                render::paint(
+                    render::color_wanted(false),
+                    render::status_tone("ok"),
+                    "AUTHENTICATED: credentials saved privately; use bullet auth status to check the session",
+                )
+            );
             Ok(())
         }
         AuthCommands::Status {
@@ -109,8 +118,15 @@ pub(crate) fn run(command: AuthCommands) -> Result<(), String> {
                 .ok_or("AUTH_REQUIRED: run bullet auth login")?;
             let view = session::status(&credentials)?;
             println!(
-                "AUTHENTICATED: operator {} · session {} · expires {}",
-                view.operator_id, view.session_id, view.expires_at
+                "{}",
+                render::paint(
+                    render::color_wanted(false),
+                    render::status_tone("ok"),
+                    &format!(
+                        "AUTHENTICATED: operator {} · session {} · expires {}",
+                        view.operator_id, view.session_id, view.expires_at
+                    ),
+                )
             );
             Ok(())
         }
@@ -124,8 +140,15 @@ pub(crate) fn run(command: AuthCommands) -> Result<(), String> {
             let view = session::revoke(&credentials)?;
             store.forget()?;
             println!(
-                "REVOKED: session {} at {}; local credentials removed",
-                view.session_id, view.revoked_at
+                "{}",
+                render::paint(
+                    render::color_wanted(false),
+                    render::status_tone("HOLD"),
+                    &format!(
+                        "REVOKED: session {} at {}; local credentials removed",
+                        view.session_id, view.revoked_at
+                    ),
+                )
             );
             Ok(())
         }
@@ -133,7 +156,14 @@ pub(crate) fn run(command: AuthCommands) -> Result<(), String> {
             state_dir: directory,
         } => {
             CredentialStore::open(&state_dir(directory)?)?.forget()?;
-            println!("FORGOTTEN: local credentials removed; server authority was not revoked");
+            println!(
+                "{}",
+                render::paint(
+                    render::color_wanted(false),
+                    render::status_tone("HOLD"),
+                    "FORGOTTEN: local credentials removed; server authority was not revoked",
+                )
+            );
             Ok(())
         }
     }

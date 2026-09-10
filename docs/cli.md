@@ -13,6 +13,13 @@ below have component proofs; they do not establish installed provider execution,
 independent verification, integration or release acceptance. Operating HOLD
 continues until its actual predecessor admission and operator checkpoint.
 
+Interactive `bullet tui` draws CONNECTING before its first network request;
+navigation and Ctrl+C detach remain available while that request waits. An
+explicit `--subject` is selected when the first valid snapshot arrives and is
+retained in the reconnect command if the client detaches first. `--once`, piped
+output and `TERM=dumb` retain synchronous plain-text snapshot behavior. Multiple
+consoles share short credential reads; detaching one does not stop another.
+
 ## Environment
 
 | Variable | Used by | Meaning |
@@ -20,6 +27,7 @@ continues until its actual predecessor admission and operator checkpoint.
 | `BULLET_DATA_DIR` | `farm init`, `demo`, `demo-synthetic` | data directory; default `./target/demo` |
 | `BULLET_POLICY_PATH` | `authority mint-launch-grant`, `provider live-conformance` | absolute path overriding `<data-dir>/policy/policy.json` |
 | `BULLET_PROVIDER_KILL=1` | every provider argv build | kill switch; refuses every spawn (`PROVIDER_KILL_ACTIVE`) |
+| `NO_COLOR` | `auth status`, `coding board`/`watch`/`harness-check`, `tui` | present means text labels only; color also requires a TTY |
 
 ## Commands
 
@@ -55,6 +63,10 @@ continues until its actual predecessor admission and operator checkpoint.
 | `coding watch` | poll the same board; `--interval-ms` must be ≥ 1 (`WATCH_INTERVAL_INVALID` otherwise). Not a coordinator fleet. |
 | `coding harness-check` | report `BULLET_HARNESS_*` PRESENT/ABSENT without spawning a provider. Exit 2 when unbound (`COMMAND_CODING_HARNESS_UNBOUND`). |
 | `coding stop` | typed `STOP_UNIMPLEMENTED` and exit 2; does not SIGKILL a provider |
+
+`talk`, `ask`, `head`, `setup`, and `serve` are not CLI commands. Native Head,
+Slack Socket Mode, Telegram, and a product installer remain typed absent.
+Hub `scripts/setup.sh` is contributor bootstrap only.
 
 ## Operator client custody and recovery
 
@@ -140,8 +152,12 @@ and assistant rows without a validated native outcome.
 
 Schema 27 appends immutable conversation, message and head-request tables.
 Recognized prior schemas return `UPGRADE_REQUIRED` without rewriting their
-files. Guided migration, the native head worker, conversational CLI/Portal
-consumers and Slack/Telegram transport remain separate implementation work.
+files. The Portal Head overlay journals `conversation_message` and binds GET
+refresh to the `APPLIED` receipt; every GET still carries
+`HEAD_RUNTIME_BINDING_REQUIRED`. There is no `bullet talk` / `ask` / `head`
+command. Slack stays `SLACK_BIND_UNAVAILABLE` pending an append-only schema-28
+bind row; Telegram stays `TELEGRAM_UNAVAILABLE`. Native Head outcome, guided
+migration, and HOLD lift remain separate implementation work.
 These backend tests use isolated synthetic identities and make no live-provider
 or installation claim.
 
@@ -305,9 +321,10 @@ admission enabled, binding/enrollment mismatch, fixture key, argv drift).
 ## Advanced coding task controls
 
 The intended default experience is a conversation about goals, progress and decisions
-with the head of the farm, shared across CLI, web and Slack. The durable task
-controls below are the advanced interface supporting that experience. Conversation
-coordination and Slack delivery are not yet implemented by this packet.
+with the head of the farm. Today the Portal Head overlay can queue human
+`conversation_message` rows; CLI `talk`/`ask`/`head` and Slack delivery are
+not implemented. The durable task controls below remain the coding-intent
+interface.
 
 `coding submit` sends `bullet.run-coding.v2` through the existing authenticated
 `POST /api/v1/commands`. A task contract records the objective, exact repository

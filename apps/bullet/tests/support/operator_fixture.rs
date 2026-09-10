@@ -24,6 +24,9 @@ pub fn subject() -> String {
 
 impl Fixture {
     pub fn start() -> Self {
+        Self::start_with_gate(Arc::new(AtomicBool::new(false)))
+    }
+    pub fn start_with_gate(gate: Arc<AtomicBool>) -> Self {
         let directory = tempfile::Builder::new()
             .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir()
@@ -78,6 +81,12 @@ impl Fixture {
                 assert!(headers.contains(&format!("\r\ncookie: {cookie}\r\n")));
                 assert!(headers.contains(&format!("\r\norigin: {origin}\r\n")));
                 count.fetch_add(1, Ordering::SeqCst);
+                while gate.load(Ordering::SeqCst) && !end.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                if end.load(Ordering::SeqCst) {
+                    break;
+                }
                 let body = if bad.load(Ordering::SeqCst) {
                     "{}".into()
                 } else {

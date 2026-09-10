@@ -40,6 +40,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, model: &mut Model, color: bool) {
         .unwrap_or_else(|| "snapshot UNKNOWN".into());
     let status = if model.error.is_some() {
         "STALE / UNKNOWN"
+    } else if model.snapshot.is_none() {
+        "CONNECTING"
     } else {
         "OBSERVED"
     };
@@ -71,9 +73,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, model: &mut Model, color: bool) {
     let detail = model
         .selected()
         .map(|i| model.rows[i].detail.as_str())
-        .unwrap_or(
-            "No durable rows in this view. No work, approval, or provider completion is inferred.",
-        );
+        .unwrap_or(if model.snapshot.is_none() {
+            "Waiting for an authenticated snapshot. Ctrl+C detaches while connecting."
+        } else {
+            "No durable rows in this view. No work, approval, or provider completion is inferred."
+        });
     let title = if model.details_focus {
         "Details [focused]"
     } else {
