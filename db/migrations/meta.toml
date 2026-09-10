@@ -118,3 +118,7 @@ note = "Adds digest-only immutable local-operator/bootstrap/session rows and app
 [[migration]]
 file = "0025_operator_command_ownership.sql"
 note = "Adds immutable ownership and submission-sequence cursor for new public commands, inserted atomically with admission. Historical commands are preserved unowned. Checksummed22/23/24 require supervised upgrade; startup performs no predecessor rewrite."
+
+[[migration]]
+file = "0026_coding_task_intent.sql"
+note = "Adds immutable operator-owned task revisions, dependency edges and server-derived run-tracking identities within public command admission. Intent creates no reservation, launch nonce, lease or dispatch claim. Historical commands acquire no invented task records. Checksummed22–25 remain intact and require supervised upgrade; startup never rewrites them."

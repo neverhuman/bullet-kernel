@@ -71,6 +71,12 @@ impl From<LedgerError> for ApiError {
             LedgerError::Store(detail) => Self::Internal(detail),
             LedgerError::UnsupportedSchema { detail } => Self::UnsupportedSchema(detail),
             LedgerError::Domain(err) => Self::from(err),
+            LedgerError::CodingTask(error) => Self::protocol(
+                StatusCode::CONFLICT,
+                error.reason_code(),
+                "The requested coding task conflicts with durable admission constraints.",
+                error.repair(),
+            ),
         }
     }
 }

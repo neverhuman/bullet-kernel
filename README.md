@@ -4,9 +4,9 @@
 [![Jankurai](https://img.shields.io/badge/jankurai-audit-blue.svg)](docs/testing.md)
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
-Product-surface claims and the CI inventory were last reviewed 2026-09-09
-against product subject `66746620`.
-<!-- bullet-doc-review:v1 subject=66746620da50a8221f5dba332c55dae78693eafb max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,ops/ci/inventory.sh -->
+Product-surface claims and the CI inventory were last reviewed 2026-09-10
+against product subject `8d7258a0`.
+<!-- bullet-doc-review:v1 subject=8d7258a03b1e83d4c5300b22caa569679953abbb max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,ops/ci/inventory.sh -->
 Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.
@@ -29,7 +29,7 @@ Evidence classes follow
 | `crates/mcp-mock`, `crates/test-simulation` | in-process mocks and harness tapes for the contract lane |
 | `apps/bullet-farmd` | loopback-only HTTP + SSE daemon; routes in the table below |
 | `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
-| `apps/bullet` | CLI: `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; command details are in [`docs/cli.md`](docs/cli.md) |
+| `apps/bullet` | CLI: authenticated `auth`, `coding`, remote `mission` and read-only `tui`; advanced `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; command details are in [`docs/cli.md`](docs/cli.md) |
 | `apps/bullet-runner` | attempt runner with explicit peer/recovery and Candidate inputs; missing lease admission refuses. `--provider sim` is the deterministic simulator; `--provider claude` drives a real contained turn through the dogfood admission and refuses by name when any input is missing, never falling back to the simulator; `codex` and `cursor` construct and then refuse at `start` |
 | `apps/bullet-verifier` | product verifier boundary; always returns the typed `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE` refusal without reading a job. The default-off `bullet-verifier-fixture` accepts unsigned fixture JSON only with `fixture-executor`; every fixture outcome is component-only, unsigned, non-independent, and transaction-gate-ineligible |
 | `apps/bullet-effects` | no-argument component demo over `LocalBareForge`; `serve <durable-queue-dir>` processes one UNKNOWN job only to `QUARANTINED`, never fabricated forge success |
@@ -58,6 +58,7 @@ gates the generated client against the complete OpenAPI document.
 | GET | `/api/v1/commands` | yes | bounded discovery of the current operator’s commands |
 | POST | `/api/v1/commands` | yes | authenticated command submission records `PENDING` |
 | GET | `/api/v1/commands/{id}` | yes | command status |
+| GET | `/api/v1/commands/{id}/coding` | yes | owned coding task, run and queue blockers from one atomic snapshot |
 | POST | `/internal/v1/commands/{id}/reconcile` | no | worker-bearer reconciler, outside the public contract |
 | GET | `/api/v1/operator-snapshot` | yes | operator surfaces from one atomic ledger snapshot |
 | GET | `/api/v1/outbox` | yes | outbox snapshot |

@@ -10,6 +10,7 @@ mod harness;
 pub(crate) mod http;
 mod journal;
 mod render;
+mod task;
 
 pub(crate) use args::CodingCommands;
 use credentials::Session;
@@ -48,23 +49,38 @@ pub(crate) fn run(command: CodingCommands) -> ExitCode {
             account,
             provider,
             model,
-            expected_revision,
+            task,
+            effort,
             idempotency_key,
             json,
         } => {
             let result = connection.load().and_then(|session| {
+                let contract = task::load_contract(&task)?;
+                let payload = task::payload(contract, &account, &provider, &model, effort.as_deref())?;
                 submit(
                     &session,
                     SubmitRequest {
-                        account: &account,
-                        provider: &provider,
-                        model: &model,
-                        expected_revision,
+                        payload: &payload,
                         idempotency_key: idempotency_key.as_deref(),
                     },
                 )
             });
             print_command(result, json)
+        }
+        CodingCommands::Retry { connection, id, json } => print_command(
+            connection.load().and_then(|session| {
+                let request = journal::reconciliation_request(&session, &id)?
+                    .ok_or("COMMAND_JOURNAL_REQUIRED: recover the original submission journal before retrying")?;
+                let payload: Value = serde_json::from_str(&request.payload)
+                    .map_err(|_| "COMMAND_JOURNAL_CORRUPT")?;
+                let envelope = json!({"idempotency_key":request.idempotency_key,"kind":request.kind,"payload":payload});
+                submit_prepared(&session, envelope, request)
+            }), json),
+        CodingCommands::Task { connection, id, json } => {
+            match connection.load().and_then(|session| task::get(&session, &id)) {
+                Ok(snapshot) => { task::print(&snapshot, json); ExitCode::SUCCESS },
+                Err(error) => fail(error),
+            }
         }
         CodingCommands::Status {
             connection,
@@ -201,15 +217,20 @@ fn print_harness(json_only: bool) -> ExitCode {
 }
 
 struct SubmitRequest<'a> {
-    account: &'a str,
-    provider: &'a str,
-    model: &'a str,
-    expected_revision: u64,
+    payload: &'a bullet_application::coding_tasks::RunCodingTaskPayload,
     idempotency_key: Option<&'a str>,
 }
 
 fn submit(session: &Session, request: SubmitRequest<'_>) -> Result<Value, String> {
     let (envelope, expected) = journal::prepare(session, &request)?;
+    submit_prepared(session, envelope, expected)
+}
+
+fn submit_prepared(
+    session: &Session,
+    envelope: Value,
+    expected: bullet_application::CommandRequest,
+) -> Result<Value, String> {
     let command_id = expected.id();
     eprintln!(
         "COMMAND_JOURNALED: {command_id}; idempotency_key={}",
@@ -232,7 +253,7 @@ fn submit(session: &Session, request: SubmitRequest<'_>) -> Result<Value, String
         )
     })?;
     if response.status != 202 {
-        return Err(format!("FARMD_COMMAND_REFUSED: HTTP {}", response.status));
+        return Err(task::refusal(&response));
     }
     let body = command_body(response.body)?;
     journal::correlate(&expected, &body)?;
@@ -319,34 +340,6 @@ fn admit_interval(interval_ms: u64) -> Result<u64, String> {
     Ok(interval_ms)
 }
 
-fn run_coding_envelope(
-    account: &str,
-    provider: &str,
-    model: &str,
-    expected_revision: u64,
-) -> Result<Value, String> {
-    if account.trim().is_empty() || model.trim().is_empty() {
-        return Err("run_coding requires an explicit account id and model".into());
-    }
-    if provider == "sim" {
-        return Err("COMMAND_CODING_SIM_REFUSED: run_coding never selects the simulator".into());
-    }
-    Ok(json!({
-        "idempotency_key": format!("cli_{}", random_hex(16)?),
-        "kind": "run_coding",
-        "payload": {
-            "account_id": account.trim(),
-            "provider": provider,
-            "model": model.trim(),
-            "expected_revision": expected_revision,
-            "launch_nonce": random_hex(32)?,
-            "quota_reservation": format!("rsv_{}", random_hex(32)?),
-            "quota_units": 1,
-            "allocated_run": format!("run_{}", random_hex(32)?),
-        }
-    }))
-}
-
 fn random_hex(bytes: usize) -> Result<String, String> {
     let mut buffer = vec![0_u8; bytes];
     std::fs::File::open("/dev/urandom")
@@ -361,19 +354,20 @@ mod tests {
 
     #[test]
     fn envelope_matches_portal_run_coding_shape() {
-        let value = run_coding_envelope("acct-local", "antigravity", "gemini-2.5", 1).unwrap();
+        let value = json!({"kind":"run_coding","payload":task::payload(task::fixture(),"acct-local","antigravity","gemini-2.5",None).unwrap()});
         assert_eq!(value["kind"], "run_coding");
-        assert_eq!(value["payload"]["provider"], "antigravity");
-        assert_eq!(value["payload"]["account_id"], "acct-local");
-        assert_eq!(value["payload"]["quota_units"], 1);
-        assert!(value["payload"]["allocated_run"]
-            .as_str()
-            .unwrap()
-            .starts_with("run_"));
-        assert!(value["payload"]["quota_reservation"]
-            .as_str()
-            .unwrap()
-            .starts_with("rsv_"));
+        assert_eq!(value["payload"]["selection"]["provider"], "antigravity");
+        assert_eq!(value["payload"]["selection"]["account_id"], "acct-local");
+        assert_eq!(value["payload"]["schema_version"], "bullet.run-coding.v2");
+        for retired in [
+            "allocated_run",
+            "launch_nonce",
+            "quota_reservation",
+            "expected_revision",
+            "quota_units",
+        ] {
+            assert!(value["payload"].get(retired).is_none());
+        }
         let empty = render::Board {
             health: Ok(json!({"status": "ok"})),
             fleet: Ok(json!({
@@ -400,7 +394,7 @@ mod tests {
 
     #[test]
     fn simulator_name_is_refused_before_http() {
-        let error = run_coding_envelope("acct", "sim", "none", 1).unwrap_err();
+        let error = task::payload(task::fixture(), "acct", "sim", "none", None).unwrap_err();
         assert!(error.contains("COMMAND_CODING_SIM_REFUSED"));
         let report = harness::inspect(&[]);
         assert_eq!(report.outcome, "UNBOUND");

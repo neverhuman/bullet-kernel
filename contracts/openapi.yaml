@@ -393,6 +393,11 @@ paths:
         retry returns the original command's current phase without fresh
         authority or quota admission, while verifying its original immutable
         bindings. Historical unowned keys and other-owner keys conflict.
+        Fresh run_coding submissions use the closed RunCodingTaskPayload v2
+        contract. Acceptance freezes task intent and allocates a server-owned
+        tracking identity; it does not issue execution authority. Obsolete
+        caller-allocated authority shapes are refused for fresh public commands.
+        Exact historical retries retain their original bindings and current phase.
         HTTP acceptance is never verification.
       security:
         - browserSession: []
@@ -495,6 +500,66 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "404":
           description: command not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/commands/{id}/coding:
+    get:
+      summary: Read an owned coding task revision and its current queue blockers
+      description: >
+        Command, accepted task, run tracking and blockers share one read
+        transaction. A queued task is requested work, not launch authority.
+        Historical commands without a task revision remain available through
+        ordinary command discovery; this endpoint does not invent a revision.
+      security:
+        - browserSession: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            $ref: "#/components/schemas/CommandId"
+      responses:
+        "200":
+          description: One atomic coding observation
+          headers:
+            X-Bullet-As-Of-Sequence:
+              required: true
+              schema: { type: integer, minimum: 0, maximum: 9007199254740991 }
+            Cache-Control:
+              required: true
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodingRunSnapshot"
+        "400":
+          description: Invalid command subject
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: An admitted operator session is required
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Origin refused
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No owned task-shaped coding command exists for this subject
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Durable coding records are inconsistent
           content:
             application/problem+json:
               schema:
@@ -987,6 +1052,118 @@ components:
         payload:
           type: object
           properties: {}
+    CodingTaskRevisionId:
+      type: string
+      pattern: "^ctr_[0-9a-f]{64}$"
+    CodingRunId:
+      type: string
+      pattern: "^crn_[0-9a-f]{64}$"
+    CodingTaskBudget:
+      type: object
+      additionalProperties: false
+      required: [max_invocations, max_cost_microusd]
+      properties:
+        max_invocations: { type: integer, minimum: 1, maximum: 16 }
+        max_cost_microusd: { type: integer, minimum: 1, maximum: 1000000000 }
+    CodingTaskContract:
+      type: object
+      additionalProperties: false
+      description: >
+        Immutable requested work. String bounds are additionally enforced in
+        UTF-8 bytes by admission. Paths must be normalized repository-relative
+        paths; dependencies name previously accepted revisions owned by this
+        operator. Repository identity is a selector, not a grant to access it.
+      required: [title, objective, repository_id, base_commit, scope_paths, acceptance_criteria, gate_ids, dependencies, budget, deadline_unix_ms]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 240 }
+        objective: { type: string, minLength: 1, maxLength: 8192 }
+        repository_id:
+          $ref: "#/components/schemas/RepositoryId"
+        base_commit: { type: string, pattern: "^([0-9a-f]{40}|[0-9a-f]{64})$" }
+        scope_paths:
+          type: array
+          minItems: 1
+          maxItems: 128
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 512 }
+        acceptance_criteria:
+          type: array
+          minItems: 1
+          maxItems: 32
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 1024 }
+        gate_ids:
+          type: array
+          minItems: 1
+          maxItems: 16
+          uniqueItems: true
+          items: { type: string, pattern: "^gat_[0-9a-f]{64}$" }
+        dependencies:
+          type: array
+          maxItems: 64
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/CodingTaskRevisionId"
+        budget:
+          $ref: "#/components/schemas/CodingTaskBudget"
+        deadline_unix_ms: { type: integer, minimum: 1, maximum: 9007199254740991 }
+    CodingRuntimeSelection:
+      type: object
+      additionalProperties: false
+      required: [account_id, provider, model, effort]
+      properties:
+        account_id: { type: string, minLength: 1, maxLength: 64 }
+        provider: { type: string, enum: [claude, codex, cursor, antigravity] }
+        model: { type: string, minLength: 1, maxLength: 128 }
+        effort: { type: [string, "null"], minLength: 1, maxLength: 32 }
+    RunCodingTaskPayload:
+      type: object
+      additionalProperties: false
+      required: [schema_version, task, selection]
+      properties:
+        schema_version: { type: string, const: "bullet.run-coding.v2" }
+        task:
+          $ref: "#/components/schemas/CodingTaskContract"
+        selection:
+          $ref: "#/components/schemas/CodingRuntimeSelection"
+    CodingQueueBlocker:
+      type: object
+      additionalProperties: false
+      required: [code, subject]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 96, pattern: "^CODING_[A-Z_]+$" }
+        subject: { type: [string, "null"], maxLength: 256 }
+    CodingRunView:
+      type: object
+      additionalProperties: false
+      required: [command, run_id, task_revision_id, task, selection, accepted_at, blockers]
+      properties:
+        command:
+          $ref: "#/components/schemas/CommandStatus"
+        run_id:
+          $ref: "#/components/schemas/CodingRunId"
+        task_revision_id:
+          $ref: "#/components/schemas/CodingTaskRevisionId"
+        task:
+          $ref: "#/components/schemas/CodingTaskContract"
+        selection:
+          $ref: "#/components/schemas/CodingRuntimeSelection"
+        accepted_at: { type: string, format: date-time }
+        blockers:
+          type: array
+          maxItems: 80
+          items:
+            $ref: "#/components/schemas/CodingQueueBlocker"
+    CodingRunSnapshot:
+      type: object
+      additionalProperties: false
+      required: [data, as_of_sequence, observed_at, source]
+      properties:
+        data:
+          $ref: "#/components/schemas/CodingRunView"
+        as_of_sequence: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        observed_at: { type: string, format: date-time }
+        source: { type: string, const: "bullet-kernel/sqlite-ledger" }
     CommandStatus:
       type: object
       additionalProperties: false

@@ -37,13 +37,11 @@ pub(super) fn prepare(
             recorded.envelope
         }
         None => {
-            let mut proposed = super::run_coding_envelope(
-                input.account,
-                input.provider,
-                input.model,
-                input.expected_revision,
-            )?;
-            proposed["idempotency_key"] = Value::String(key.clone());
+            input
+                .payload
+                .validate()
+                .map_err(|_| "COMMAND_TASK_INVALID")?;
+            let proposed = serde_json::json!({"idempotency_key":key,"kind":"run_coding","payload":input.payload});
             CommandRequest::new(&key, "run_coding", &proposed["payload"])
                 .map_err(|_| "COMMAND_REQUEST_INVALID")?;
             let record = Journal {
@@ -86,10 +84,8 @@ fn validate_retry(
         || record.origin != session.origin
         || record.envelope["idempotency_key"] != key
         || record.envelope["kind"] != "run_coding"
-        || record.envelope["payload"]["account_id"] != input.account.trim()
-        || record.envelope["payload"]["provider"] != input.provider
-        || record.envelope["payload"]["model"] != input.model.trim()
-        || record.envelope["payload"]["expected_revision"] != input.expected_revision
+        || record.envelope["payload"]
+            != serde_json::to_value(input.payload).map_err(|_| "COMMAND_TASK_INVALID")?
     {
         return Err(
             "IDEMPOTENCY_CONFLICT: this key already binds another request or endpoint".into(),

@@ -6,7 +6,7 @@ fn missing_or_substituted_accepted_coding_bindings_never_replay_or_project() {
     for mutation in ["DELETE FROM authority_nonces", "UPDATE authority_nonces SET consumed_at=NULL",
         "UPDATE authority_nonces SET request_digest='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
         "DELETE FROM budget_reservations", "UPDATE budget_reservations SET amount=4"] {
-        let directory=crate::test_support::private_tempdir();let mut ledger=SqliteLedger::open(directory.path().join("corrupt.sqlite")).unwrap();let operator=register(&mut ledger);let request=coding("owned");let record=ledger.submit_operator_command(&operator,&request).unwrap().command;
+        let directory=crate::test_support::private_tempdir();let mut ledger=SqliteLedger::open(directory.path().join("corrupt.sqlite")).unwrap();let operator=register(&mut ledger);let request=coding("owned");let record=historical_coding(&mut ledger,&operator,&request).command;
         ledger.conn.execute(mutation,[]).unwrap();let before=counts(&ledger);
         assert!(ledger.submit_command(&request).is_err(),"legacy replay: {mutation}");
         assert!(ledger.submit_operator_command(&operator,&request).is_err(),"owner replay: {mutation}");

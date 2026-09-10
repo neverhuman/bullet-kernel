@@ -251,10 +251,12 @@ checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 name = "bullet"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "bullet-adapters",
  "bullet-application",
  "bullet-domain",
  "bullet-effects-core",
+ "bullet-farmd",
  "bullet-harness-antigravity",
  "bullet-harness-claude",
  "bullet-harness-codex",

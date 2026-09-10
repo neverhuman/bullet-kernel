@@ -5,6 +5,7 @@ pub mod authority;
 pub mod authority_revision;
 pub mod authority_scope;
 pub mod candidate_preparation;
+pub mod coding_tasks;
 pub mod command_dispatch;
 pub mod commands;
 pub mod conformance;

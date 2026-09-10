@@ -42,6 +42,7 @@ authors = ["Bullet Farm"]
 bullet-domain = { path = "crates/domain" }
 bullet-application = { path = "crates/application" }
 bullet-adapters = { path = "crates/adapters" }
+bullet-farmd = { path = "apps/bullet-farmd" }
 bullet-test-simulation = { path = "crates/test-simulation" }
 bullet-harness-core = { path = "crates/harness-core" }
 bullet-harness-sim = { path = "crates/harness-sim" }

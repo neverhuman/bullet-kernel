@@ -21,6 +21,7 @@ macro_rules! core_route_catalog {
             Get, "/api/v1/commands", crate::commands::discovery::list, true, "bounded discovery of the current operator’s commands";
             Post, "/api/v1/commands", crate::commands::submit, true, "authenticated command submission records `PENDING`";
             Get, "/api/v1/commands/{id}", crate::commands::get, true, "command status";
+            Get, "/api/v1/commands/{id}/coding", crate::commands::coding::get, true, "owned coding task, run and queue blockers from one atomic snapshot";
             Post, "/internal/v1/commands/{id}/reconcile", crate::commands::reconcile, false, "worker-bearer reconciler, outside the public contract";
             Get, "/api/v1/operator-snapshot", crate::projections::operator_snapshot, true, "operator surfaces from one atomic ledger snapshot";
             Get, "/api/v1/outbox", super::outbox, true, "outbox snapshot";

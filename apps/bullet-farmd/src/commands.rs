@@ -12,6 +12,7 @@ use bullet_application::operator_commands::{
 use bullet_application::{CommandRecord, CommandRequest};
 use bullet_harness_core::strict_json::StrictJson;
 
+pub(crate) mod coding;
 pub(crate) mod discovery;
 use bullet_domain::{CommandId, CommandPhase};
 use serde::{Deserialize, Serialize};
@@ -103,6 +104,7 @@ fn operator_error(error: OperatorCommandError) -> ApiError {
         OperatorCommandError::Store(error)=>error.into(),
         OperatorCommandError::InvalidRequest=>ApiError::protocol(StatusCode::BAD_REQUEST,"OPERATOR_COMMAND_REQUEST_INVALID","The operator command query is invalid.","Use an authenticated operator, nonnegative safe-integer cursor and limit between 1 and 100."),
         OperatorCommandError::OwnershipConflict=>ApiError::protocol(StatusCode::CONFLICT,"COMMAND_OWNERSHIP_CONFLICT","The idempotency key is already bound outside this operator's command history.","Use a different key; historical unowned commands cannot be adopted by retry."),
+        OperatorCommandError::ObsoleteCodingShape=>ApiError::protocol(StatusCode::CONFLICT,"RUN_CODING_LEGACY_AUTHORITY_SHAPE_RETIRED","New coding submissions cannot supply execution authority.","Submit bullet.run-coding.v2 task intent and runtime selection; exact retries of previously owned commands retain their original payload."),
     }
 }
 

@@ -236,7 +236,7 @@ pub fn plan_run_coding_admission(
     }))
 }
 
-fn validate_token(field: &str, value: &str, maximum: usize) -> Result<(), DomainError> {
+pub(crate) fn validate_token(field: &str, value: &str, maximum: usize) -> Result<(), DomainError> {
     if value.is_empty() || value.len() > maximum || value.chars().any(char::is_control) {
         return Err(DomainError::Encoding(format!(
             "{field} must contain 1..={maximum} non-control bytes"

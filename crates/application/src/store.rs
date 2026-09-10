@@ -44,6 +44,9 @@ pub enum LedgerError {
     /// Domain invariant.
     #[error(transparent)]
     Domain(#[from] bullet_domain::DomainError),
+    /// Requested coding task cannot be accepted under its declared constraints.
+    #[error(transparent)]
+    CodingTask(#[from] crate::coding_tasks::CodingTaskRefusal),
 }
 
 impl LedgerError {
@@ -54,6 +57,7 @@ impl LedgerError {
             Self::Store(_) => "STORE_FAILURE",
             Self::UnsupportedSchema { .. } => "UNSUPPORTED_SCHEMA",
             Self::Domain(err) => err.reason_code(),
+            Self::CodingTask(err) => err.reason_code(),
         }
     }
 }

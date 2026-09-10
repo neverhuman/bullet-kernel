@@ -35,11 +35,31 @@ pub(crate) enum CodingCommands {
         provider: String,
         #[arg(long)]
         model: String,
-        #[arg(long, default_value_t = 1)]
-        expected_revision: u64,
+        /// JSON task contract with repository/base, scope, criteria, gates and limits.
+        #[arg(long)]
+        task: PathBuf,
+        /// Exact optional provider effort; omission is recorded as null.
+        #[arg(long)]
+        effort: Option<String>,
         /// Reuse this key to retry the exact journaled request after response loss.
         #[arg(long)]
         idempotency_key: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Retry the exact saved request, including historical owned submissions.
+    Retry {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the accepted task, server run identity and current queue blockers.
+    Task {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        id: String,
         #[arg(long)]
         json: bool,
     },

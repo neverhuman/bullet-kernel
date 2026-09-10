@@ -1,0 +1,18 @@
+{
+  "title": "Add a focused regression",
+  "objective": "Reproduce the selected bug, implement the smallest fix and preserve existing behavior.",
+  "repository_id": "rep_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "base_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "scope_paths": ["src", "tests"],
+  "acceptance_criteria": [
+    "The regression fails before the fix and passes afterward.",
+    "Existing relevant checks pass without suppressions."
+  ],
+  "gate_ids": ["gat_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+  "dependencies": [],
+  "budget": {
+    "max_invocations": 2,
+    "max_cost_microusd": 5000000
+  },
+  "deadline_unix_ms": 4102444800000
+}

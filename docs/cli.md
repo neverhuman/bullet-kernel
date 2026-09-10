@@ -5,7 +5,7 @@ Owner: Bullet Farm maintainers
 Last reviewed: 2026-09-10
 Source of truth: `apps/bullet/src/{main,auth,client,coding,mission,tui,transaction,authority,provider,maintenance,contracts}.rs`,
 their supporting modules, `apps/bullet/src/authority/mint.rs`, and the process-bin sources below.
-<!-- bullet-doc-review:v1 subject=b7642078ea9ff3a823483a4386ac1a217c35b5d4 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
+<!-- bullet-doc-review:v1 subject=8d7258a03b1e83d4c5300b22caa569679953abbb max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/args.rs,apps/bullet/src/coding/task.rs,apps/bullet-farmd/src/commands/coding.rs,crates/application/src/coding_tasks.rs,crates/application/src/coding_tasks/validation.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
 
 `auth`, `coding`, remote `mission` reads and `tui` consume the loopback daemon. The local ledger helpers
 and guarded provider qualification paths remain separate. The operator controls
@@ -26,9 +26,9 @@ continues until its actual predecessor admission and operator checkpoint.
 | Command | Effect |
 | --- | --- |
 | `farm init` | on Linux, admit/create a self-owned non-symlink 0700 `<data-dir>`, create `ledger.sqlite`, and run migrations; other platforms refuse |
-| `farm backup --database <existing> --output <absent> --receipt <absent>` | private recovered SQLite snapshot with authentic schema-22/23/24/25, foreign-key and integrity checks, then a separate unsigned BLAKE3 receipt; a receipt failure can leave an unusable orphan snapshot |
+| `farm backup --database <existing> --output <absent> --receipt <absent>` | private recovered SQLite snapshot with authentic schema-22/23/24/25/26, foreign-key and integrity checks, then a separate unsigned BLAKE3 receipt; a receipt failure can leave an unusable orphan snapshot |
 | `farm reap --database <existing>` | reclaim every writer lease already expired in the offline database; running farmd performs the same maintenance on its own tick |
-| `farm restore --backup <snapshot> --receipt <receipt> --destination <absent>` | verify exact receipt-bound schema-22/23/24/25 bytes, preserve schema/authority, advance the restore epoch, publish to an absent destination and read back; the result stays quarantined (normal open refuses) |
+| `farm restore --backup <snapshot> --receipt <receipt> --destination <absent>` | verify exact receipt-bound schema-22/23/24/25/26 bytes, preserve schema/authority, advance the restore epoch, publish to an absent destination and read back; the result stays quarantined (normal open refuses) |
 | `demo` | deterministic ledger simulation; writes `<data-dir>/receipts.json`; fails on its own safety checks and unless Candidate/Evidence/Effect all remain unproduced |
 | `demo-synthetic [--target <origin repo>]` | simulator-only integration scaffold; while production authority is unavailable it exits failed with a typed refusal and no Candidate |
 | `transaction --json` | emit the typed `transaction_proof: "ABSENT"`, `transaction_gate_eligible: false` receipt and exit 2; omitting `--json` also refuses |
@@ -46,8 +46,10 @@ continues until its actual predecessor admission and operator checkpoint.
 | `auth revoke` / `auth logout` | revoke the current server session; remove local credentials only after a matching acknowledgement |
 | `auth forget` | remove only the local credential copy; does not revoke server authority or remove request journals |
 | `tui` | read authenticated atomic operator snapshots, navigate missions/tasks/Attempts/Candidates/events/context, and detach with an exact reconnect subject |
-| `coding submit` | journal the exact `run_coding` envelope before POST using saved credentials. Requires `--account`, `--provider` ∈ `claude\|codex\|cursor\|antigravity`, and `--model`; optional `--idempotency-key` reuses the original journal on exact retry. Secret-bearing argument flags are retired. |
+| `coding submit` | journal the exact `run_coding` envelope before POST using saved credentials. Requires `--task <contract.json>`, `--account`, `--provider` ∈ `claude\|codex\|cursor\|antigravity`, and `--model`; optional `--effort` records the exact requested setting, and `--idempotency-key` reuses the original journal on exact retry. Secret-bearing argument flags are retired. |
 | `coding list` | discover this operator's durable command IDs and current phases after journal loss; `--after` resumes the returned cursor and `--limit` bounds each page to 1–100 commands |
+| `coding retry <id>` | resend only the exact saved journal, including a historical owned request; missing journal refuses without submitting |
+| `coding task <id>` | read accepted task/runtime selection, server task/run IDs and exact queue blockers from one authenticated snapshot; validate its payload digest even without a local journal |
 | `coding status <id>` | GET the same command subject using saved credentials; correlate kind and payload digest with its local journal when present |
 | `coding board` | fleet, sessions and outbox from one authenticated `/api/v1/operator-snapshot`; separate public health and optional `--command` observations. Empty fleet is zero lease rows. `--json` emits the observed projection objects. |
 | `coding watch` | poll the same board; `--interval-ms` must be ≥ 1 (`WATCH_INTERVAL_INVALID` otherwise). Not a coordinator fleet. |
@@ -72,7 +74,7 @@ produce explicit refusal instead of being overwritten.
 
 Submission prints a nonsecret journaled command ID before sending. After response
 loss, run `bullet coding status <id>` with the same state directory, or retry the
-exact input and idempotency key. Preserve the journal when the outcome is unknown.
+exact input and idempotency key, or use `bullet coding retry <id>`. Preserve the journal when the outcome is unknown.
 After local journal loss, `bullet coding list` discovers the current operator's
 durable commands. Follow `next_after` with `--after`, using the same authenticated
 state directory. Each page has its own atomic snapshot watermark; pages do not
@@ -259,24 +261,52 @@ Exit codes: `0` a receipt was written; `78` designed-neutral (missing input,
 namespaces unavailable, containment unavailable); `1` typed refusal (live
 admission enabled, binding/enrollment mismatch, fixture key, argv drift).
 
-## `coding submit` / `list` / `status` / `board` / `watch` / `harness-check` / `stop`
+## Advanced coding task controls
 
-Loopback farmd ingress for a durable `run_coding` command. This is not
-`dogfood read-only` (that compose still bypasses farmd and is Claude-only).
-It is not session steer, interrupt, or a coordinator fleet: Operating HOLD
-and farmd T4a remain open, and `coding stop` is `STOP_UNIMPLEMENTED`.
-`board` and `watch` read the existing farmd GET projections and print saturated
-status colors **plus** textual labels (`HOLD`, `LIVE`, `EXPIRED`, `UNKNOWN`).
-`NO_COLOR` or a non-TTY stdout disables ANSI. Reads other than `/health` need
-the `bullet_session` cookie (`SESSION_REQUIRED` without it).
+The intended default experience is a conversation about goals, progress and decisions
+with the head of the farm, shared across CLI, web and Slack. The durable task
+controls below are the advanced interface supporting that experience. Conversation
+coordination and Slack delivery are not yet implemented by this packet.
 
-The worker executes `run_coding` by spawning `bullet-runner` with
-operator-bound `BULLET_HARNESS_*` environment (workspace, lease socket,
-signed-in executable or Claude dogfood paths, `HOME`). Missing binding is
-`COMMAND_CODING_HARNESS_UNBOUND` and does not fall back to `SimAdapter` or
-`transaction_offline`. A finished coding child retains a
-`CODING_HARNESS_OBSERVATION` (`cost: UNPRICED`), not `COMPONENT_PROOF` and
-not Evidence.
+`coding submit` sends `bullet.run-coding.v2` through the existing authenticated
+`POST /api/v1/commands`. A task contract records the objective, exact repository
+and base commit, scope paths, acceptance criteria, immutable gate selectors,
+earlier accepted task dependencies, shared invocation/cost limits and deadline.
+The daemon derives the accepted task revision and run-tracking identities. A
+runtime selection records the explicit account, provider, model and nullable effort.
+
+Start from [the illustrative task contract](examples/coding-task.json), replacing
+its repository, commit and gate selectors with the intended admitted subjects.
+Those example IDs do not authorize access to a repository or provider.
+
+```bash
+bullet coding submit --task task.json --account "$BULLET_ACCOUNT_ID" \
+  --provider codex --model "$BULLET_MODEL_ID" --idempotency-key my-task-v1
+bullet coding task <command-id> --json
+bullet coding retry <command-id> --json
+```
+
+The task, dependency edges, run tracking, command ownership, outbox and submission
+audit commit together. Exact retry returns the original command current phase
+without admitting another invocation. Different task or runtime fields under the
+same key are an idempotency conflict. New caller-supplied launch nonces,
+reservations and allocated runners are refused; historical owned requests keep
+their exact retry/read semantics.
+
+Accepted intent stays queued while runnable binding admission is unavailable.
+`coding task` reports `CODING_BINDING_ADMISSION_UNAVAILABLE`, dependency evidence
+blockers and an expired deadline as applicable. Intent allocates no execution
+reservation, launch nonce, lease or legacy worker claim. Fresh expired deadlines,
+missing accepted dependencies and invocation-limit exhaustion have distinct typed
+refusals. This packet does not yet enforce aggregate monetary liabilities or
+connect runnable scheduling; its accepted limits remain constraints for that work.
+
+`board` and `watch` read atomic operator projections with textual status labels.
+`NO_COLOR` or non-TTY output disables ANSI. All work reads require the saved
+operator session. Legacy internal component fixtures still exercise the historical
+worker adapter; they do not establish the new task scheduling or provider path.
+Operating HOLD, native control completion and independent evidence admission remain
+open; `coding stop` continues to refuse with `STOP_UNIMPLEMENTED`.
 
 ## Daemons and process bins
 

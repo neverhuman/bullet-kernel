@@ -1,5 +1,6 @@
 //! First admission and immutable replay binding checks have separate purposes.
-use super::super::{authority, nonces, store};
+use super::super::{authority, coding_tasks, nonces, store};
+use bullet_application::coding_tasks::task_payload;
 use bullet_application::{
     plan_run_coding_admission, CodingAdmissionView, CommandRequest, LedgerError, RunCodingPayload,
     RUN_CODING_KIND,
@@ -12,6 +13,9 @@ pub(in crate::sqlite) fn verify_replay(
 ) -> Result<(), LedgerError> {
     if request.kind != RUN_CODING_KIND {
         return Ok(());
+    }
+    if task_payload(request)?.is_some() {
+        return coding_tasks::verify(conn, request);
     }
     let payload = RunCodingPayload::parse(&request.payload).map_err(store)?;
     let reservation: Option<(String, i64)> = conn
@@ -33,10 +37,17 @@ pub(in crate::sqlite) fn verify_replay(
 
 pub(super) fn admit_run_coding(
     tx: &Transaction<'_>,
+    fail_after: &mut Option<u8>,
     request: &CommandRequest,
+    operator: Option<&str>,
 ) -> Result<(), LedgerError> {
     if request.kind != RUN_CODING_KIND {
         return Ok(());
+    }
+    if let Some(payload) = task_payload(request)? {
+        let operator = operator
+            .ok_or(bullet_application::coding_tasks::CodingTaskRefusal::OperatorIngressRequired)?;
+        return coding_tasks::admit(tx, fail_after, operator, request, &payload);
     }
     let payload = RunCodingPayload::parse(&request.payload)?;
     let authority = authority::current(tx)?;

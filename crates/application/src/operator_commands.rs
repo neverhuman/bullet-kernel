@@ -33,6 +33,8 @@ pub enum OperatorCommandError {
     InvalidRequest,
     /// A globally existing key has no owner or belongs to another operator.
     OwnershipConflict,
+    /// New public coding submissions must contain task intent, not caller authority.
+    ObsoleteCodingShape,
     /// Invalid request or corrupt durable state; original reason is retained.
     Store(LedgerError),
 }
@@ -42,6 +44,7 @@ impl OperatorCommandError {
         match self {
             Self::InvalidRequest => "OPERATOR_COMMAND_REQUEST_INVALID",
             Self::OwnershipConflict => "COMMAND_OWNERSHIP_CONFLICT",
+            Self::ObsoleteCodingShape => "RUN_CODING_LEGACY_AUTHORITY_SHAPE_RETIRED",
             Self::Store(error) => error.reason_code(),
         }
     }
