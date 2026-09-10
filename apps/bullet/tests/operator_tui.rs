@@ -301,3 +301,49 @@ fn connecting_detach_does_not_wait_for_http_and_preserves_quoted_reconnect_subje
     assert!(!output.contains("RECONNECT_SUBJECT_ABSENT"));
     assert!(!output.contains("Synthetic PTY mission"));
 }
+
+#[test]
+fn connecting_status_chrome_and_palette_unknown_surfaces_stay_honest() {
+    let gate = Arc::new(AtomicBool::new(true));
+    let fixture = fixture::Fixture::start_with_gate(gate.clone());
+    let (mut console, _) = Console::start(fixture.directory.path(), None);
+    console.until("CONNECTING");
+    let first = console.parser.screen().contents();
+    assert!(first.contains("HOLD"));
+    assert!(first.contains("LIVE 0"));
+    assert!(first.contains("UNBOUND"));
+    assert!(first.contains("HEAD_RUNTIME_BINDING_REQUIRED"));
+    assert!(first.contains("STOP_UNIMPLEMENTED"));
+    assert!(!first.contains("VERIFIED"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fixture.reads.load(Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "fixture did not observe initial GET"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    console.until("refresh pending");
+    console.send(b"\x0b");
+    console.until("no ledger subject");
+    console.send(b"j".repeat(8).as_slice());
+    console.send(b"\r");
+    console.until("Mission Graph");
+    assert!(!console
+        .parser
+        .screen()
+        .contents()
+        .contains("Synthetic PTY mission"));
+    gate.store(false, Ordering::SeqCst);
+    console.until("OBSERVED");
+    console.until("Synthetic PTY mission");
+    console.send(b"J");
+    console.until("raw JSON");
+    console.send(b"?");
+    console.until("STOP_UNIMPLEMENTED");
+    console.detach();
+    let output = String::from_utf8_lossy(&console.output);
+    assert!(output.contains("DETACHED: durable work continues."));
+    assert!(!output.contains("ses_"));
+    assert!(!output.contains("csrf_"));
+}

@@ -114,14 +114,21 @@ These reads do not open a local ledger. For legacy component inspection, supply
 `mission status --data-dir <directory> --mission <id>`; local mode rejects
 `--state-dir`, `--farmd` and `--json`. Materialization remains a local helper.
 
-The TUI uses Ctrl+K for navigation, Tab for panes, arrows or j/k for selection,
-Enter for details, Escape for back, `?` for help, and `r` for refresh. Ctrl+C
-detaches and prints a reconnect command; it does not cancel work. Selection stays
-bound to a subject across updates. Failed or regressing snapshots retain previous
-data with STALE/UNKNOWN. `NO_COLOR` preserves text labels without color;
-`--once`, redirected output and `TERM=dumb` use a plain snapshot. Current TUI
-updates are polled GETs. Native controls, exact queue blockers and approval
-mutations remain separate unfinished backend/UI obligations.
+The TUI uses Ctrl+K for a jump list of Portal surface titles (six unknown
+surfaces stay `no ledger subject` and do not invent a view), Tab for panes,
+arrows or j/k for selection, Enter for details, Escape for back, `?` for help,
+`r` for one snapshot refresh, and `J` to toggle raw JSON in the detail pane.
+Ctrl+C detaches and prints a reconnect command; it does not cancel work
+(`STOP_UNIMPLEMENTED`). The status line is text-first: `HOLD`, `LIVE n` from
+snapshot lease liveness, `UNBOUND`, `HEAD_RUNTIME_BINDING_REQUIRED`,
+`CONNECTING` / `OBSERVED` / `STALE`, and `refresh pending` while a GET waits.
+Empty views say zero rows, not a green fleet. Selection stays bound to a subject
+across updates. Failed or regressing snapshots retain previous data with typed
+`STALE` / `FARMD_SNAPSHOT_REGRESSED` / `UNKNOWN`. `NO_COLOR` preserves every
+label without color; `--once`, redirected output and `TERM=dumb` use a plain
+snapshot. Current TUI updates are polled GETs. Native controls, exact queue
+blockers and approval mutations remain separate unfinished backend/UI
+obligations.
 
 ## Durable conversation API
 

@@ -34,7 +34,10 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     let directory = crate::auth::state_dir(args.state_dir)?;
     let credentials = crate::auth::store::CredentialStore::read_credentials(&directory)?
         .ok_or("AUTH_REQUIRED: run bullet auth login")?;
-    let mut state = model::Model::default();
+    let mut state = model::Model {
+        destination: crate::client::terminal_text(&credentials.farmd),
+        ..model::Model::default()
+    };
     let mut reconnect = args.subject;
     if args.once
         || !std::io::stdout().is_terminal()
@@ -75,9 +78,11 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         .map_err(|_| "TUI_REFRESH_UNAVAILABLE")?;
     let mut next_refresh = Instant::now() + Duration::from_secs(2);
     let mut pending = true;
+    state.refresh_pending = true;
     loop {
         if let Ok(snapshot) = response_rx.try_recv() {
             pending = false;
+            state.refresh_pending = false;
             state.update(snapshot);
             if state.snapshot.is_some() {
                 if let Some(subject) = reconnect.take() {
@@ -90,8 +95,10 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
                 .try_send(())
                 .map_err(|_| "TUI_REFRESH_UNAVAILABLE")?;
             pending = true;
+            state.refresh_pending = true;
             next_refresh = Instant::now() + Duration::from_secs(2);
         }
+        state.refresh_pending = pending;
         terminal
             .draw(|frame| ui::draw(frame, &mut state, color))
             .map_err(|_| "TUI_DRAW_FAILED")?;
@@ -114,6 +121,7 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         }
         match key.code {
             KeyCode::Char('?') => state.help = !state.help,
+            KeyCode::Char('J') => state.raw_json = !state.raw_json,
             KeyCode::Esc => state.back(),
             KeyCode::Tab | KeyCode::BackTab => state.details_focus = !state.details_focus,
             KeyCode::Up | KeyCode::Char('k') => state.step(-1),
