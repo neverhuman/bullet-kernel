@@ -23,13 +23,23 @@ pub(crate) fn admit_token(
     token: &Value,
     params: &Value,
 ) -> Result<Value, RunnerError> {
+    let socket = env::var_os(ENV_SOCKET).map(PathBuf::from);
+    admit_token_with_socket(method, token, params, socket.as_deref())
+}
+
+fn admit_token_with_socket(
+    method: &str,
+    token: &Value,
+    params: &Value,
+    socket: Option<&Path>,
+) -> Result<Value, RunnerError> {
     let Some(operation) = mutation_operation(method) else {
         return Ok(token.clone());
     };
-    let Some(socket) = env::var_os(ENV_SOCKET).map(PathBuf::from) else {
+    let Some(socket) = socket else {
         return Ok(token.clone());
     };
-    let permit = mint_kernel_permit(&socket, operation, token, params)?;
+    let permit = mint_kernel_permit(socket, operation, token, params)?;
     Ok(attach_kernel_permit(token.clone(), permit))
 }
 
@@ -40,7 +50,8 @@ fn mutation_operation(method: &str) -> Option<&'static str> {
         "checkpoint" => Some("checkpoint"),
         "prepare_candidate" => Some("prepare-candidate"),
         "preserve" => Some("preserve-workspace"),
-        "cleanup" => Some("cleanup-workspace"),
+        // Paired gitd validates the sealed preservation receipt for cleanup
+        // after terminal release; no live-lease permit may be minted here.
         _ => None,
     }
 }
@@ -199,4 +210,37 @@ struct MintBody {
 #[derive(Deserialize)]
 struct MintReply {
     kernel_permit: Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receipt_cleanup_does_not_mint_a_live_lease_permit() {
+        let dir = tempfile::tempdir().expect("fixture directory");
+        let absent_socket = dir.path().join("absent-authority.sock");
+        let token = serde_json::json!({"fixture": "authority"});
+        let params = serde_json::json!({"fixture": "sealed-receipt"});
+        assert_eq!(
+            admit_token_with_socket("cleanup", &token, &params, Some(&absent_socket))
+                .expect("cleanup delegates sealed receipt admission to gitd"),
+            token
+        );
+        for method in [
+            "clone",
+            "apply_proposal",
+            "apply_change",
+            "checkpoint",
+            "prepare_candidate",
+            "preserve",
+        ] {
+            assert_eq!(
+                admit_token_with_socket(method, &token, &params, Some(&absent_socket))
+                    .expect_err("ordinary mutation still needs the Kernel permit")
+                    .reason_code(),
+                "IO_FAILED"
+            );
+        }
+    }
 }
