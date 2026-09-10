@@ -135,6 +135,12 @@ cleanup() { rm -rf -- "$test_root"; }
 trap cleanup EXIT
 mkdir -m 0700 -- "$test_root/bin"
 
+# Hosted ripgrep lives outside /usr/bin. Preserve that admitted tool in the
+# restricted child PATH so this case reaches the intended missing-Gitd guard.
+require_tool rg || exit 1
+rg_bin="$(command -v rg)"
+ln -s -- "$rg_bin" "$test_root/bin/rg"
+
 # The generated shim expands the marker when it runs, not while it is written.
 # shellcheck disable=SC2016
 printf '%s\n' \
