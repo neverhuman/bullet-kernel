@@ -13,7 +13,7 @@ fn only_proxy_composition_shares_the_existing_network_namespace() {
     fs::set_permissions(&clone_directory, fs::Permissions::from_mode(0o700)).unwrap();
     fs::set_permissions(&scratch_directory, fs::Permissions::from_mode(0o700)).unwrap();
     let prepared = FilesystemSandboxProfileV0::new(
-        admitted("/usr/bin/bwrap"),
+        admitted("/usr/bin/false"),
         admitted("/usr/bin/false"),
         clone_directory,
         admitted("/etc/hosts"),

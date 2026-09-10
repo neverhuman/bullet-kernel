@@ -212,7 +212,7 @@ and farmd T4a remain open, and `coding stop` is `STOP_UNIMPLEMENTED`.
 `board` and `watch` read the existing farmd GET projections and print saturated
 status colors **plus** textual labels (`HOLD`, `LIVE`, `EXPIRED`, `UNKNOWN`).
 `NO_COLOR` or a non-TTY stdout disables ANSI. Reads other than `/health` need
-the `bullet_session` cookie (see [`operator-reads.md`](operator-reads.md)).
+the `bullet_session` cookie (`SESSION_REQUIRED` without it).
 
 The worker executes `run_coding` by spawning `bullet-runner` with
 operator-bound `BULLET_HARNESS_*` environment (workspace, lease socket,
