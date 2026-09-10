@@ -167,6 +167,61 @@ fn settled_retry_after_concurrent_append_and_empty_cache_reopen_preserves_messag
     let changed = request("lost-response", None, "Substituted goal");
     assert!(reopened.submit_operator_command(&owner, &changed).is_err());
     assert_eq!(counts(&reopened), before);
+
+    // New immutable conversation tables must survive real backup and restore,
+    // while the restored copy still requires independent authority admission.
+    let backup = directory.path().join("backup.sqlite");
+    let backup_receipt = crate::sqlite::backup::create_backup(&path, &backup).unwrap();
+    let restored = directory.path().join("restored.sqlite");
+    let restore_receipt =
+        crate::sqlite::backup::restore_backup(&backup, &backup_receipt, &restored).unwrap();
+    assert!(restore_receipt.pending_authority_admission);
+    assert_eq!(
+        restore_receipt.previous_restore_epoch,
+        backup_receipt.restore_epoch
+    );
+    assert_eq!(
+        restore_receipt.restore_epoch,
+        backup_receipt.restore_epoch + 1
+    );
+    let copy = rusqlite::Connection::open_with_flags(
+        &restored,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    for (table, order) in [
+        ("conversations", "conversation_id"),
+        ("conversation_messages", "message_id"),
+        ("conversation_head_requests", "turn_id"),
+        ("commands", "id"),
+        ("operator_command_ownership", "command_id"),
+        ("outbox", "seq"),
+        ("events", "seq"),
+    ] {
+        let rows = |connection: &rusqlite::Connection| {
+            let mut statement = connection
+                .prepare(&format!("SELECT * FROM {table} ORDER BY {order}"))
+                .unwrap();
+            let width = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    (0..width)
+                        .map(|column| row.get::<_, rusqlite::types::Value>(column))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert_eq!(rows(&reopened.conn), rows(&copy), "{table}");
+    }
+    drop(copy);
+    assert!(SqliteLedger::open(&restored)
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("RESTORE_ADMISSION_REQUIRED"));
+    assert_eq!(counts(&reopened), before);
 }
 
 #[test]

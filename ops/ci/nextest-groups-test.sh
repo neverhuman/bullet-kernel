@@ -412,4 +412,4 @@ cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --profile fast \
 
 rg -Fxq 'bash ops/ci/nextest-groups-test.sh' ops/ci/lint.sh \
   || { refuse NEXTEST_SCHEMA_GROUP_ROUTING_MISSING ops/ci/lint.sh; exit 1; }
-log 'nextest controls passed: 23 serialized migrations and five bounded receipt hostiles'
+log 'nextest controls passed: 26 serialized migrations and five bounded receipt hostiles'

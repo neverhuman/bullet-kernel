@@ -109,7 +109,7 @@ fn supported_prefix_backup_preserves_sources_and_restores_quarantined() {
         let inspected = migrations::inspect_existing(&copy, false).unwrap();
         assert_eq!(
             inspected.schema_state(),
-            migrations::SchemaState::UpgradeRequired { from: 22, to: 26 }
+            migrations::SchemaState::UpgradeRequired { from: 22, to: 27 }
         );
         assert_eq!(receipt.schema_digest, inspected.schema_digest());
         assert_ne!(receipt.schema_digest, migrations::schema_contract_digest());
