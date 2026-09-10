@@ -1,7 +1,10 @@
 //! Crash-retained command claim and component receipt custody.
 
 use super::error::{WorkerContext, WorkerError};
-use bullet_application::{CommandDispatchClaim, CommandDispatchDisposition};
+use bullet_application::{
+    CommandDispatchClaim, CommandDispatchDisposition, CommandRequest, RunCodingPayload,
+    RUN_CODING_KIND, RUN_DEMO_KIND,
+};
 use bullet_domain::Digest;
 use bullet_harness_core::launch_grant::canonical_json;
 use serde::{Deserialize, Serialize};
@@ -69,8 +72,7 @@ impl WorkerState {
             .worker("COMMAND_STATE_INVALID", "canonicalize retained claim")?;
         if self.schema_version != STATE_SCHEMA
             || self.claim.disposition != CommandDispatchDisposition::Claimed
-            || self.claim.request.kind != "run_demo"
-            || self.claim.request.payload != "{}"
+            || !claim_kind_is_admitted(&self.claim.request)
             || self.claim_blake3 != format!("blake3:{}", Digest::of(&canonical).to_hex())
             || !lower_hex(&self.binary_manifest_sha256)
             || self
@@ -404,6 +406,14 @@ fn sync_dir(path: &Path) -> Result<(), WorkerError> {
         .worker("COMMAND_STATE_WRITE_FAILED", "open state directory")?
         .sync_all()
         .worker("COMMAND_STATE_WRITE_FAILED", "sync state directory")
+}
+
+fn claim_kind_is_admitted(request: &CommandRequest) -> bool {
+    match request.kind.as_str() {
+        RUN_DEMO_KIND => request.payload == "{}",
+        RUN_CODING_KIND => RunCodingPayload::parse(&request.payload).is_ok(),
+        _ => false,
+    }
 }
 
 fn lower_hex(value: &str) -> bool {

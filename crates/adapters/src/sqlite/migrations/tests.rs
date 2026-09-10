@@ -53,8 +53,10 @@ fn unsupported(result: Result<SqliteLedger, LedgerError>) -> LedgerError {
     assert_eq!(error.reason_code(), "UNSUPPORTED_SCHEMA");
     assert!(matches!(error, LedgerError::UnsupportedSchema { .. }));
     let message = error.to_string();
-    assert!(message.contains("Export any data you need"));
-    assert!(message.contains("removing the database file"));
+    assert!(message.contains("Preserve the database"));
+    assert!(message.contains("qualified supervised upgrade or verified backup/restore"));
+    assert!(message.contains("startup never rewrites an unsupported schema"));
+    assert!(!message.contains("removing the database file"));
     error
 }
 

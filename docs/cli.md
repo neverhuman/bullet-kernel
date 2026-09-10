@@ -1,16 +1,17 @@
 # `bullet` CLI reference
 
-Status: committed surface at HEAD `7c2dfac8`
+Status: current source components; not an installed or release-qualified operator workflow
 Owner: Bullet Farm maintainers
-Last reviewed: 2026-09-08
-Source of truth: `apps/bullet/src/{main,transaction,authority,provider,maintenance,contracts}.rs`,
-`apps/bullet/src/authority/mint.rs`, and the process-bin `main.rs` files below.
-<!-- bullet-doc-review:v1 subject=8538df6746bef347cb089cda6f65a0f62153fb42 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
+Last reviewed: 2026-09-10
+Source of truth: `apps/bullet/src/{main,auth,client,coding,tui,transaction,authority,provider,maintenance,contracts}.rs`,
+their supporting modules, `apps/bullet/src/authority/mint.rs`, and the process-bin sources below.
+<!-- bullet-doc-review:v1 subject=b9d39619dcbc9f19ef2017eff57a55d19b1bfea5 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
 
-Every command is offline except the guarded `provider live-conformance` path.
-Every current production adapter refuses at runtime observation before it can
-read the operator key, mutate graph/lease/nonce authority, prepare egress, or
-spawn a provider. Nothing here produces `LIVE_PROOF` or `RELEASE_PROOF`.
+`auth`, `coding` and `tui` consume the loopback daemon. The local ledger helpers
+and guarded provider qualification paths remain separate. The operator controls
+below have component proofs; they do not establish installed provider execution,
+independent verification, integration or release acceptance. Operating HOLD
+continues until its actual predecessor admission and operator checkpoint.
 
 ## Environment
 
@@ -25,20 +26,72 @@ spawn a provider. Nothing here produces `LIVE_PROOF` or `RELEASE_PROOF`.
 | Command | Effect |
 | --- | --- |
 | `farm init` | on Linux, admit/create a self-owned non-symlink 0700 `<data-dir>`, create `ledger.sqlite`, and run migrations; other platforms refuse |
-| `farm backup --database <existing> --output <absent> --receipt <absent>` | private recovered SQLite snapshot with authentic schema-22/23, foreign-key and integrity checks, then a separate unsigned BLAKE3 receipt; a receipt failure can leave an unusable orphan snapshot |
+| `farm backup --database <existing> --output <absent> --receipt <absent>` | private recovered SQLite snapshot with authentic schema-22/23/24/25, foreign-key and integrity checks, then a separate unsigned BLAKE3 receipt; a receipt failure can leave an unusable orphan snapshot |
 | `farm reap --database <existing>` | reclaim every writer lease already expired in the offline database; running farmd performs the same maintenance on its own tick |
-| `farm restore --backup <snapshot> --receipt <receipt> --destination <absent>` | verify exact receipt-bound schema-22/23 bytes, preserve schema/authority, advance the restore epoch, publish to an absent destination and read back; the result stays quarantined (normal open refuses) |
+| `farm restore --backup <snapshot> --receipt <receipt> --destination <absent>` | verify exact receipt-bound schema-22/23/24/25 bytes, preserve schema/authority, advance the restore epoch, publish to an absent destination and read back; the result stays quarantined (normal open refuses) |
 | `demo` | deterministic ledger simulation; writes `<data-dir>/receipts.json`; fails on its own safety checks and unless Candidate/Evidence/Effect all remain unproduced |
 | `demo-synthetic [--target <origin repo>]` | simulator-only integration scaffold; while production authority is unavailable it exits failed with a typed refusal and no Candidate |
 | `transaction --json` | emit the typed `transaction_proof: "ABSENT"`, `transaction_gate_eligible: false` receipt and exit 2; omitting `--json` also refuses |
-| `contracts generate` | regenerate `contracts/generated/api.ts` from `contracts/openapi.yaml` |
-| `contracts check` | fail when the generated TypeScript is stale (gates the fast lane) |
+| `contracts generate` | regenerate TypeScript, Rust models and JSON Schema together from `contracts/openapi.yaml` |
+| `contracts check` | fail when any generated TypeScript, Rust or JSON Schema output is stale |
 | `authority keygen` | create the operator launch-grant signing key; see below |
 | `authority mint-launch-grant` | mint one signed launch grant from the durable active lease; see below |
 | `provider live-conformance` | run the guarded 13-step live path for one provider; see below |
 | `mission materialize` / `mission status` | materialize one plan revision into the local ledger (same seed + input replays the same ids; same seed + different input refuses) / print the stored graph for one mission |
 | `run show` / `run print-preimages` | verify and render one run receipt (recomputes the body digest; follows the embedded selection-receipt chain link) / emit BLAKE3 preimages for paths at an exact base commit; see below |
 | `dogfood read-only` | one contained read-only dogfood compose under ADR 0015; not a release profile, not live-conformance; see below |
+| `auth login` | exchange one-time bootstrap using hidden input, or `--stdin`; save private credentials for the selected loopback `--farmd` and exact allowed `--origin` |
+| `auth status` | check the saved session against the daemon and show nonsecret operator/session IDs and expiry |
+| `auth revoke` / `auth logout` | revoke the current server session; remove local credentials only after a matching acknowledgement |
+| `auth forget` | remove only the local credential copy; does not revoke server authority or remove request journals |
+| `tui` | read authenticated atomic operator snapshots, navigate missions/tasks/Attempts/Candidates/events/context, and detach with an exact reconnect subject |
+| `coding submit` | journal the exact `run_coding` envelope before POST using saved credentials. Requires `--account`, `--provider` ∈ `claude\|codex\|cursor\|antigravity`, and `--model`; optional `--idempotency-key` reuses the original journal on exact retry. Secret-bearing argument flags are retired. |
+| `coding list` | discover this operator's durable command IDs and current phases after journal loss; `--after` resumes the returned cursor and `--limit` bounds each page to 1–100 commands |
+| `coding status <id>` | GET the same command subject using saved credentials; correlate kind and payload digest with its local journal when present |
+| `coding board` | fleet, sessions and outbox from one authenticated `/api/v1/operator-snapshot`; separate public health and optional `--command` observations. Empty fleet is zero lease rows. `--json` emits the observed projection objects. |
+| `coding watch` | poll the same board; `--interval-ms` must be ≥ 1 (`WATCH_INTERVAL_INVALID` otherwise). Not a coordinator fleet. |
+| `coding harness-check` | report `BULLET_HARNESS_*` PRESENT/ABSENT without spawning a provider. Exit 2 when unbound (`COMMAND_CODING_HARNESS_UNBOUND`). |
+| `coding stop` | typed `STOP_UNIMPLEMENTED` and exit 2; does not SIGKILL a provider |
+
+## Operator client custody and recovery
+
+Run `bullet auth login` and `bullet tui` through SSH on xbabe2. Browser access
+uses an SSH forward to the packaged Portal once installation is qualified.
+Current source functionality does not establish that installation. Authentication
+defaults to `http://127.0.0.1:7420`; the selected Origin must equal the daemon's
+allowed Origin. HTTP destinations must be explicit numeric loopback addresses.
+
+The default private directory is `$XDG_STATE_HOME/bullet/operator`, falling back
+to `$HOME/.local/state/bullet/operator`. `--state-dir` selects another absolute
+private directory for auth, coding and TUI commands. Its owner-only credentials
+are serialized with a file lock, validated through directory descriptors and
+fsynced before acknowledgement. Do not obtain bootstrap credentials from logs or
+pass them as command arguments. Existing, corrupt, linked or displaced files
+produce explicit refusal instead of being overwritten.
+
+Submission prints a nonsecret journaled command ID before sending. After response
+loss, run `bullet coding status <id>` with the same state directory, or retry the
+exact input and idempotency key. Preserve the journal when the outcome is unknown.
+After local journal loss, `bullet coding list` discovers the current operator's
+durable commands. Follow `next_after` with `--after`, using the same authenticated
+state directory. Each page has its own atomic snapshot watermark; pages do not
+form one cross-page snapshot. Historical commands without a recorded operator
+owner are not adopted. Discovery performs GETs and does not resubmit work.
+
+The journal contains the request and destination, not session credentials. A
+different input or endpoint for an existing key is a conflict. Human output
+separates the server phase from independently unchecked receipt verification;
+terminal control sequences in untrusted data are escaped. Explicit JSON output
+preserves its value while escaping unsafe terminal characters.
+
+The TUI uses Ctrl+K for navigation, Tab for panes, arrows or j/k for selection,
+Enter for details, Escape for back, `?` for help, and `r` for refresh. Ctrl+C
+detaches and prints a reconnect command; it does not cancel work. Selection stays
+bound to a subject across updates. Failed or regressing snapshots retain previous
+data with STALE/UNKNOWN. `NO_COLOR` preserves text labels without color;
+`--once`, redirected output and `TERM=dumb` use a plain snapshot. Current TUI
+updates are polled GETs. Native controls, exact queue blockers and approval
+mutations remain separate unfinished backend/UI obligations.
 
 ## `authority keygen`
 
@@ -197,12 +250,42 @@ Exit codes: `0` a receipt was written; `78` designed-neutral (missing input,
 namespaces unavailable, containment unavailable); `1` typed refusal (live
 admission enabled, binding/enrollment mismatch, fixture key, argv drift).
 
+## `coding submit` / `list` / `status` / `board` / `watch` / `harness-check` / `stop`
+
+Loopback farmd ingress for a durable `run_coding` command. This is not
+`dogfood read-only` (that compose still bypasses farmd and is Claude-only).
+It is not session steer, interrupt, or a coordinator fleet: Operating HOLD
+and farmd T4a remain open, and `coding stop` is `STOP_UNIMPLEMENTED`.
+`board` and `watch` read the existing farmd GET projections and print saturated
+status colors **plus** textual labels (`HOLD`, `LIVE`, `EXPIRED`, `UNKNOWN`).
+`NO_COLOR` or a non-TTY stdout disables ANSI. Reads other than `/health` need
+the `bullet_session` cookie (`SESSION_REQUIRED` without it).
+
+The worker executes `run_coding` by spawning `bullet-runner` with
+operator-bound `BULLET_HARNESS_*` environment (workspace, lease socket,
+signed-in executable or Claude dogfood paths, `HOME`). Missing binding is
+`COMMAND_CODING_HARNESS_UNBOUND` and does not fall back to `SimAdapter` or
+`transaction_offline`. A finished coding child retains a
+`CODING_HARNESS_OBSERVATION` (`cost: UNPRICED`), not `COMPONENT_PROOF` and
+not Evidence.
+
 ## Daemons and process bins
+
+`bullet-farmd --provision-bootstrap-token <absolute-path>`
+creates a bootstrap token in an absent file and exits. Its existing parent must
+be owned by the current user with mode 0700; the created file has mode 0600.
+Provisioning cannot be combined with startup flags. It refuses symlinks and
+existing files and never prints the token.
+Normal startup accepts that file with `--bootstrap-token-file <absolute-path>`;
+it requires an owned, single-link, mode-0600 regular file below an admitted
+private parent. Without this flag, new bootstrap exchanges are disabled while
+existing durable sessions remain usable. Deliver the token privately to
+`bullet auth login`; it is consumed once and is never recovered from logs.
 
 | Binary | Flags | Notes |
 | --- | --- | --- |
 | `bullet-farmd` | `--data-dir` (default `./target/demo`), `--bind` (default `127.0.0.1:7420`; non-loopback refused), `--portal-origin <exact loopback origin>`, `--worker-token-file <protected file>`, `--reap-interval-ms <1..=500>`, `--lease-transport-socket <abs>` with durable `--lease-peer-registry` + `--lease-transport-key` (0700 parent, 0600 key); debug builds also expose `--fixture-lease-peer-registration <runner:epoch>` | routes in [`README.md`](../README.md#farmd-routes); the internal reconciler is inert without the worker token; the socket refuses without durable local registry/key (or the debug-only fixture) |
-| `bullet-runner` | `--lease-socket`, `--farmd-uid`, `--socket-gid`, `--lease-recovery` admit `SignedLeaseRpcClient::new_admitted`; missing any lease input returns typed `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE`; explicit Candidate request/key, workspace/preservation, source/base, identity, scope/gates and idempotency inputs are also required; `--provider` accepts `sim`, `claude`, `codex` and `cursor`, and a real provider requires the `--dogfood-*` admission inputs and a positive `--dogfood-max-budget-usd`, refusing `PROVIDER_ADMISSION_INCOMPLETE` before any other admission rather than degrading to the simulator | HTTP `/v1/leases/*` stays unmounted; `HttpLeaseClient` remains unreachable |
+| `bullet-runner` | `--lease-socket`, `--farmd-uid`, `--socket-gid`, `--lease-recovery` admit `SignedLeaseRpcClient::new_admitted`; missing any lease input returns typed `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE`; explicit Candidate request/key, workspace/preservation, source/base, identity, scope/gates and idempotency inputs are also required; `--provider` accepts `sim`, `claude`, `codex`, `cursor`, `agy`, and `antigravity`. `claude` still requires the `--dogfood-*` admission inputs and a positive `--dogfood-max-budget-usd`. `codex`/`cursor`/`agy`/`antigravity` require `--signed-in-executable` and `--model` and never construct `SimAdapter`. Incomplete admission is `PROVIDER_ADMISSION_INCOMPLETE` | HTTP `/v1/leases/*` stays unmounted; `HttpLeaseClient` remains unreachable |
 | `bullet-verifier` | arguments are ignored | always refuses before reading stdin with `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE`; emits no evidence |
 | `bullet-verifier-fixture` | non-default `fixture-executor` feature; `--stdin` fixture JSON | credential-free component-test executor; output is explicitly `COMPONENT_PROOF`, `UNSIGNED_FIXTURE`, and ineligible for independent Evidence |
 | `bullet-effects` | no arguments, or `serve <durable-queue-dir>` | no arguments run a component `LocalBareForge` loss/reconciliation demo; `serve` processes at most one UNKNOWN job to `QUARANTINED` and reports `live_forge_success:false` |

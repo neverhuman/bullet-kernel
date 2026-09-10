@@ -133,6 +133,42 @@ fn same_claim_partial_initialization_is_recovered_without_deletion() {
 }
 
 #[test]
+fn run_coding_claim_is_retained_and_unknown_kind_is_refused() {
+    use bullet_application::RUN_CODING_KIND;
+    use bullet_domain::RunnerId;
+    let (_temp, coding_store) = store();
+    let nonce = "ab".repeat(32);
+    let payload = serde_json::json!({
+        "account_id": "acct-local",
+        "provider": "claude",
+        "model": "claude-opus-4-6",
+        "expected_revision": 1,
+        "launch_nonce": nonce,
+        "quota_reservation": format!("rsv_{}", "cd".repeat(32)),
+        "quota_units": 1,
+        "allocated_run": RunnerId::from_seed("coding-worker").to_string(),
+    });
+    let request = CommandRequest::new("coding-worker", RUN_CODING_KIND, &payload).unwrap();
+    let mut claim = claim_for("coding-worker");
+    claim.request = request.clone();
+    claim.command_id = request.id();
+    claim.request_digest = request.digest();
+    let state = coding_store.begin(claim, &"b".repeat(64)).unwrap();
+    assert_eq!(state.claim.request.kind, RUN_CODING_KIND);
+
+    let (_other, empty) = store();
+    let mut bad = claim_for("unknown-kind");
+    bad.request =
+        CommandRequest::new("unknown-kind", "not_admitted", &serde_json::json!({})).unwrap();
+    bad.command_id = bad.request.id();
+    bad.request_digest = bad.request.digest();
+    assert_eq!(
+        empty.begin(bad, &"b".repeat(64)).unwrap_err().code(),
+        "COMMAND_STATE_INVALID"
+    );
+}
+
+#[test]
 fn run_demo_payload_is_exact_and_never_ignored() {
     let (_temp, store) = store();
     let mut claim = claim_for("payload-command");

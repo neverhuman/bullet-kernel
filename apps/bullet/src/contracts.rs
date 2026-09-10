@@ -1,6 +1,8 @@
 //! Deterministic TypeScript generation from `contracts/openapi.yaml`.
 //! The YAML is the source of truth; `check` regenerates in memory and diffs.
 
+mod rust;
+
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 use std::collections::BTreeSet;
@@ -15,6 +17,7 @@ const RUNTIME_SCHEMA_ID: &str = "https://bullet.farm/schemas/public-api-runtime-
 const RUNTIME_SCHEMA_ROOTS: &[&str] = &[
     "AuditView",
     "BootstrapResponse",
+    "CommandDiscoveryView",
     "CommandStatus",
     "ContextLineageView",
     "EventEnvelope",
@@ -23,10 +26,13 @@ const RUNTIME_SCHEMA_ROOTS: &[&str] = &[
     "MergeRailView",
     "Mission",
     "MissionView",
+    "OperatorSessionView",
+    "OperatorSnapshotView",
     "OutboxView",
     "Problem",
     "QualityLabView",
     "ReadyView",
+    "SessionRevocationView",
     "SessionSupervisorView",
 ];
 const COMPONENT_REF_PREFIX: &str = "#/components/schemas/";
@@ -46,6 +52,11 @@ pub fn generate() -> Result<(), String> {
     std::fs::write(&out_path, rendered)
         .map_err(|err| format!("write {}: {err}", out_path.display()))?;
     println!("contracts generate: wrote {}", out_path.display());
+    for (name, content) in rust::artifacts()? {
+        std::fs::write(repo_root().join("contracts/generated").join(name), content)
+            .map_err(|_| format!("write generated {name}"))?;
+        println!("contracts generate: wrote {name}");
+    }
     Ok(())
 }
 
@@ -66,7 +77,17 @@ pub fn check() -> Result<(), String> {
              run `cargo run -p bullet -- contracts generate`"
         ));
     }
-    println!("contracts check: up to date");
+    for (name, expected) in rust::artifacts()? {
+        let current =
+            std::fs::read_to_string(repo_root().join("contracts/generated").join(name))
+                .map_err(|_| format!("read generated {name}; run bullet contracts generate"))?;
+        if current != expected {
+            return Err(format!(
+                "contracts/generated/{name} is stale; run bullet contracts generate"
+            ));
+        }
+    }
+    println!("contracts check: TypeScript, Rust and JSON Schema up to date");
     Ok(())
 }
 

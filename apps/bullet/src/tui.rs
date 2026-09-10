@@ -1,0 +1,140 @@
+//! The operator console is a consumer of the same atomic snapshot as the Portal.
+
+mod model;
+mod ui;
+
+use clap::Args;
+use std::path::PathBuf;
+
+#[derive(Args)]
+pub(crate) struct TuiArgs {
+    /// Private credentials saved by bullet auth login.
+    #[arg(long)]
+    state_dir: Option<PathBuf>,
+    /// Reconnect to an exact mission, task, Attempt, Candidate, or event subject.
+    #[arg(long)]
+    subject: Option<String>,
+    /// Print a single plain-text snapshot and exit.
+    #[arg(long)]
+    once: bool,
+}
+
+#[cfg(not(unix))]
+pub(crate) fn run(_args: TuiArgs) -> Result<(), String> {
+    Err("TUI_PRIVATE_STORE_UNSUPPORTED".into())
+}
+
+#[cfg(unix)]
+pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use std::io::IsTerminal;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let directory = crate::auth::state_dir(args.state_dir)?;
+    let credentials = crate::auth::store::CredentialStore::open(&directory)?
+        .load()?
+        .ok_or("AUTH_REQUIRED: run bullet auth login")?;
+    let mut state = model::Model::default();
+    state.update(crate::client::operator_snapshot(&credentials));
+    if let Some(subject) = args.subject {
+        state.reconnect(&subject);
+    }
+    if args.once
+        || !std::io::stdout().is_terminal()
+        || std::env::var("TERM").as_deref() == Ok("dumb")
+    {
+        println!("{}", state.plain());
+        return state.error.map_or(Ok(()), Err);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err("TUI_TERMINAL_REQUIRED: use --once".into());
+    }
+    let (request_tx, request_rx) = mpsc::sync_channel::<()>(1);
+    let (response_tx, response_rx) = mpsc::sync_channel(1);
+    // This thread only performs GETs; dropping the client never cancels farm work.
+    std::thread::spawn(move || {
+        while request_rx.recv().is_ok() {
+            if response_tx
+                .send(crate::client::operator_snapshot(&credentials))
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    let mut terminal = ratatui::try_init().map_err(|_| "TUI_TERMINAL_UNAVAILABLE")?;
+    let _restore = RestoreTerminal;
+    let color = std::env::var_os("NO_COLOR").is_none();
+    let mut next_refresh = Instant::now() + Duration::from_secs(2);
+    let mut pending = false;
+    loop {
+        if let Ok(snapshot) = response_rx.try_recv() {
+            pending = false;
+            state.update(snapshot);
+        }
+        if !pending && Instant::now() >= next_refresh {
+            request_tx
+                .try_send(())
+                .map_err(|_| "TUI_REFRESH_UNAVAILABLE")?;
+            pending = true;
+            next_refresh = Instant::now() + Duration::from_secs(2);
+        }
+        terminal
+            .draw(|frame| ui::draw(frame, &mut state, color))
+            .map_err(|_| "TUI_DRAW_FAILED")?;
+        if !event::poll(Duration::from_millis(100)).map_err(|_| "TUI_INPUT_FAILED")? {
+            continue;
+        }
+        let Event::Key(key) = event::read().map_err(|_| "TUI_INPUT_FAILED")? else {
+            continue;
+        };
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            break;
+        }
+        if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            state.palette = !state.palette;
+            state.palette_selection = 0;
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('?') => state.help = !state.help,
+            KeyCode::Esc => state.back(),
+            KeyCode::Tab | KeyCode::BackTab => state.details_focus = !state.details_focus,
+            KeyCode::Up | KeyCode::Char('k') => state.step(-1),
+            KeyCode::Down | KeyCode::Char('j') => state.step(1),
+            KeyCode::Enter => state.enter(),
+            KeyCode::Char('r') if !pending => next_refresh = Instant::now(),
+            _ => (),
+        }
+    }
+    drop(request_tx);
+    ratatui::restore();
+    let subject = state
+        .selected_id
+        .as_deref()
+        .map(crate::client::terminal_text)
+        .unwrap_or_default();
+    let path = crate::client::terminal_text(&directory.to_string_lossy()).replace('\'', "'\\''");
+    println!(
+        "DETACHED: durable work continues. Reconnect: bullet tui --state-dir '{path}'{}",
+        if subject.is_empty() {
+            String::new()
+        } else {
+            format!(" --subject '{subject}'")
+        }
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+struct RestoreTerminal;
+#[cfg(unix)]
+impl Drop for RestoreTerminal {
+    fn drop(&mut self) {
+        ratatui::restore();
+    }
+}

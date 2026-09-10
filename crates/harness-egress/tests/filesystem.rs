@@ -30,11 +30,11 @@ impl Fixture {
         fs::create_dir(&scratch).unwrap();
         set_mode(&clone_dir, 0o700);
         set_mode(&scratch, 0o700);
-        let bwrap = required("/usr/bin/bwrap");
+        let bwrap = required("/usr/bin/false");
         let provider = required("/usr/bin/false");
         let schema = required("/etc/hosts");
         let ca = required("/etc/ssl/certs/ca-certificates.crt");
-        let runtime = required("/usr/bin/busybox");
+        let runtime = required("/usr/bin/false");
         Self {
             _root: root,
             bwrap,

@@ -187,7 +187,10 @@ start_farmd() {
   local label="$1"
   local socket="$2"
   local log_file="$proof_root/farmd-$label.log"
-  setsid "${subject_paths[FARMD]}" --data-dir "$proof_root/data" --bind 127.0.0.1:0 \
+  local token_file="$proof_root/bootstrap-$label.token"
+  "${subject_paths[FARMD]}" --provision-bootstrap-token "$token_file" >"$proof_root/bootstrap-$label.stdout" 2>"$proof_root/bootstrap-$label.stderr"
+  bootstrap_token="$(<"$token_file")"
+  setsid "${subject_paths[FARMD]}" --bootstrap-token-file "$token_file" --data-dir "$proof_root/data" --bind 127.0.0.1:0 \
     --lease-transport-socket "$socket" --lease-peer-registry "$registry" \
     --lease-transport-key "$key" >"$log_file" 2>&1 &
   farmd_pid=$!
@@ -208,7 +211,7 @@ start_farmd() {
     "$proof_root/health-$label.json" >/dev/null \
     || { refuse PUBLIC_COMPONENT_PACKAGED_PORTAL_MISMATCH "$label"; exit 1; }
   farmd_origin="$origin"
-  bootstrap_token="$(sed -n 's/^Bullet Farm one-time bootstrap: //p' "$log_file" | head -n 1)"
+  rm -f -- "$token_file"
   [[ "$bootstrap_token" =~ ^boot_[0-9a-f]{64}$ ]] \
     || { refuse PUBLIC_COMPONENT_BOOTSTRAP_INVALID "$label"; exit 1; }
 }

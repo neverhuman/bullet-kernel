@@ -110,3 +110,11 @@ note = "Adds append-only lease-transport settlement receipts with a stale-token 
 [[migration]]
 file = "0023_effect_recovery_claims.sql"
 note = "Adds restart-safe local-bare create-only Candidate-ref recovery claims with one active owner per intent, stale-owner invalidation, full normalized authority/freeze/restore and current-lease binding, DB-owned outbox/claim ordering, deterministic recovery receipt identity, and append-only triggers; schema-22 databases remain unsupported"
+
+[[migration]]
+file = "0024_operator_sessions.sql"
+note = "Adds digest-only immutable local-operator/bootstrap/session rows and append-only revocations, atomic one-use bootstrap binding, bounded absolute expiry, and restore-epoch binding. Checksummed schema22/23 are inspected read-only and require supervised upgrade; fresh schema24 initializes atomically. No provider enrollment or work authority is created."
+
+[[migration]]
+file = "0025_operator_command_ownership.sql"
+note = "Adds immutable ownership and submission-sequence cursor for new public commands, inserted atomically with admission. Historical commands are preserved unowned. Checksummed22/23/24 require supervised upgrade; startup performs no predecessor rewrite."

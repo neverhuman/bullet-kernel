@@ -1,16 +1,18 @@
 //! The browser API exposes readiness only. Runner lease mutations require a
 //! separate authenticated internal transport and therefore fail closed here.
 
+#[path = "support/operator.rs"]
+mod operator;
 mod support;
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::{materialize_plan, Ledger, PlanInput};
 use bullet_domain::TaskClass;
+use operator::Client;
 use serde_json::Value;
-use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 
 fn seed_graph(db: &Path) -> String {
@@ -29,21 +31,19 @@ fn seed_graph(db: &Path) -> String {
     graph.packages[0].id.to_string()
 }
 
-async fn start(db: &Path) -> SocketAddr {
-    let app = bullet_farmd::api::router(db).expect("router");
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-    addr
+async fn start(db: &Path) -> Client {
+    operator::serve(
+        bullet_farmd::api::router_with_bootstrap(db, operator::BOOTSTRAP, operator::ORIGIN.into())
+            .expect("router"),
+    )
+    .await
 }
 
-async fn request(addr: SocketAddr, method: &str, path: &str) -> (u16, String) {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
+async fn request(addr: &Client, method: &str, path: &str) -> (u16, String) {
+    let mut stream = TcpStream::connect(addr.addr).await.expect("connect");
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
-         Content-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: {}\r\nContent-Type: application/json\r\n\
+         Content-Length: 2\r\nConnection: close\r\n\r\n{{}}", addr.cookie
     );
     stream.write_all(request.as_bytes()).await.expect("write");
     let mut bytes = Vec::new();
@@ -77,7 +77,7 @@ async fn ready_is_a_read_only_watermarked_projection() {
     let directory = support::private_tempdir();
     let db = directory.path().join("ready.sqlite");
     let package = seed_graph(&db);
-    let (status, response) = request(start(&db).await, "GET", "/api/v1/ready").await;
+    let (status, response) = request(&start(&db).await, "GET", "/api/v1/ready").await;
     assert_eq!(status, 200);
     let snapshot = json_body(&response);
     assert_eq!(snapshot.as_object().expect("snapshot").len(), 4);
@@ -98,7 +98,7 @@ async fn runner_mutations_are_not_mounted_on_the_public_router() {
         "/api/v1/leases/release",
         "/api/v1/attempts/advance",
     ] {
-        let (status, response) = request(addr, "POST", path).await;
+        let (status, response) = request(&addr, "POST", path).await;
         assert_eq!(status, 404, "{path}");
         assert_eq!(json_body(&response)["code"], "NOT_FOUND");
         assert!(response.contains("application/problem+json"));

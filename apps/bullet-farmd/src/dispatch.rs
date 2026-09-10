@@ -1,19 +1,12 @@
 //! Bind a public `CommandRequest` to its exact durable outbox payload.
 //!
-//! Submit stays HTTP 202 `PENDING`; peer-authenticated workload dispatch is a
+//! Submission returns the durable current phase; peer-authenticated dispatch is a
 //! separate Unix-socket authority boundary.
-
-use bullet_application::CommandRequest;
-
-/// Exact outbox payload for one admitted command request.
-pub(crate) fn encode_command_dispatch(request: &CommandRequest) -> Result<String, String> {
-    serde_json::to_string(request).map_err(|error| format!("command dispatch encoding: {error}"))
-}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bullet_application::commands::OfflineCommandResolution;
+    use bullet_application::CommandRequest;
     use bullet_domain::CommandPhase;
 
     fn refuses_success_phases(resolution: &OfflineCommandResolution) -> bool {
@@ -27,7 +20,7 @@ mod tests {
     fn dispatch_run_demo_settles_unknown_without_applied_or_verified() {
         let request =
             CommandRequest::new("dispatch-run-demo", "run_demo", &serde_json::json!({})).unwrap();
-        let encoded = encode_command_dispatch(&request).unwrap();
+        let encoded = serde_json::to_string(&request).unwrap();
         assert!(encoded.contains("run_demo"));
         let resolution = request.offline_worker_resolution().unwrap();
         assert_eq!(resolution.phase(), CommandPhase::Unknown);

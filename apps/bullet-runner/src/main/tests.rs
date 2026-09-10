@@ -35,6 +35,7 @@ fn args(root: &Path, runner_id: &RunnerId, key: &Path) -> Args {
         dogfood_receipt: None,
         dogfood_max_budget_usd: None,
         dogfood_wall_timeout_secs: None,
+        signed_in_executable: None,
         workspace_root: root.join("must-not-create-workspace"),
         source_repo: root.join("missing-source"),
         base_sha: "a".repeat(40),
@@ -413,13 +414,33 @@ fn the_simulator_is_selected_only_when_it_is_named() {
     assert!(refusal.contains("--model"), "{refusal}");
 
     selected.model = Some("gpt-5".into());
-    let adapter = adapter_for(&selected.provider, &selected).expect("codex constructs offline");
+    let refusal = adapter_for(&selected.provider, &selected)
+        .err()
+        .expect("codex without a signed-in executable must refuse");
+    assert!(refusal.contains("--signed-in-executable"), "{refusal}");
+    assert!(
+        !refusal.contains("sim"),
+        "a real provider must never mention the simulator: {refusal}"
+    );
+
+    selected.signed_in_executable = Some(root.path().join("codex"));
+    let adapter =
+        adapter_for(&selected.provider, &selected).expect("codex constructs the signed-in adapter");
     assert_eq!(adapter.descriptor().provider, "codex");
 
     selected.provider = "cursor".into();
     selected.model = Some("composer-2".into());
-    let adapter = adapter_for(&selected.provider, &selected).expect("cursor constructs offline");
+    selected.signed_in_executable = Some(root.path().join("cursor-agent"));
+    let adapter = adapter_for(&selected.provider, &selected)
+        .expect("cursor constructs the signed-in adapter");
     assert_eq!(adapter.descriptor().provider, "cursor");
+
+    selected.provider = "agy".into();
+    selected.model = Some("gemini-2.5".into());
+    selected.signed_in_executable = Some(root.path().join("agy"));
+    let adapter =
+        adapter_for(&selected.provider, &selected).expect("agy constructs the signed-in adapter");
+    assert_eq!(adapter.descriptor().provider, "agy");
 }
 
 #[test]

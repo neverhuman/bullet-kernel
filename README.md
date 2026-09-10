@@ -53,9 +53,13 @@ gates the generated client against the complete OpenAPI document.
 | GET | `/api/v1/demo` | yes | demo receipt re-derived from ledger rows |
 | POST | `/api/v1/demo/run` | yes | retired direct mutation; submit a `run_demo` command |
 | POST | `/api/v1/auth/bootstrap` | yes | one-time local-browser session bootstrap |
+| GET | `/api/v1/auth/session` | yes | current durable operator session metadata |
+| POST | `/api/v1/auth/revoke` | yes | authenticated self-revocation of the presented session |
+| GET | `/api/v1/commands` | yes | bounded discovery of the current operator’s commands |
 | POST | `/api/v1/commands` | yes | authenticated command submission records `PENDING` |
 | GET | `/api/v1/commands/{id}` | yes | command status |
 | POST | `/internal/v1/commands/{id}/reconcile` | no | worker-bearer reconciler, outside the public contract |
+| GET | `/api/v1/operator-snapshot` | yes | operator surfaces from one atomic ledger snapshot |
 | GET | `/api/v1/outbox` | yes | outbox snapshot |
 | GET | `/api/v1/events` | yes | SSE ledger events with bounded replay |
 | GET | `/api/v1/ready` | yes | next ready work package with its sequence watermark |

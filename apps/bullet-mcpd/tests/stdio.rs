@@ -13,7 +13,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn stdio_lifecycle_reads_real_farmd_and_forbidden_tools_do_not_mutate() {
+async fn stdio_lifecycle_denies_unscoped_reads_and_forbidden_tools_do_not_mutate() {
     let temporary = support::private_tempdir();
     let database = temporary.path().join("ledger.sqlite");
     let app = bullet_farmd::api::router(&database).unwrap();
@@ -52,11 +52,21 @@ async fn stdio_lifecycle_reads_real_farmd_and_forbidden_tools_do_not_mutate() {
     let projection = receive(&mut stdout).await;
     assert_eq!(projection["id"], 3);
     assert_eq!(
-        projection["result"]["structuredContent"]["source"], "bullet-kernel/sqlite-ledger",
+        projection["result"]["structuredContent"]["code"], "FARMD_REFUSED",
         "{projection}"
     );
-    assert!(projection["result"]["structuredContent"]["as_of_sequence"].is_u64());
-    assert_eq!(projection["result"]["isError"], false);
+    assert_eq!(
+        projection["result"]["structuredContent"]["detail"],
+        "FARMD_REFUSED: HTTP 401"
+    );
+    assert!(projection["result"]["structuredContent"]
+        .get("as_of_sequence")
+        .is_none());
+    assert!(projection["result"]["structuredContent"]["repair"]
+        .as_str()
+        .unwrap()
+        .contains("separately scoped MCP read principal"));
+    assert_eq!(projection["result"]["isError"], true);
 
     send(
         &mut stdin,

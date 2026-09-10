@@ -21,6 +21,8 @@ pub mod mutation_authority;
 mod mutation_authority_presentation;
 mod nonces;
 mod open;
+mod operator_commands;
+mod operator_sessions;
 mod outbox;
 mod projections;
 

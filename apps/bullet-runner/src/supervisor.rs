@@ -40,11 +40,20 @@ impl Supervisor {
     }
 
     fn store(&self, checkpoint: &Checkpoint) -> Result<(), String> {
+        use std::io::Write;
         let path = self.path(&checkpoint.session);
         let tmp = path.with_extension("json.tmp");
         let text = serde_json::to_string(checkpoint).map_err(|err| err.to_string())?;
-        fs::write(&tmp, text).map_err(|err| err.to_string())?;
+        let mut file = fs::File::create(&tmp).map_err(|err| err.to_string())?;
+        file.write_all(text.as_bytes())
+            .map_err(|err| err.to_string())?;
+        file.sync_all().map_err(|err| err.to_string())?;
+        drop(file);
         fs::rename(&tmp, &path).map_err(|err| err.to_string())?;
+        if let Some(parent) = path.parent() {
+            let dir = fs::File::open(parent).map_err(|err| err.to_string())?;
+            dir.sync_all().map_err(|err| err.to_string())?;
+        }
         Ok(())
     }
 

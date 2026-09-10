@@ -1,39 +1,33 @@
 //! One-time local-browser bootstrap, server-side session, and CSRF checks.
 
+pub(crate) mod read;
+pub(crate) mod sessions;
+
 use crate::api::{SharedState, BROWSER_SESSION_SECONDS};
 use crate::errors::ApiError;
 use axum::extract::{rejection::JsonRejection, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use bullet_adapters::SqliteLedger;
+use bullet_application::operator_sessions::{
+    BootstrapRegistration, OperatorSession, OperatorSessionError, OperatorSessionStore,
+    SessionIssue,
+};
+use bullet_application::LedgerError;
 use bullet_domain::Digest;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
 
 const BOOTSTRAP_SECONDS: u64 = 600;
 const SESSION_COOKIE: &str = "bullet_session";
 const CSRF_HEADER: &str = "x-bullet-csrf";
 
-#[derive(Clone)]
-enum Bootstrap {
-    Disabled,
-    Available { digest: Digest, expires_at: Instant },
-    Consumed,
-}
-
-#[derive(Clone)]
-struct Session {
-    bearer: Digest,
-    csrf: Digest,
-    expires_at: Instant,
-}
-
-/// In-memory browser authority. Secrets are retained only as digests.
-#[derive(Clone)]
+/// Configuration plus an admitted durable authentication connection.
+/// No bearer, CSRF token or mutable session authority is cached in memory.
 pub(crate) struct AuthState {
     origin: String,
-    bootstrap: Bootstrap,
-    session: Option<Session>,
+    bootstrap: Option<Digest>,
+    store: Option<SqliteLedger>,
     worker: Option<Digest>,
 }
 
@@ -46,8 +40,8 @@ impl AuthState {
     pub(crate) fn disabled(origin: String) -> Self {
         Self {
             origin,
-            bootstrap: Bootstrap::Disabled,
-            session: None,
+            bootstrap: None,
+            store: None,
             worker: None,
         }
     }
@@ -57,13 +51,29 @@ impl AuthState {
         validate_token("boot", token)?;
         Ok(Self {
             origin,
-            bootstrap: Bootstrap::Available {
-                digest: secret_digest("bootstrap", token),
-                expires_at: Instant::now() + Duration::from_secs(BOOTSTRAP_SECONDS),
-            },
-            session: None,
+            bootstrap: Some(secret_digest("bootstrap", token)),
+            store: None,
             worker: None,
         })
+    }
+
+    pub(crate) fn with_store(mut self, mut store: SqliteLedger) -> Result<Self, LedgerError> {
+        if let Some(digest) = self.bootstrap {
+            store
+                .register_operator_bootstrap(&BootstrapRegistration {
+                    digest,
+                    proposed_operator_id: random_token("opr").map_err(LedgerError::Store)?,
+                    origin: self.origin.clone(),
+                    lifetime_seconds: u32::try_from(BOOTSTRAP_SECONDS)
+                        .map_err(|err| LedgerError::Store(err.to_string()))?,
+                })
+                .map_err(|err| match err {
+                    OperatorSessionError::Store(err) => err,
+                    err => LedgerError::Store(err.to_string()),
+                })?;
+        }
+        self.store = Some(store);
+        Ok(self)
     }
 
     pub(crate) fn with_worker_token(mut self, token: &str) -> Result<Self, String> {
@@ -75,78 +85,65 @@ impl AuthState {
     fn exchange(&mut self, headers: &HeaderMap, token: &str) -> Result<IssuedSession, ApiError> {
         self.require_origin(headers)?;
         validate_token("boot", token).map_err(|_| bootstrap_invalid())?;
-        match &self.bootstrap {
-            Bootstrap::Disabled => {
-                return Err(ApiError::protocol(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "BOOTSTRAP_UNAVAILABLE",
-                    "This process was not started with browser bootstrap authority.",
-                    "Restart bullet-farmd through its CLI and use the emitted one-time token.",
-                ));
-            }
-            Bootstrap::Consumed => {
-                return Err(ApiError::protocol(
-                    StatusCode::UNAUTHORIZED,
-                    "BOOTSTRAP_CONSUMED",
-                    "The one-time bootstrap token has already been exchanged.",
-                    "Use the existing session or restart bullet-farmd for a fresh token.",
-                ));
-            }
-            Bootstrap::Available { expires_at, .. } if Instant::now() >= *expires_at => {
-                self.bootstrap = Bootstrap::Consumed;
-                return Err(ApiError::protocol(
-                    StatusCode::UNAUTHORIZED,
-                    "BOOTSTRAP_EXPIRED",
-                    "The one-time bootstrap token expired before exchange.",
-                    "Restart bullet-farmd and exchange the new token within ten minutes.",
-                ));
-            }
-            Bootstrap::Available { digest, .. }
-                if !constant_time_equal(*digest, secret_digest("bootstrap", token)) =>
-            {
-                return Err(bootstrap_invalid());
-            }
-            Bootstrap::Available { .. } => {}
+        let expected = self.bootstrap.ok_or_else(|| {
+            ApiError::protocol(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "BOOTSTRAP_UNAVAILABLE",
+                "This process was not started with browser bootstrap authority.",
+                "Start bullet-farmd with a protected one-time bootstrap token.",
+            )
+        })?;
+        if !constant_time_equal(expected, secret_digest("bootstrap", token)) {
+            return Err(bootstrap_invalid());
         }
         let bearer = random_token("ses").map_err(ApiError::Internal)?;
         let csrf = random_token("csrf").map_err(ApiError::Internal)?;
-        self.bootstrap = Bootstrap::Consumed;
-        self.session = Some(Session {
-            bearer: secret_digest("session", &bearer),
-            csrf: secret_digest("csrf", &csrf),
-            expires_at: Instant::now() + Duration::from_secs(BROWSER_SESSION_SECONDS),
-        });
+        let request = SessionIssue {
+            bootstrap_digest: expected,
+            session_id: random_token("sid").map_err(ApiError::Internal)?,
+            bearer_digest: secret_digest("session", &bearer),
+            csrf_digest: secret_digest("csrf", &csrf),
+            origin: self.origin.clone(),
+            lifetime_seconds: u32::try_from(BROWSER_SESSION_SECONDS)
+                .map_err(|err| ApiError::Internal(err.to_string()))?,
+        };
+        self.store
+            .as_mut()
+            .ok_or_else(session_invalid)?
+            .exchange_operator_bootstrap(&request)
+            .map_err(store_error)?;
         Ok(IssuedSession { bearer, csrf })
     }
 
-    pub(crate) fn authorize_read(&self, headers: &HeaderMap) -> Result<(), ApiError> {
-        let bearer = cookie_value(headers)?;
-        let session = self.current_session()?;
-        if !constant_time_equal(session.bearer, secret_digest("session", bearer)) {
-            return Err(session_invalid());
+    pub(crate) fn authorize_session(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<OperatorSession, ApiError> {
+        if headers.contains_key(header::ORIGIN) {
+            self.require_origin(headers)?;
         }
-        Ok(())
+        let bearer = cookie_value(headers)?;
+        self.session_by_digest(secret_digest("session", bearer))
+    }
+
+    fn session_by_digest(&self, digest: Digest) -> Result<OperatorSession, ApiError> {
+        self.store
+            .as_ref()
+            .ok_or_else(session_invalid)?
+            .read_operator_session(digest, &self.origin)
+            .map_err(store_error)
+    }
+
+    pub(crate) fn authorize_read(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        self.authorize_session(headers).map(|_| ())
     }
 
     pub(crate) fn authorize_mutation(&self, headers: &HeaderMap) -> Result<(), ApiError> {
         self.require_origin(headers)?;
-        self.authorize_read(headers)?;
-        let csrf = single_header(headers, CSRF_HEADER)?.ok_or_else(|| {
-            ApiError::protocol(
-                StatusCode::FORBIDDEN,
-                "CSRF_REQUIRED",
-                "The mutation is missing its session-bound CSRF token.",
-                "Send the bootstrap response token in X-Bullet-CSRF.",
-            )
-        })?;
-        let session = self.current_session()?;
-        if !constant_time_equal(session.csrf, secret_digest("csrf", csrf)) {
-            return Err(ApiError::protocol(
-                StatusCode::FORBIDDEN,
-                "CSRF_INVALID",
-                "The CSRF token is not bound to the active browser session.",
-                "Bootstrap again only after restarting the local daemon.",
-            ));
+        let session = self.authorize_session(headers)?;
+        let csrf = csrf_value(headers)?;
+        if !constant_time_equal(session.csrf_digest, secret_digest("csrf", csrf)) {
+            return Err(csrf_invalid());
         }
         Ok(())
     }
@@ -168,13 +165,6 @@ impl AuthState {
             return Err(worker_invalid());
         }
         Ok(())
-    }
-
-    fn current_session(&self) -> Result<&Session, ApiError> {
-        self.session
-            .as_ref()
-            .filter(|session| Instant::now() < session.expires_at)
-            .ok_or_else(session_invalid)
     }
 
     fn require_origin(&self, headers: &HeaderMap) -> Result<(), ApiError> {
@@ -232,6 +222,9 @@ pub(crate) async fn bootstrap(
         expires_in_seconds: BROWSER_SESSION_SECONDS,
     })
     .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie)
@@ -316,12 +309,56 @@ fn cookie_value(headers: &HeaderMap) -> Result<&str, ApiError> {
     Ok(value)
 }
 
+fn csrf_value(headers: &HeaderMap) -> Result<&str, ApiError> {
+    single_header(headers, CSRF_HEADER)?.ok_or_else(|| {
+        ApiError::protocol(
+            StatusCode::FORBIDDEN,
+            "CSRF_REQUIRED",
+            "The mutation is missing its session-bound CSRF token.",
+            "Send the bootstrap response token in X-Bullet-CSRF.",
+        )
+    })
+}
+
+fn csrf_invalid() -> ApiError {
+    ApiError::protocol(
+        StatusCode::FORBIDDEN,
+        "CSRF_INVALID",
+        "The CSRF token is not bound to the presented browser session.",
+        "Use the CSRF token issued with this session.",
+    )
+}
+
+fn store_error(error: OperatorSessionError) -> ApiError {
+    match error {
+        OperatorSessionError::Store(error) => error.into(),
+        OperatorSessionError::InvalidRequest => {
+            ApiError::Internal("server authentication request is invalid".into())
+        }
+        OperatorSessionError::BootstrapInvalid => bootstrap_invalid(),
+        OperatorSessionError::SessionInvalid => session_invalid(),
+        OperatorSessionError::CsrfInvalid => csrf_invalid(),
+        OperatorSessionError::BootstrapConsumed => ApiError::protocol(
+            StatusCode::UNAUTHORIZED,
+            "BOOTSTRAP_CONSUMED",
+            "The one-time bootstrap token has already been exchanged.",
+            "Use the issued session or configure a fresh one-time bootstrap token.",
+        ),
+        OperatorSessionError::BootstrapExpired => ApiError::protocol(
+            StatusCode::UNAUTHORIZED,
+            "BOOTSTRAP_EXPIRED",
+            "The one-time bootstrap token expired before exchange.",
+            "Configure a fresh token and exchange it within ten minutes.",
+        ),
+    }
+}
+
 fn bootstrap_invalid() -> ApiError {
     ApiError::protocol(
         StatusCode::UNAUTHORIZED,
         "BOOTSTRAP_INVALID",
         "The one-time bootstrap token is malformed or invalid.",
-        "Copy the exact token printed by the local bullet-farmd process.",
+        "Supply the exact protected bootstrap token through private interactive or stdin input.",
     )
 }
 
@@ -338,8 +375,8 @@ fn session_invalid() -> ApiError {
     ApiError::protocol(
         StatusCode::UNAUTHORIZED,
         "SESSION_INVALID",
-        "The browser session is invalid, expired, or ambiguous.",
-        "Restart bullet-farmd and exchange its new one-time bootstrap token.",
+        "The browser session is invalid, expired, revoked, or ambiguous.",
+        "Authenticate with a fresh protected bootstrap token through private input.",
     )
 }
 

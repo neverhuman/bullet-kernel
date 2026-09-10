@@ -15,6 +15,8 @@ use bullet_application::{derive_receipt, Ledger, LedgerError, LedgerEvent, Outbo
 use bullet_domain::{Digest, Mission, MissionId};
 use chrono::{DateTime, Utc};
 use futures_util::stream::Stream;
+use futures_util::StreamExt;
+pub(crate) use safe_integer::outbox_sequence;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::io;
@@ -80,8 +82,8 @@ pub fn router_with_authorities(
 
 /// Build the router together with the state it serves, so the daemon can run
 /// its writer-lease maintenance tick against exactly the ledger this API
-/// answers from. `bootstrap_token` is `None` for the unauthenticated local
-/// router; `worker_token` mounts the reconciler's independent authority.
+/// answers from. With no `bootstrap_token`, existing durable sessions remain
+/// valid but no new session can be issued; `worker_token` mounts independent worker authority.
 ///
 /// # Errors
 ///
@@ -100,13 +102,20 @@ pub fn daemon(
         Some(token) => auth.and_then(|auth| auth.with_worker_token(token)),
         None => auth,
     };
+    let auth = auth
+        .map_err(LedgerError::Store)?
+        .with_store(SqliteLedger::open(db)?)?;
     let ledger = SqliteLedger::open(db)?;
     let state: SharedState = Arc::new(AppState {
         ledger: Mutex::new(ledger),
-        auth: Mutex::new(auth.map_err(LedgerError::Store)?),
+        auth: Mutex::new(auth),
         reaper: crate::reaper::ReapObservation::default(),
     });
     let router = routes::router()
+        .route_layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            crate::auth::read::require_session,
+        ))
         .merge(portal::router())
         .fallback(api_not_found)
         .with_state(Arc::clone(&state));
@@ -133,10 +142,27 @@ async fn list_missions(State(state): State<SharedState>) -> Result<Response, Api
 }
 
 #[derive(Serialize)]
-struct MissionView {
+pub(crate) struct MissionView {
     mission: Mission,
     packages: Vec<bullet_domain::WorkPackage>,
     fence: Option<u64>,
+}
+
+pub(crate) fn mission_views<L: Ledger>(ledger: &L) -> Result<Vec<MissionView>, LedgerError> {
+    ledger
+        .list_missions()?
+        .into_iter()
+        .map(|mission| {
+            let graph = ledger
+                .get_graph(&mission.id)?
+                .ok_or_else(|| LedgerError::Store("mission row has no graph".into()))?;
+            Ok(MissionView {
+                fence: graph.variants.first().map(|variant| variant.fence_counter),
+                mission: graph.mission,
+                packages: graph.packages,
+            })
+        })
+        .collect()
 }
 
 async fn get_mission(
@@ -172,8 +198,8 @@ async fn removed_demo_mutation() -> ApiError {
 }
 
 #[derive(Serialize)]
-struct OutboxView {
-    items: Vec<OutboxItem>,
+pub(crate) struct OutboxView {
+    pub(crate) items: Vec<OutboxItem>,
 }
 
 async fn outbox(State(state): State<SharedState>) -> Result<Response, ApiError> {
@@ -222,9 +248,15 @@ async fn events(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<SseFrame, io::Error>>>, ApiError> {
+    let permit = crate::auth::read::ReadPermit::issue(&*state.auth.lock().await, &headers)?;
     let after = event_cursor(query.as_deref(), &headers)?;
     let initial = replay_preflight(&state, after).await?;
-    Ok(Sse::new(event_stream(state, after, initial)).keep_alive(KeepAlive::default()))
+    // Flush an idle stream through buffering proxies before the client header
+    // deadline. This comment is neither a ledger event nor a cursor advance.
+    let opening =
+        futures_util::stream::once(async { Ok(SseFrame::default().comment("connected")) });
+    let stream = opening.chain(event_stream(state, after, initial, permit));
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 fn event_cursor(query: Option<&str>, headers: &HeaderMap) -> Result<u64, ApiError> {
@@ -378,18 +410,22 @@ pub(crate) fn validate_event(event: &LedgerEvent) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn event_stream(
+pub(crate) fn event_stream(
     state: SharedState,
     after: u64,
     initial: VecDeque<LedgerEvent>,
+    permit: crate::auth::read::ReadPermit,
 ) -> impl Stream<Item = Result<SseFrame, io::Error>> {
-    let seed: (SharedState, u64, VecDeque<LedgerEvent>) = (state, after, initial);
-    futures_util::stream::unfold(seed, |(state, mut last, mut buffer)| async move {
+    let seed = (state, after, initial, permit);
+    futures_util::stream::unfold(seed, |(state, mut last, mut buffer, permit)| async move {
         loop {
+            if !permit.is_current(&*state.auth.lock().await) {
+                return None;
+            }
             if let Some(event) = buffer.pop_front() {
                 let frame = sse_frame(&event);
                 last = event.seq;
-                return Some((frame, (state, last, buffer)));
+                return Some((frame, (state, last, buffer, permit)));
             }
             let batch = {
                 let ledger = state.ledger.lock().await;

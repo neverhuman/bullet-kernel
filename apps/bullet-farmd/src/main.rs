@@ -1,5 +1,7 @@
 //! Control-plane daemon. The portal is a projection of this API.
 
+#[path = "main/bootstrap.rs"]
+mod bootstrap;
 #[path = "main/launch.rs"]
 mod launch;
 
@@ -20,6 +22,13 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(name = "bullet-farmd")]
 struct Args {
+    /// Create one private bootstrap token file and exit; never print its contents.
+    #[arg(long, value_name = "ABSOLUTE_PATH", exclusive = true)]
+    provision_bootstrap_token: Option<PathBuf>,
+    /// Private 0600 bootstrap token file beneath an owned 0700 directory.
+    /// Without it, existing sessions work but new login is disabled.
+    #[arg(long, value_name = "ABSOLUTE_PATH")]
+    bootstrap_token_file: Option<PathBuf>,
     /// Create one durable lease-transport signing key and exit. The path must
     /// be absolute, absent, and beneath a private caller-owned directory.
     #[arg(long, value_name = "ABSOLUTE_PATH", exclusive = true)]
@@ -65,6 +74,18 @@ struct Args {
 async fn main() -> ExitCode {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let args = Args::parse();
+    if let Some(path) = args.provision_bootstrap_token.as_deref() {
+        return match bootstrap::provision(path) {
+            Ok(()) => {
+                println!("BOOTSTRAP_TOKEN_PROVISIONED: private file created");
+                ExitCode::SUCCESS
+            }
+            Err(message) => {
+                eprintln!("bullet-farmd: {message}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if let Some(path) = args.provision_lease_transport_key.as_deref() {
         return match provision_lease_transport_key(path) {
             Ok(()) => {
@@ -92,10 +113,15 @@ async fn main() -> ExitCode {
         eprintln!("bullet-farmd: create data dir: {err}");
         return ExitCode::FAILURE;
     }
-    let bootstrap = match bullet_farmd::auth::random_token("boot") {
+    let bootstrap = match args
+        .bootstrap_token_file
+        .as_deref()
+        .map(bootstrap::read)
+        .transpose()
+    {
         Ok(token) => token,
-        Err(err) => {
-            eprintln!("bullet-farmd: create bootstrap token: {err}");
+        Err(message) => {
+            eprintln!("bullet-farmd: {message}");
             return ExitCode::FAILURE;
         }
     };
@@ -127,7 +153,7 @@ async fn main() -> ExitCode {
     let db = args.data_dir.join("ledger.sqlite");
     let (app, state) = match api::daemon(
         &db,
-        Some(&bootstrap),
+        bootstrap.as_deref(),
         origin.clone(),
         worker_token.as_deref(),
     ) {
@@ -137,8 +163,12 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    println!("Bullet Farm one-time bootstrap: {bootstrap}");
-    println!("Exchange at: {origin}/api/v1/auth/bootstrap");
+    println!("Operator endpoint: {origin}");
+    if bootstrap.is_some() {
+        println!("Bootstrap login enabled through the configured private token file");
+    } else {
+        println!("New bootstrap login disabled; existing durable sessions remain available");
+    }
     if worker_token.is_some() {
         tracing::info!("authenticated internal command reconciler enabled");
     }

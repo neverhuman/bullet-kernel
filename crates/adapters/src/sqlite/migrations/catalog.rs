@@ -46,6 +46,8 @@ pub(in crate::sqlite) const MIGRATIONS: &[Migration] = &[
     migration!(21, "0021_command_dispatch_claims.sql"),
     migration!(22, "0022_lease_transport_settlements.sql"),
     migration!(23, "0023_effect_recovery_claims.sql"),
+    migration!(24, "0024_operator_sessions.sql"),
+    migration!(25, "0025_operator_command_ownership.sql"),
 ];
 
 const MUTATION_OPERATIONS: &str = "clone-workspace,read-workspace,apply-patch,checkpoint,prepare-candidate,preserve-workspace,cleanup-workspace,dispatch-effect,reconcile-effect";

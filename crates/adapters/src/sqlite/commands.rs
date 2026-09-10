@@ -4,7 +4,10 @@ use super::{events, outbox, store};
 use bullet_application::commands::COMMAND_RECONCILED_EVENT;
 use bullet_application::{CommandRecord, CommandRequest, LedgerError};
 use bullet_domain::{CommandId, CommandPhase, Digest, DomainError};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
+
+mod admission;
+pub(super) use admission::verify_replay as verify_coding_replay;
 
 const DISPATCH_KIND: &str = "command_dispatch";
 
@@ -133,12 +136,23 @@ pub(super) fn submit_command(
     let transaction = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(store)?;
-    let existed = get_command(&transaction, &request.idempotency_key)?.is_some();
-    let record = record_command(&transaction, request)?;
+    let record = submit_command_in(&transaction, fail_after, request)?;
+    transaction.commit().map_err(store)?;
+    Ok(record)
+}
+
+pub(super) fn submit_command_in(
+    transaction: &Transaction<'_>,
+    fail_after: &mut Option<u8>,
+    request: &CommandRequest,
+) -> Result<CommandRecord, LedgerError> {
+    request.validate()?;
+    let existed = get_command(transaction, &request.idempotency_key)?.is_some();
+    let record = record_command(transaction, request)?;
     fail_boundary(fail_after)?;
     let dispatch = serde_json::to_string(request).map_err(store)?;
     if existed {
-        let rows = outbox::for_command(&transaction, &record.id)?;
+        let rows = outbox::for_command(transaction, &record.id)?;
         if rows.len() != 1 || rows[0].kind != DISPATCH_KIND || rows[0].payload != dispatch {
             return Err(LedgerError::Store(
                 "public command has incomplete or conflicting outbox truth".into(),
@@ -158,10 +172,10 @@ pub(super) fn submit_command(
             ));
         }
     } else {
-        outbox::enqueue(&transaction, Some(&record.id), DISPATCH_KIND, &dispatch)?;
+        outbox::enqueue(transaction, Some(&record.id), DISPATCH_KIND, &dispatch)?;
         fail_boundary(fail_after)?;
         events::insert_event(
-            &transaction,
+            transaction,
             "command_submitted",
             record.id.as_str(),
             Some(record.id.as_str()),
@@ -170,7 +184,12 @@ pub(super) fn submit_command(
         )?;
     }
     fail_boundary(fail_after)?;
-    transaction.commit().map_err(store)?;
+    if existed {
+        admission::verify_replay(transaction, request)?;
+    } else {
+        admission::admit_run_coding(transaction, request)?;
+    }
+    fail_boundary(fail_after)?;
     Ok(record)
 }
 
@@ -326,7 +345,7 @@ fn reconcile_fail_boundary(fail_after: &mut Option<u8>) -> Result<(), LedgerErro
     }
 }
 
-fn fail_boundary(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {
+pub(super) fn fail_boundary(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {
     match fail_after {
         Some(0) => {
             *fail_after = None;

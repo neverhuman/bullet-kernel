@@ -1,6 +1,9 @@
 //! Bullet Farm CLI.
 
+mod auth;
 mod authority;
+mod client;
+mod coding;
 mod contracts;
 #[path = "demo_live/mod.rs"]
 mod demo_synthetic;
@@ -10,6 +13,7 @@ mod mission;
 mod provider;
 mod run;
 mod transaction;
+mod tui;
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
@@ -27,6 +31,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Browse authenticated durable work; Ctrl+C detaches this client.
+    Tui(tui::TuiArgs),
+    /// Authenticate this client without putting credentials in shell arguments.
+    Auth {
+        #[command(subcommand)]
+        command: auth::AuthCommands,
+    },
     /// Initialize a local data directory.
     Farm {
         #[command(subcommand)]
@@ -78,6 +89,11 @@ enum Commands {
         /// value pay for its size.
         #[command(subcommand)]
         command: Box<dogfood::DogfoodCommands>,
+    },
+    /// Submit, read, and project durable `run_coding` commands on loopback farmd.
+    Coding {
+        #[command(subcommand)]
+        command: coding::CodingCommands,
     },
 }
 
@@ -180,9 +196,12 @@ fn ensure_private_data_dir(_path: &std::path::Path) -> Result<(), String> {
 
 fn run(command: Commands) -> Result<(), String> {
     match command {
+        Commands::Tui(args) => tui::run(args),
+        Commands::Auth { command } => auth::run(command),
         Commands::Provider { .. } => unreachable!("provider is handled in main"),
         Commands::Transaction { .. } => unreachable!("transaction is handled in main"),
         Commands::Dogfood { .. } => unreachable!("dogfood is handled in main"),
+        Commands::Coding { .. } => unreachable!("coding is handled in main"),
         Commands::Farm { command } => match command {
             FarmCommands::Init => {
                 let dir = data_dir();
@@ -255,6 +274,7 @@ fn main() -> ExitCode {
     match cli.command {
         Commands::Provider { command } => provider::run(command),
         Commands::Dogfood { command } => dogfood::run(*command),
+        Commands::Coding { command } => coding::run(command),
         Commands::Transaction { json } => {
             if !json {
                 eprintln!("bullet: TRANSACTION_PROOF_UNAVAILABLE: --json is required");

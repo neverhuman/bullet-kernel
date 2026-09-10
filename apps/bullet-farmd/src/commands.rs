@@ -3,13 +3,15 @@
 use crate::api::SharedState;
 use crate::errors::ApiError;
 use axum::extract::{rejection::JsonRejection, Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
-use bullet_application::commands::COMMAND_RECONCILED_EVENT;
-use bullet_application::{
-    CommandDispatchClaim, CommandDispatchDisposition, CommandDispatchStore, CommandRecord,
-    CommandRequest, Ledger, LedgerEvent, OutboxItem,
+use bullet_application::operator_commands::{
+    OperatorCommandError, OperatorCommandSnapshot, OperatorCommandStore,
 };
+use bullet_application::{CommandRecord, CommandRequest};
+
+pub(crate) mod discovery;
 use bullet_domain::{CommandId, CommandPhase};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -35,166 +37,70 @@ pub(crate) async fn submit(
     State(state): State<SharedState>,
     headers: HeaderMap,
     body: Result<Json<CommandEnvelope>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandStatus>), ApiError> {
-    state.auth.lock().await.authorize_mutation(&headers)?;
+) -> Result<Response, ApiError> {
+    let operator = {
+        let auth = state.auth.lock().await;
+        auth.authorize_mutation(&headers)?;
+        auth.authorize_session(&headers)?.operator_id
+    };
     let body = body.map_err(|_| ApiError::invalid_json())?.0;
     let request = CommandRequest::new(body.idempotency_key, body.kind, &body.payload)?;
-    let mut ledger = state.ledger.lock().await;
-    let record = ledger.submit_command(&request)?;
-    Ok((StatusCode::ACCEPTED, Json(status_view(record)?)))
+    let snapshot = state
+        .ledger
+        .lock()
+        .await
+        .submit_operator_command(&operator, &request)
+        .map_err(operator_error)?;
+    command_response(snapshot, StatusCode::ACCEPTED)
 }
 
 pub(crate) async fn get(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<CommandStatus>, ApiError> {
-    state.auth.lock().await.authorize_read(&headers)?;
+) -> Result<Response, ApiError> {
+    let operator = state
+        .auth
+        .lock()
+        .await
+        .authorize_session(&headers)?
+        .operator_id;
     let id = CommandId::parse(id)?;
-    let ledger = state.ledger.lock().await;
-    let record = ledger
-        .get_command_by_id(&id)?
+    let snapshot = state
+        .ledger
+        .lock()
+        .await
+        .get_operator_command(&operator, &id)
+        .map_err(operator_error)?
         .ok_or_else(|| ApiError::NotFound(format!("command {id}")))?;
-    let request = CommandRequest::from_json(&record.idempotency_key, &record.kind, &record.payload)
-        .map_err(|error| ApiError::Internal(format!("persisted command request: {error}")))?;
-    let dispatch =
-        crate::dispatch::encode_command_dispatch(&request).map_err(ApiError::Internal)?;
-    let outbox = ledger.outbox_for_command(&id)?;
-    let events = ledger.list_events()?;
-    let claim = ledger
-        .command_dispatch_claim_for_command(&id)
-        .map_err(|error| ApiError::Internal(error.to_string()))?;
-    validate_projection(&record, &dispatch, claim.as_ref(), &outbox, &events)?;
-    Ok(Json(status_view(record)?))
+    command_response(snapshot, StatusCode::OK)
 }
 
-fn validate_projection(
-    record: &CommandRecord,
-    dispatch: &str,
-    claim: Option<&CommandDispatchClaim>,
-    outbox: &[OutboxItem],
-    events: &[LedgerEvent],
-) -> Result<(), ApiError> {
-    if outbox.len() != 1
-        || outbox[0].command_id.as_ref() != Some(&record.id)
-        || outbox[0].kind != "command_dispatch"
-        || outbox[0].payload != dispatch
-    {
-        return Err(ApiError::Internal(
-            "command has incomplete or conflicting dispatch truth".into(),
-        ));
+fn command_response(
+    snapshot: OperatorCommandSnapshot,
+    status: StatusCode,
+) -> Result<Response, ApiError> {
+    if snapshot.as_of_sequence > 9_007_199_254_740_991 {
+        return Err(ApiError::UnsafeInteger("CommandStatus.as_of_sequence"));
     }
-    let id = record.id.as_str();
-    let submitted: Vec<_> = events
-        .iter()
-        .filter(|event| {
-            event.kind == "command_submitted"
-                && (event.stream_id.as_deref() == Some(id)
-                    || event.correlation_id.as_deref() == Some(id))
-        })
-        .collect();
-    if submitted.len() != 1
-        || submitted[0].body != id
-        || submitted[0].stream_id.as_deref() != Some(id)
-        || submitted[0].correlation_id.as_deref() != Some(id)
-    {
-        return Err(ApiError::Internal(
-            "command has incomplete or conflicting submitted audit truth".into(),
-        ));
+    let mut response = (status, Json(status_view(snapshot.command)?)).into_response();
+    response.headers_mut().insert(
+        "x-bullet-as-of-sequence",
+        HeaderValue::from_str(&snapshot.as_of_sequence.to_string())
+            .map_err(|error| ApiError::Internal(error.to_string()))?,
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+fn operator_error(error: OperatorCommandError) -> ApiError {
+    match error {
+        OperatorCommandError::Store(error)=>error.into(),
+        OperatorCommandError::InvalidRequest=>ApiError::protocol(StatusCode::BAD_REQUEST,"OPERATOR_COMMAND_REQUEST_INVALID","The operator command query is invalid.","Use an authenticated operator, nonnegative safe-integer cursor and limit between 1 and 100."),
+        OperatorCommandError::OwnershipConflict=>ApiError::protocol(StatusCode::CONFLICT,"COMMAND_OWNERSHIP_CONFLICT","The idempotency key is already bound outside this operator's command history.","Use a different key; historical unowned commands cannot be adopted by retry."),
     }
-    let reconciled: Vec<_> = events
-        .iter()
-        .filter(|event| {
-            event.kind == COMMAND_RECONCILED_EVENT
-                && (event.stream_id.as_deref() == Some(id)
-                    || event.correlation_id.as_deref() == Some(id))
-        })
-        .collect();
-    let claimed: Vec<_> = events
-        .iter()
-        .filter(|event| {
-            event.kind == "command_dispatch_claimed"
-                && (event.stream_id.as_deref() == Some(id)
-                    || event.correlation_id.as_deref() == Some(id))
-        })
-        .collect();
-    let row = &outbox[0];
-    if let Some(claim) = claim {
-        claim
-            .validate()
-            .map_err(|error| ApiError::Internal(error.to_string()))?;
-        if claim.command_id != record.id
-            || claim.outbox_sequence != row.seq
-            || claim.request_digest != record.payload_digest
-        {
-            return Err(ApiError::Internal(
-                "command dispatch claim is bound to another subject".into(),
-            ));
-        }
-    }
-    let exact_claimed = |claim: &CommandDispatchClaim| {
-        claimed.len() == 1
-            && claimed[0].body == claim.claim_id
-            && claimed[0].stream_id.as_deref() == Some(id)
-            && claimed[0].correlation_id.as_deref() == Some(id)
-    };
-    let pending = match claim {
-        None => {
-            row.phase == CommandPhase::Pending
-                && row.delivered_at.is_none()
-                && row.acked_at.is_none()
-                && claimed.is_empty()
-                && reconciled.is_empty()
-        }
-        Some(value)
-            if matches!(
-                value.disposition,
-                CommandDispatchDisposition::Claimed | CommandDispatchDisposition::Invalidated
-            ) =>
-        {
-            row.phase == CommandPhase::Applied
-                && row.delivered_at.is_some()
-                && row.acked_at.is_none()
-                && exact_claimed(value)
-                && reconciled.is_empty()
-        }
-        _ => false,
-    };
-    if record.phase == CommandPhase::Pending {
-        return pending.then_some(()).ok_or_else(|| {
-            ApiError::Internal("pending command has conflicting projection truth".into())
-        });
-    }
-    let response = record
-        .response
-        .as_deref()
-        .ok_or_else(|| ApiError::Internal("settled command has no exact result truth".into()))?;
-    let terminal_claim = match (record.phase, claim) {
-        (CommandPhase::Unknown, Some(value))
-            if value.disposition == CommandDispatchDisposition::Unknown =>
-        {
-            row.delivered_at.is_some() && exact_claimed(value)
-        }
-        (CommandPhase::Failed, Some(value))
-            if value.disposition == CommandDispatchDisposition::Failed =>
-        {
-            row.delivered_at.is_none() && claimed.is_empty()
-        }
-        _ => false,
-    };
-    if !terminal_claim
-        || row.phase != record.phase
-        || row.acked_at.is_none()
-        || reconciled.len() != 1
-        || reconciled[0].stream_id.as_deref() != Some(id)
-        || reconciled[0].correlation_id.as_deref() != Some(id)
-        || reconciled[0].body != response
-    {
-        return Err(ApiError::Internal(
-            "settled command has incomplete or conflicting projection truth".into(),
-        ));
-    }
-    Ok(())
 }
 
 pub(crate) async fn reconcile(
@@ -240,7 +146,11 @@ fn status_name(phase: CommandPhase) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bullet_application::CommandRequest;
+    use bullet_application::commands::COMMAND_RECONCILED_EVENT;
+    use bullet_application::operator_commands::validate_projection;
+    use bullet_application::{
+        CommandDispatchClaim, CommandDispatchDisposition, CommandRequest, LedgerEvent, OutboxItem,
+    };
 
     fn fixture() -> (
         CommandRecord,
@@ -316,10 +226,7 @@ mod tests {
         let (record, dispatch, claim, outbox, events) = fixture();
         let request =
             CommandRequest::new("projection", "run_demo", &serde_json::json!({})).expect("request");
-        assert_eq!(
-            crate::dispatch::encode_command_dispatch(&request).expect("dispatch"),
-            dispatch
-        );
+        assert_eq!(serde_json::to_string(&request).expect("dispatch"), dispatch);
         let settlement = request.offline_worker_resolution().expect("settlement");
         assert_eq!(settlement.phase(), CommandPhase::Unknown);
         assert!(settlement

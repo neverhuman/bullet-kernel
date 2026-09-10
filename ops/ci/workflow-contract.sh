@@ -67,7 +67,7 @@ expected_context_digest() {
     header) printf '%s\n' 4c4f307636e38761db26d62f4dfa81ddd69c161d14c48a8e2fab25b741c729b0 ;;
     preflight) printf '%s\n' 724530aa098c182f00b6d2b491e88e4023231282d130d84896a862ffc0041f39 ;;
     fast) printf '%s\n' c8a742d1f2fa2d946928318c0d62807f2eaeb6b750435ad52c71bb5b34f8c67c ;;
-    lint) printf '%s\n' c8dd153de8040bd3efe9d2df9396c4be81aaf245bf56d341eb47f8fd2ee77325 ;;
+    lint) printf '%s\n' bf383056f79c44ab88c9914f2ccfb530129710e20ca9626a5e952d33a5c0c207 ;;
     contract) printf '%s\n' 0364cba18f2252a4957320523d1f510f8768825f81b0962025ea53c376256d49 ;;
     security) printf '%s\n' 04cfdf6285d6c4cd8e5fc33386fc07ddd6356be28d8177129156380bfd890ede ;;
     docs) printf '%s\n' 855016434cd98c694bebeb38ef08a5a670497710aef707179ceb280fb994186e ;;
@@ -303,9 +303,8 @@ validate_required_workflow() {
       preflight|docs) expected_steps=6 ;;
       fast|contract) expected_steps=7 ;;
       security) expected_steps=8 ;;
-      # actionlint is installed from its own release, so lint carries one
-      # step the other lanes do not.
-      lint) expected_steps=9 ;;
+      # actionlint has a release installer; b3sum uses its locked Cargo package.
+      lint) expected_steps=11 ;;
     esac
     [[ "$(rg -c '^      - ' <<<"$block")" -eq "$expected_steps" ]] \
       || { refuse HOSTED_STEP_INVENTORY_DRIFT "$lane"; return 1; }
@@ -392,7 +391,7 @@ validate_required_workflow() {
   [[ "$actual" == "$expected" ]] \
     || { refuse HOSTED_ARCHIVE_LAYOUT_DRIFT "$actual"; return 1; }
   actual="$(sha256sum "$workflow" | awk '{ print $1 }')"
-  [[ "$actual" == 3e246a437ca6e08b5ff6fd81ee6e9675b835a9b9f00f2878648fc2afa8f9867b ]] \
+  [[ "$actual" == 5ac1b2c114587970e152c0ea8f73a273fec4c2c1512bc2c82aa8acb32ebf48d8 ]] \
     || { refuse HOSTED_REQUIRED_CONTEXT_DRIFT "$actual"; return 1; }
 }
 

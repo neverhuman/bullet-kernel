@@ -2,8 +2,9 @@
 
 use super::{commands, events, SqliteLedger};
 use bullet_application::{
-    CommandDispatchClaim, CommandDispatchDisposition, CommandDispatchError, CommandDispatchStore,
-    CommandRecord, CommandRequest, ComponentCommandCompletionV1,
+    is_supported_dispatch_kind, CommandDispatchClaim, CommandDispatchDisposition,
+    CommandDispatchError, CommandDispatchStore, CommandRecord, CommandRequest,
+    ComponentCommandCompletionV1,
 };
 use bullet_domain::{CommandId, CommandPhase, Digest, RunnerId};
 use rusqlite::{params, Connection, Transaction};
@@ -11,6 +12,13 @@ use rusqlite::{params, Connection, Transaction};
 mod storage;
 
 use storage::*;
+
+pub(super) fn projection_claim(
+    conn: &Connection,
+    id: &CommandId,
+) -> Result<Option<CommandDispatchClaim>, bullet_application::LedgerError> {
+    claim_for_command(conn, id).map_err(super::store)
+}
 
 const DISPATCH_KIND: &str = "command_dispatch";
 const CLAIMED_EVENT: &str = "command_dispatch_claimed";
@@ -112,7 +120,7 @@ fn claim_next(
         restore_epoch,
     );
 
-    if request.kind != "run_demo" {
+    if !is_supported_dispatch_kind(&request.kind) {
         refuse_unsupported(
             &transaction,
             fail_after,

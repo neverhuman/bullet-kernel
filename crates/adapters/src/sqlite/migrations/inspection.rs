@@ -70,7 +70,9 @@ pub(in crate::sqlite) fn inspect_existing(
     let schema = verify_applied_migrations(conn)?;
     let applied = match schema {
         SchemaState::Current => MIGRATIONS,
-        SchemaState::UpgradeRequired { .. } => &MIGRATIONS[..22],
+        SchemaState::UpgradeRequired { from, .. } => {
+            &MIGRATIONS[..usize::try_from(from).map_err(store)?]
+        }
     };
     verify_product_schema(conn, applied)?;
     verify_foreign_key_integrity(conn)?;

@@ -7,6 +7,7 @@ mod audit;
 mod context_lineage;
 mod fleet;
 mod merge_rail;
+mod operator;
 mod quality_lab;
 mod sessions;
 
@@ -14,6 +15,7 @@ pub(crate) use audit::audit;
 pub(crate) use context_lineage::context_lineage;
 pub(crate) use fleet::fleet;
 pub(crate) use merge_rail::merge_rail;
+pub(crate) use operator::operator_snapshot;
 pub(crate) use quality_lab::quality_lab;
 pub(crate) use sessions::sessions;
 
