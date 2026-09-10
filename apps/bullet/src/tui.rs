@@ -35,14 +35,15 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     let credentials = crate::auth::store::CredentialStore::read_credentials(&directory)?
         .ok_or("AUTH_REQUIRED: run bullet auth login")?;
     let mut state = model::Model::default();
-    state.update(crate::client::operator_snapshot(&credentials));
-    if let Some(subject) = args.subject {
-        state.reconnect(&subject);
-    }
+    let mut reconnect = args.subject;
     if args.once
         || !std::io::stdout().is_terminal()
         || std::env::var("TERM").as_deref() == Ok("dumb")
     {
+        state.update(crate::client::operator_snapshot(&credentials));
+        if let Some(subject) = reconnect {
+            state.reconnect(&subject);
+        }
         println!("{}", state.plain());
         return state.error.map_or(Ok(()), Err);
     }
@@ -65,12 +66,24 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|_| "TUI_TERMINAL_UNAVAILABLE")?;
     let _restore = RestoreTerminal;
     let color = std::env::var_os("NO_COLOR").is_none();
+    // First paint must not wait for any network request, even on a cold connection.
+    terminal
+        .draw(|frame| ui::draw(frame, &mut state, color))
+        .map_err(|_| "TUI_DRAW_FAILED")?;
+    request_tx
+        .try_send(())
+        .map_err(|_| "TUI_REFRESH_UNAVAILABLE")?;
     let mut next_refresh = Instant::now() + Duration::from_secs(2);
-    let mut pending = false;
+    let mut pending = true;
     loop {
         if let Ok(snapshot) = response_rx.try_recv() {
             pending = false;
             state.update(snapshot);
+            if state.snapshot.is_some() {
+                if let Some(subject) = reconnect.take() {
+                    state.reconnect(&subject);
+                }
+            }
         }
         if !pending && Instant::now() >= next_refresh {
             request_tx
@@ -115,8 +128,10 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     let subject = state
         .selected_id
         .as_deref()
+        .or(reconnect.as_deref())
         .map(crate::client::terminal_text)
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .replace('\'', "'\\''");
     let path = crate::client::terminal_text(&directory.to_string_lossy()).replace('\'', "'\\''");
     println!(
         "DETACHED: durable work continues. Reconnect: bullet tui --state-dir '{path}'{}",

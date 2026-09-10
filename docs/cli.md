@@ -13,6 +13,13 @@ below have component proofs; they do not establish installed provider execution,
 independent verification, integration or release acceptance. Operating HOLD
 continues until its actual predecessor admission and operator checkpoint.
 
+Interactive `bullet tui` draws CONNECTING before its first network request;
+navigation and Ctrl+C detach remain available while that request waits. An
+explicit `--subject` is selected when the first valid snapshot arrives and is
+retained in the reconnect command if the client detaches first. `--once`, piped
+output and `TERM=dumb` retain synchronous plain-text snapshot behavior. Multiple
+consoles share short credential reads; detaching one does not stop another.
+
 ## Environment
 
 | Variable | Used by | Meaning |
