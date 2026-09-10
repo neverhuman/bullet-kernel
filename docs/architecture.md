@@ -1,9 +1,9 @@
 # Kernel architecture
 
-Last reviewed: 2026-09-08 against HEAD `7c2dfac8`. Every claim names the code
+Last reviewed: 2026-09-10 against source `a2825424`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
-<!-- bullet-doc-review:v1 subject=8538df6746bef347cb089cda6f65a0f62153fb42 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
+<!-- bullet-doc-review:v1 subject=a282542425eb15fefd509c9d317527a2744ae45e max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,apps/bullet-farmd/src/commands.rs,apps/bullet-farmd/src/commands/conversations.rs,apps/bullet-farmd/src/api/routes.rs,apps/bullet/src/contracts.rs,crates/application/src/conversations.rs,crates/adapters/src/sqlite/conversations/admission.rs,crates/adapters/src/sqlite/migrations/catalog.rs,apps/bullet-runner/src/signed_in_cli.rs -->
 
 ## Ledger core
 
@@ -36,7 +36,7 @@ authority stays refused.
 
 SQLite maintenance is an offline boundary. `bullet farm backup` uses SQLite's
 online backup API over an owned recovered private snapshot, validates authentic
-schema 22 or 23, foreign keys and integrity, then publishes an absent snapshot; the CLI separately writes an absent unsigned
+schemas 22 through 27, foreign keys and integrity, then publishes an absent snapshot; the CLI separately writes an absent unsigned
 BLAKE3 receipt, so receipt failure may leave an unusable orphan snapshot.
 `bullet farm restore` admits the receipt-bound bytes through a bounded no-follow
 descriptor, preserves the supported schema and authority state, advances the
@@ -58,20 +58,42 @@ codes; `/api/v1/missions/{id}`, `/api/v1/ready`, and the six projections carry a
 in [`README.md`](../README.md#farmd-routes); the router fallback answers
 `NOT_FOUND`. `contracts/openapi.yaml` is the contract source of truth for every
 public route (the internal reconciler is deliberately absent from it);
-`bullet contracts generate` emits `contracts/generated/api.ts` and
-`bullet contracts check` gates CI. Public command submission records
-`PENDING`. A separately authenticated, explicitly invoked internal reconciler
-(`POST /internal/v1/commands/{id}/reconcile`, inert without
-`--worker-token-file`) atomically settles the command, outbox, and audit
-event, but has no execution/read-back adapter: known demo work becomes only
-`UNKNOWN`, and unsupported kinds only `FAILED`. It cannot emit `APPLIED` or
-`VERIFIED`. After worker authentication and identifier validation, an absent
-command returns non-retryable RFC 9457 `404 NOT_FOUND`; durable store or
-corruption failures remain retryable `500 STORE_FAILURE`.
+`bullet contracts generate` emits Rust, TypeScript and JSON Schema models
+together; `bullet contracts check` gates drift. Operator projections, commands
+and SSE require authenticated durable sessions. Browser Origin and CSRF checks
+remain enforced; operator-owned command and conversation discovery survives
+local cache loss and daemon restart.
+
+Public `POST /api/v1/commands` returns the command's current durable phase.
+Exact owned retries retain their original subject; they do not create another
+command. `run_coding` task intent persists the accepted repository/base, scope,
+criteria, gates, dependencies, limits, and server-derived task revision and run
+tracking identities. These allocate no Runner, reservation or authority grant;
+the task reports
+`CODING_BINDING_ADMISSION_UNAVAILABLE` until execution authority is available.
+The retired HTTP worker reconciler (`POST /internal/v1/commands/{id}/reconcile`)
+authenticates and then returns `410 WORKLOAD_API_UDS_REQUIRED`; workload mutation
+uses the separate internal Unix-socket boundary. Durable store and corruption
+failures remain typed failures, never fabricated completion.
+
+`conversation_message` atomically saves a complete human message, its owner,
+server message/thread identities, command receipt, reference-only audit event
+and head-turn request. A supplied cursor must match the current thread tip;
+exact retries are checked first and return the original saved-message receipt.
+`APPLIED` establishes this persistence only. Authenticated conversation reads
+return complete, sequenced messages and a separate current-tip cursor from one
+read transaction; earlier-history corruption refuses the read. The head request
+has no Runner authority and reports `HEAD_RUNTIME_BINDING_REQUIRED`. No native
+assistant response or delegated coding work is inferred from saving it.
 
 ## Projections
 
-Source: `apps/bullet-farmd/src/projections/{mod,fleet,sessions,context_lineage,merge_rail,quality_lab,audit}.rs`.
+Source: `apps/bullet-farmd/src/projections/{mod,operator,fleet,sessions,context_lineage,merge_rail,quality_lab,audit}.rs`.
+
+`/api/v1/operator-snapshot` assembles the operator surfaces in one SQLite read
+transaction. CLI/TUI and Portal consumers validate its watermark and subject
+relationships. This supplies a compatible board without composing independent
+route snapshots; it does not authorize a mutation or certify live work.
 
 `/api/v1/fleet`, `/api/v1/sessions`, `/api/v1/context-lineage`, `/api/v1/merge-rail`,
 `/api/v1/quality-lab`, and `/api/v1/audit` are read-only spec §25 surfaces. Each route performs exactly one
@@ -134,8 +156,8 @@ runtime/profile/event/proposal fixture data. All raw provider frames use strict 
 that rejects decoded-equivalent duplicate object keys and trailing data; Codex
 applies it again to its inner proposal text. RFC 8785 identity is enforced only
 on the launch-grant, lease-transport, and policy paths (`launch_grant/canonical.rs`,
-vendored and golden-vector-pinned to bullet-wire); transport supervision for
-live providers and live receipts remain absent.
+vendored and golden-vector-pinned to bullet-wire). Production native lifecycle,
+account/model binding and receipt qualification remain incomplete.
 
 The argv boundary additionally enforces the kill switch
 (`BULLET_PROVIDER_KILL=1`), worktree/tmux deny list, exact admitted executable,
@@ -143,9 +165,12 @@ and default refusal of live provider programs (`LIVE_ADMISSION_UNAVAILABLE`).
 Supervision records exit/crash, cancellation, heartbeat loss, or deadline and
 kills the POSIX process group before bounded pipe reaping. This is the Linux V1
 process-tree mechanism, not a cross-platform sandbox. `crates/harness-sim` is
-the deterministic simulator. Harness-core supervision is tested as a component;
-the only committed provider spawn path is step 11 of the live-conformance path
-below, and it is unreachable under the committed policy.
+the deterministic simulator. Harness-core supervision is tested as a component.
+The live-conformance spawn at step 11 below is unreachable under the committed
+policy. Separate Runner paths construct the Claude dogfood adapter and
+`apps/bullet-runner/src/signed_in_cli.rs` for Codex, Cursor and Antigravity.
+Their presence does not establish admitted subscription execution, complete
+native lifecycle control, or a verified coding transaction.
 
 ## Signed launch-grant admission
 
@@ -345,14 +370,22 @@ There is no admitted live provider dispatch, online-authorized BulletGit
 mutation, or connected runner -> BulletGit -> independent verifier -> effect
 transaction, so none supplies production Evidence or integration truth.
 
+Runner finalization (`crates/runner/src/attempt/drive/finalize.rs`) requires a
+positive termination acknowledgement and recorded Candidate preservation before
+one `Succeeded` release, followed by receipt-bound cleanup. A finalization error
+reports `FINALIZATION_UNRESOLVED` with recovery subjects and prevents a second
+fallback release. This does not establish termination of native descendants,
+capacity retention beyond legacy lease expiry, atomic quota/verifier settlement,
+or cleanup replay after a lost response.
+
 ## Runner ↔ farmd lease admission refusal
 
 `apps/bullet-runner/src/main.rs` returns typed
 `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE` when explicit lease inputs are absent or
 invalid. With an absolute socket/recovery path, farmd UID and socket GID it
 constructs `SignedLeaseRpcClient::new_admitted` and loads durable acquire recovery.
-The CLI separately admits the Candidate request digest and verification key, and
-and provider admission is decided before any of it. The dormant unsigned `HttpLeaseClient` uses the
+The CLI separately admits the Candidate request digest and verification key;
+provider admission is decided before any of it. The dormant unsigned `HttpLeaseClient` uses the
 operator `/api/v1` prefix, but its lease and advance routes are deliberately not
 mounted and the product CLI never constructs it. This prevents a retired `/v1`
 response or a public browser route from being mistaken for workload authority.
