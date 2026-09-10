@@ -13,6 +13,13 @@ mod storage;
 
 use storage::*;
 
+pub(super) fn projection_claim(
+    conn: &Connection,
+    id: &CommandId,
+) -> Result<Option<CommandDispatchClaim>, bullet_application::LedgerError> {
+    claim_for_command(conn, id).map_err(super::store)
+}
+
 const DISPATCH_KIND: &str = "command_dispatch";
 const CLAIMED_EVENT: &str = "command_dispatch_claimed";
 const RECONCILED_EVENT: &str = "command_reconciled";

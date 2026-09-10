@@ -16,9 +16,13 @@ macro_rules! core_route_catalog {
             Get, "/api/v1/demo", super::get_demo, true, "demo receipt re-derived from ledger rows";
             Post, "/api/v1/demo/run", super::removed_demo_mutation, true, "retired direct mutation; submit a `run_demo` command";
             Post, "/api/v1/auth/bootstrap", crate::auth::bootstrap, true, "one-time local-browser session bootstrap";
+            Get, "/api/v1/auth/session", crate::auth::sessions::get, true, "current durable operator session metadata";
+            Post, "/api/v1/auth/revoke", crate::auth::sessions::revoke, true, "authenticated self-revocation of the presented session";
+            Get, "/api/v1/commands", crate::commands::discovery::list, true, "bounded discovery of the current operator’s commands";
             Post, "/api/v1/commands", crate::commands::submit, true, "authenticated command submission records `PENDING`";
             Get, "/api/v1/commands/{id}", crate::commands::get, true, "command status";
             Post, "/internal/v1/commands/{id}/reconcile", crate::commands::reconcile, false, "worker-bearer reconciler, outside the public contract";
+            Get, "/api/v1/operator-snapshot", crate::projections::operator_snapshot, true, "operator surfaces from one atomic ledger snapshot";
             Get, "/api/v1/outbox", super::outbox, true, "outbox snapshot";
             Get, "/api/v1/events", super::events, true, "SSE ledger events with bounded replay";
             Get, "/api/v1/ready", crate::leases::next_ready, true, "next ready work package with its sequence watermark";

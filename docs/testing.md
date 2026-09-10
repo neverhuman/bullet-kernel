@@ -13,11 +13,11 @@ that aggregator fail.
 
 | Partition | Selected | Meaning |
 | --- | ---: | --- |
-| standalone | 747 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
+| standalone | 1191 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
 | egress | 3 | the exact host-dependent namespace/nftables/CONNECT-proxy identities; only the capability-admitted `egress` lane executes them |
 | contract | 34 | four offline provider protocol binaries plus `bullet-test-simulation` |
 | family | 9 | five `transaction_demo` identities plus `heartbeat_stale`, `kill_retry`, `loop_sim`, and `synthetic_e2e` |
-| total | 793 | exact union of the four disjoint partitions above |
+| total | 1237 | exact union of the four disjoint partitions above |
 
 `ops/ci/inventory-test.sh` independently lists all four partitions, requires
 every set to be nonzero, checks pairwise disjointness and exact union,
@@ -25,6 +25,13 @@ digest-binds all identities, locks the nine family and three egress identities, 
 scans test sources for every `bullet-gitd` resolution site. A new, removed,
 renamed, ignored, or silently reclassified test makes `lint` fail until the
 inventory is reviewed.
+
+The September 10 inventory includes durable operator-session and command-owner
+fixtures, response-loss/restart discovery, private bootstrap custody, generated
+client validation, and actual CLI/TUI child-process checks. These tests use
+disposable local identities and explicitly synthetic task data; they do not
+establish installed provider execution or release eligibility. Inventory
+enumeration alone is not a successful test execution.
 
 Every partition list and execution supplies
 `--features bullet-verifier/fixture-executor`. The feature exposes six

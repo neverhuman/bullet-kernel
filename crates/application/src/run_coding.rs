@@ -137,6 +137,40 @@ pub fn is_supported_dispatch_kind(kind: &str) -> bool {
     kind == RUN_DEMO_KIND || kind == RUN_CODING_KIND
 }
 
+/// Validate the immutable acceptance bindings of an already recorded request.
+/// Current authority/quota availability do not alter that historical subject.
+/// # Errors
+/// Missing or substituted reservation, nonce, or accepted request subject.
+pub fn validate_run_coding_replay(
+    request: &CommandRequest,
+    reservation: &Option<(String, u64)>,
+    nonce: &Option<(String, NonceState)>,
+) -> Result<(), DomainError> {
+    if request.kind != RUN_CODING_KIND {
+        return Ok(());
+    }
+    let payload = RunCodingPayload::parse(&request.payload)?;
+    let digest = request.digest().to_hex();
+    match reservation {
+        Some((id, amount))
+            if id == &payload.quota_reservation && *amount == payload.quota_units => {}
+        _ => {
+            return Err(DomainError::Encoding(
+                "run_coding replay is missing its exact quota reservation".into(),
+            ));
+        }
+    }
+    match nonce {
+        Some((stored, NonceState::Consumed)) if stored == &digest => {}
+        _ => {
+            return Err(DomainError::Encoding(
+                "run_coding replay is missing its consumed launch nonce".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validate a `run_coding` request and plan first-insert rows.
 ///
 /// Replay (`existed`) requires the reservation and consumed nonce to already
@@ -155,6 +189,10 @@ pub fn plan_run_coding_admission(
         return Ok(None);
     }
     let payload = RunCodingPayload::parse(&request.payload)?;
+    if existed {
+        validate_run_coding_replay(request, &view.existing_reservation, &view.nonce)?;
+        return Ok(None);
+    }
     if payload.expected_revision != view.authority_epoch {
         return Err(DomainError::StaleAuthority(format!(
             "run_coding expected revision {} but authority epoch is {}",
@@ -162,26 +200,6 @@ pub fn plan_run_coding_admission(
         )));
     }
     let digest = request.digest().to_hex();
-    if existed {
-        match &view.existing_reservation {
-            Some((id, amount))
-                if id == &payload.quota_reservation && *amount == payload.quota_units => {}
-            _ => {
-                return Err(DomainError::Encoding(
-                    "run_coding replay is missing its exact quota reservation".into(),
-                ));
-            }
-        }
-        match &view.nonce {
-            Some((stored, NonceState::Consumed)) if stored == &digest => {}
-            _ => {
-                return Err(DomainError::Encoding(
-                    "run_coding replay is missing its consumed launch nonce".into(),
-                ));
-            }
-        }
-        return Ok(None);
-    }
     if view.existing_reservation.is_some() {
         return Err(DomainError::Conflict(
             "quota reservation is already bound to another subject".into(),
@@ -331,5 +349,23 @@ mod tests {
         assert!(is_supported_dispatch_kind(RUN_DEMO_KIND));
         assert!(is_supported_dispatch_kind(RUN_CODING_KIND));
         assert!(!is_supported_dispatch_kind("not_admitted"));
+    }
+    #[test]
+    fn accepted_replay_ignores_new_epoch_and_quota_availability_but_requires_original_bindings() {
+        let request = request();
+        let mut view = issued_view();
+        view.authority_epoch = u64::MAX;
+        view.used_quota = u64::MAX;
+        view.existing_reservation = Some((format!("rsv_{}", "cd".repeat(32)), 3));
+        view.nonce = Some((request.digest().to_hex(), NonceState::Consumed));
+        assert!(plan_run_coding_admission(&request, true, &view)
+            .unwrap()
+            .is_none());
+        assert!(plan_run_coding_admission(&request, false, &view).is_err());
+        view.nonce = Some((request.digest().to_hex(), NonceState::Issued));
+        assert!(plan_run_coding_admission(&request, true, &view).is_err());
+        view.nonce = Some((request.digest().to_hex(), NonceState::Consumed));
+        view.existing_reservation.as_mut().unwrap().1 = 4;
+        assert!(plan_run_coding_admission(&request, true, &view).is_err());
     }
 }

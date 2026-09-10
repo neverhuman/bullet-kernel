@@ -92,6 +92,8 @@ fn title_for(code: &str) -> &'static str {
         "STALE_AUTHORITY" => "Stale authority token",
         "FENCE_REUSE" => "Fence invariant violated",
         "IDEMPOTENCY_CONFLICT" => "Idempotency conflict",
+        "COMMAND_OWNERSHIP_CONFLICT" => "Command ownership conflict",
+        "OPERATOR_COMMAND_REQUEST_INVALID" => "Invalid operator command query",
         "GRAPH_CONFLICT" => "Graph conflict",
         "INVALID_ID" => "Invalid identifier",
         "INVALID_LEASE_TTL" => "Invalid lease lifetime",
@@ -176,7 +178,7 @@ impl IntoResponse for ApiError {
                 detail,
                 %request_id,
                 %correlation_id,
-                "database requires export and removal before restart"
+                "database preserved pending qualified supervised upgrade or restore"
             );
         }
         if let Self::UnsafeInteger(field) = &self {
@@ -203,7 +205,7 @@ impl IntoResponse for ApiError {
                 "Fetch a fresh projection snapshot, then reconnect with its as_of_sequence as the exclusive cursor."
             }
             Self::UnsupportedSchema(_) => {
-                "Export any data you need, remove the unsupported database, and restart to initialize the current schema."
+                "Preserve the database and use a qualified supervised upgrade or verified backup/restore procedure; do not delete durable work to satisfy startup."
             }
             Self::Internal(_) => {
                 "Retry once; if the failure persists, use request_id and correlation_id to inspect farmd logs and run bullet-family doctor."

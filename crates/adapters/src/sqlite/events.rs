@@ -91,6 +91,18 @@ pub(super) fn list_events_after(
     )
 }
 
+/// Three event kinds describe one command. A fourth correlated row must fail
+/// projection validation, so bounded reads retain every detectable conflict.
+pub(super) fn command_projection_events(
+    conn: &Connection,
+    id: &bullet_domain::CommandId,
+) -> Result<Vec<LedgerEvent>, LedgerError> {
+    collect(conn,
+        // jankurai:allow HLT-023-INPUT-BOUNDARY-GAP reason=column list is a compile-time const, command identity is a bound parameter owner=adapters expires=2027-03-08
+        &format!("SELECT {EVENT_COLUMNS} FROM events WHERE (stream_id=?1 OR correlation_id=?1) AND kind IN ('command_submitted','command_dispatch_claimed','command_reconciled') ORDER BY seq LIMIT 4"),
+        &[&id.as_str()])
+}
+
 pub(super) fn latest_sequence(conn: &Connection) -> Result<u64, LedgerError> {
     let sequence: i64 = conn
         .query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |row| {

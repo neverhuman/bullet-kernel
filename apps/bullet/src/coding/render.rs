@@ -18,10 +18,11 @@ pub(super) fn color_wanted(force_plain: bool) -> bool {
 }
 
 fn paint(color: bool, code: &str, text: &str) -> String {
+    let text = crate::client::terminal_text(text);
     if color {
         format!("{BOLD}{code}{text}{RESET}")
     } else {
-        text.to_string()
+        text
     }
 }
 
@@ -99,10 +100,7 @@ pub(super) fn format_board(board: &Board, color: bool) -> String {
                 paint(color, DIM, "(public /health)")
             ));
         }
-        Err(error) => lines.push(format!(
-            "  health   {} {error}",
-            paint(color, status_tone("unknown"), "UNKNOWN")
-        )),
+        Err(error) => lines.push(error_line("health", error, color)),
     }
     match &board.fleet {
         Ok(body) => {
@@ -144,10 +142,7 @@ pub(super) fn format_board(board: &Board, color: bool) -> String {
                 ));
             }
         }
-        Err(error) => lines.push(format!(
-            "  fleet    {} {error}",
-            paint(color, RED, "UNKNOWN")
-        )),
+        Err(error) => lines.push(error_line("fleet", error, color)),
     }
     match &board.sessions {
         Ok(body) => {
@@ -166,10 +161,7 @@ pub(super) fn format_board(board: &Board, color: bool) -> String {
                 paint(color, if held == 0 { DIM } else { GREEN }, "HELD")
             ));
         }
-        Err(error) => lines.push(format!(
-            "  sessions {} {error}",
-            paint(color, RED, "UNKNOWN")
-        )),
+        Err(error) => lines.push(error_line("sessions", error, color)),
     }
     match &board.outbox {
         Ok(body) => {
@@ -179,32 +171,26 @@ pub(super) fn format_board(board: &Board, color: bool) -> String {
                 .unwrap_or(0);
             lines.push(format!("  outbox   items {items}"));
         }
-        Err(error) => lines.push(format!(
-            "  outbox   {} {error}",
-            paint(color, RED, "UNKNOWN")
-        )),
+        Err(error) => lines.push(error_line("outbox", error, color)),
     }
     if let Some(command) = &board.command {
         match command {
             Ok(body) => lines.push(format!(
-                "  command  {} {} {}",
+                "  command  server phase {} {} {} · verification UNKNOWN (receipt unchecked)",
                 paint(
                     color,
                     status_tone(body["status"].as_str().unwrap_or("UNKNOWN")),
                     body["status"].as_str().unwrap_or("UNKNOWN")
                 ),
-                body["kind"].as_str().unwrap_or("unknown-kind"),
-                body["id"].as_str().unwrap_or("missing-id")
+                crate::client::terminal_text(body["kind"].as_str().unwrap_or("unknown-kind")),
+                crate::client::terminal_text(body["id"].as_str().unwrap_or("missing-id"))
             )),
-            Err(error) => lines.push(format!(
-                "  command  {} {error}",
-                paint(color, RED, "UNKNOWN")
-            )),
+            Err(error) => lines.push(error_line("command", error, color)),
         }
     }
     let harness_tone = status_tone(board.harness.outcome);
     lines.push(format!(
-        "  harness  {} (missing bind is COMMAND_CODING_HARNESS_UNBOUND; never sim)",
+        "  harness  {} (local CLI environment; daemon runtime admission is unknown)",
         paint(color, harness_tone, board.harness.outcome)
     ));
     lines.join("\n")
@@ -212,16 +198,46 @@ pub(super) fn format_board(board: &Board, color: bool) -> String {
 
 pub(super) fn format_command_card(body: &Value, color: bool) -> String {
     format!(
-        "{}\n  status   {}\n  kind     {}\n  command  {}",
-        paint(color, CYAN, "run_coding ADMITTED"),
+        "{}\n  server phase {}\n  verification UNKNOWN (receipt unchecked)\n  kind     {}\n  command  {}",
+        paint(color, CYAN, "COMMAND OBSERVATION"),
         paint(
             color,
             status_tone(body["status"].as_str().unwrap_or("UNKNOWN")),
             body["status"].as_str().unwrap_or("UNKNOWN")
         ),
-        body["kind"].as_str().unwrap_or("unknown-kind"),
-        body["id"].as_str().unwrap_or("missing-id")
+        crate::client::terminal_text(body["kind"].as_str().unwrap_or("unknown-kind")),
+        crate::client::terminal_text(body["id"].as_str().unwrap_or("missing-id"))
     )
+}
+
+fn error_line(label: &str, error: &str, color: bool) -> String {
+    format!(
+        "  {label:<9} {} {}",
+        paint(color, RED, "UNKNOWN"),
+        crate::client::terminal_text(error)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn server_command_text_cannot_inject_terminal_sequences() {
+        let body = json!({"status":"PENDING", "kind":"bad\x1b]52;clipboard\x07", "id":"line\r\noverwrite"});
+        let card = format_command_card(&body, false);
+        assert!(!card.contains('\x1b'));
+        assert!(!card.contains('\x07'));
+        assert!(!card.contains('\r'));
+        assert!(card.contains("\\r\\n"));
+        assert!(!error_line("fleet", "server\x1b[2J", false).contains('\x1b'));
+        let verified = format_command_card(
+            &json!({"status":"VERIFIED","kind":"run_demo","id":"id"}),
+            false,
+        );
+        assert!(verified.contains("server phase VERIFIED"));
+        assert!(verified.contains("verification UNKNOWN (receipt unchecked)"));
+        assert!(!verified.contains("ADMITTED"));
+    }
 }
 
 pub(super) fn format_harness(report: &Report, color: bool) -> String {

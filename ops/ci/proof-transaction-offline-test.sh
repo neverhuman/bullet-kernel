@@ -4,6 +4,7 @@ set -euo pipefail
 # shellcheck source=ops/ci/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
+require_tool b3sum || exit 1
 
 test_root="$(mktemp -d)"
 cleanup() { rm -rf -- "$test_root"; }

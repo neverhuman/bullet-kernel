@@ -1,53 +1,149 @@
-//! Loopback HTTP/1.1 client for farmd coding and projection reads.
+//! Bounded loopback HTTP client. No proxy, redirects, or secret-bearing diagnostics.
 
+use reqwest::blocking::Client;
+use reqwest::header::{HeaderName, HeaderValue, CONTENT_TYPE, SET_COOKIE};
+use reqwest::{Method, Url};
 use serde_json::{json, Value};
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::io::Read;
 use std::time::Duration;
 
-pub(super) struct HttpResponse {
-    pub(super) status: u16,
-    pub(super) body: Value,
-    pub(super) set_cookie: Option<String>,
+const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+
+pub(crate) struct HttpResponse {
+    pub(crate) status: u16,
+    pub(crate) body: Value,
+    pub(crate) set_cookie: Option<String>,
+    pub(crate) sequence: Option<u64>,
 }
 
-pub(super) fn request(
+pub(crate) fn request(
     farmd: &str,
     method: &str,
     path: &str,
     headers: &[(&str, &str)],
     body: Option<&Value>,
 ) -> Result<HttpResponse, String> {
-    let (host, port) = parse_loopback(farmd)?;
-    let payload = body.map(Value::to_string).unwrap_or_default();
-    let mut message = format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\n");
-    if !payload.is_empty() {
-        message.push_str("Content-Type: application/json\r\n");
-    }
-    for (name, value) in headers {
-        message.push_str(&format!("{name}: {value}\r\n"));
-    }
-    message.push_str(&format!(
-        "Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-        payload.len()
-    ));
-    let mut stream = TcpStream::connect((host.as_str(), port))
-        .map_err(|error| format!("connect {farmd}: {error}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .and_then(|_| stream.set_write_timeout(Some(Duration::from_secs(10))))
-        .map_err(|error| format!("farmd socket timeout: {error}"))?;
-    stream
-        .write_all(message.as_bytes())
-        .map_err(|error| format!("write farmd: {error}"))?;
-    let mut bytes = Vec::new();
-    stream
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("read farmd: {error}"))?;
-    parse_http(&bytes)
+    request_query(farmd, method, path, &[], headers, body)
 }
 
-pub(super) fn exchange_bootstrap(
+pub(crate) fn request_query(
+    farmd: &str,
+    method: &str,
+    path: &str,
+    query: &[(&str, &str)],
+    headers: &[(&str, &str)],
+    body: Option<&Value>,
+) -> Result<HttpResponse, String> {
+    parse_loopback(farmd)?;
+    if !path.starts_with('/') || path.starts_with("//") || path.contains(['?', '#', '\\']) {
+        return Err("FARMD_PATH_INVALID: expected an absolute API path".into());
+    }
+    let mut url = Url::parse(farmd).map_err(|_| "FARMD_URL_INVALID")?;
+    // Paths are assigned, never resolved as a new authority.
+    url.set_path(path);
+    if !query.is_empty() {
+        url.query_pairs_mut().extend_pairs(query.iter().copied());
+    }
+    let method = Method::from_bytes(method.as_bytes()).map_err(|_| "FARMD_METHOD_INVALID")?;
+    let client = Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|_| "FARMD_CLIENT_UNAVAILABLE")?;
+    let mut request = client.request(method, url);
+    for (name, value) in headers {
+        let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| "FARMD_HEADER_INVALID")?;
+        let mut value = HeaderValue::from_str(value).map_err(|_| "FARMD_HEADER_INVALID")?;
+        value.set_sensitive(true);
+        request = request.header(name, value);
+    }
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    let response = request.send().map_err(|_| {
+        "FARMD_REQUEST_FAILED: reconnect and reconcile the original command before retrying"
+    })?;
+    let status = response.status().as_u16();
+    let sequences = response
+        .headers()
+        .get_all("x-bullet-as-of-sequence")
+        .iter()
+        .collect::<Vec<_>>();
+    if sequences.len() > 1 {
+        return Err("FARMD_SEQUENCE_AMBIGUOUS".into());
+    }
+    let sequence = sequences
+        .first()
+        .map(|v| {
+            let text = v.to_str().map_err(|_| "FARMD_SEQUENCE_INVALID")?;
+            if text.is_empty() || !text.bytes().all(|c| c.is_ascii_digit()) {
+                return Err("FARMD_SEQUENCE_INVALID");
+            }
+            text.parse::<u64>().map_err(|_| "FARMD_SEQUENCE_INVALID")
+        })
+        .transpose()?;
+    if response.status().is_redirection() {
+        return Err("FARMD_REDIRECT_REFUSED".into());
+    }
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_RESPONSE_BYTES)
+    {
+        return Err("FARMD_RESPONSE_TOO_LARGE".into());
+    }
+    let cookies = response
+        .headers()
+        .get_all(SET_COOKIE)
+        .iter()
+        .collect::<Vec<_>>();
+    if cookies.len() > 1 {
+        return Err("FARMD_COOKIE_AMBIGUOUS".into());
+    }
+    let set_cookie = cookies
+        .first()
+        .map(|value| value.to_str().map(str::to_owned))
+        .transpose()
+        .map_err(|_| "FARMD_COOKIE_INVALID")?;
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .unwrap_or("")
+        .trim();
+    if status != 204
+        && !matches!(
+            content_type,
+            "application/json" | "application/problem+json"
+        )
+    {
+        return Err("FARMD_CONTENT_TYPE_INVALID: expected JSON".into());
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(MAX_RESPONSE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "FARMD_RESPONSE_INCOMPLETE")?;
+    if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+        return Err("FARMD_RESPONSE_TOO_LARGE".into());
+    }
+    let body = if status == 204 && bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .map_err(|_| "FARMD_JSON_INVALID: response was not valid UTF-8 JSON")?
+    };
+    Ok(HttpResponse {
+        status,
+        body,
+        set_cookie,
+        sequence,
+    })
+}
+
+pub(crate) fn exchange_bootstrap(
     farmd: &str,
     origin: &str,
     token: &str,
@@ -60,77 +156,54 @@ pub(super) fn exchange_bootstrap(
         Some(&json!({ "bootstrap_token": token })),
     )?;
     if response.status != 200 {
-        return Err(format!(
-            "farmd bootstrap returned HTTP {}: {}",
-            response.status, response.body
-        ));
+        return Err(format!("FARMD_BOOTSTRAP_REFUSED: HTTP {}", response.status));
     }
-    let csrf = response.body["csrf_token"]
-        .as_str()
-        .ok_or("farmd bootstrap omitted csrf_token")?
-        .to_string();
+    let model: crate::client::models::BootstrapResponse = crate::client::decode(&response.body)?;
+    let csrf = model.csrf_token.as_str();
     let cookie = response
         .set_cookie
-        .ok_or("farmd bootstrap omitted Set-Cookie")?
+        .as_deref()
+        .ok_or("FARMD_COOKIE_MISSING")?
         .split(';')
         .next()
-        .unwrap_or_default()
-        .to_string();
-    if cookie.is_empty() {
-        return Err("farmd bootstrap cookie pair was empty".into());
-    }
-    Ok((cookie, csrf))
+        .unwrap_or_default();
+    let bearer = cookie
+        .strip_prefix("bullet_session=")
+        .ok_or("FARMD_COOKIE_INVALID")?;
+    validate_secret(bearer, "ses")?;
+    validate_secret(csrf, "csrf")?;
+    Ok((cookie.to_owned(), csrf.to_owned()))
 }
 
-pub(super) fn parse_loopback(farmd: &str) -> Result<(String, u16), String> {
+pub(crate) fn validate_secret(value: &str, prefix: &str) -> Result<(), String> {
+    let hex = value
+        .strip_prefix(prefix)
+        .and_then(|v| v.strip_prefix('_'))
+        .ok_or("FARMD_CREDENTIAL_INVALID")?;
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+    {
+        return Err("FARMD_CREDENTIAL_INVALID".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_loopback(farmd: &str) -> Result<(String, u16), String> {
     let rest = farmd
         .strip_prefix("http://")
         .ok_or("farmd must be an http:// loopback URL")?;
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .ok_or("farmd URL is missing a host")?;
-    let addr: std::net::SocketAddr = authority
+    let addr: std::net::SocketAddr = rest
+        .strip_suffix('/')
+        .unwrap_or(rest)
         .parse()
-        .map_err(|_| "farmd must contain an explicit loopback address and port")?;
-    if !addr.ip().is_loopback() {
-        return Err("farmd must be loopback".into());
+        .map_err(|_| "farmd must contain only an explicit loopback address and port")?;
+    if !addr.ip().is_loopback() || addr.port() == 0 {
+        return Err("farmd must be loopback with a nonzero port".into());
     }
     Ok((addr.ip().to_string(), addr.port()))
 }
 
-fn parse_http(bytes: &[u8]) -> Result<HttpResponse, String> {
-    let text = String::from_utf8_lossy(bytes);
-    let (head, body) = text
-        .split_once("\r\n\r\n")
-        .ok_or("farmd response omitted the header terminator")?;
-    let status = head
-        .split_whitespace()
-        .nth(1)
-        .and_then(|value| value.parse().ok())
-        .ok_or("farmd response omitted an HTTP status")?;
-    let set_cookie = head.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case("set-cookie")
-            .then(|| value.trim().to_string())
-    });
-    Ok(HttpResponse {
-        status,
-        body: decode_body(body),
-        set_cookie,
-    })
-}
-
-fn decode_body(body: &str) -> Value {
-    if body.trim().is_empty() {
-        return Value::Null;
-    }
-    if let Ok(value) = serde_json::from_str(body) {
-        return value;
-    }
-    let unchunked: String = body
-        .lines()
-        .filter(|line| !line.trim().is_empty() && u64::from_str_radix(line.trim(), 16).is_err())
-        .collect();
-    serde_json::from_str(&unchunked).unwrap_or(Value::Null)
-}
+#[cfg(test)]
+mod tests;

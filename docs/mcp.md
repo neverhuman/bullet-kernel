@@ -1,18 +1,27 @@
 # Bullet Farm MCP boundary
 
-Status: read-only component; not live or release evidence  
-Last reviewed: 2026-08-25
+Status: read-only component; scoped read admission unavailable; not live or release evidence
+
+Last reviewed: 2026-09-09
 
 `bullet-mcpd` is a stdio Model Context Protocol server for inspecting the
 existing Kernel projections. It uses the official Rust MCP SDK and exposes
-only fixed GET routes on one numeric loopback farmd address. Every result is
+only fixed GET routes on one numeric loopback farmd address. Successful projection results use
 the exact public snapshot envelope:
 
 ```json
 {"data":{},"as_of_sequence":0,"observed_at":"…","source":"bullet-kernel/sqlite-ledger"}
 ```
 
-The adapter checks the body fields, source, and equality between
+Current farmd requires authentication for every operator read, as described in
+[`operator-reads.md`](operator-reads.md). This adapter has no admitted scoped
+MCP read identity, so current farmd returns `401` and tools report
+`FARMD_REFUSED`, without projection data. SDK initialization and tool discovery
+still operate. An independently scoped read principal is required before
+successful MCP reads can resume; browser and worker credentials cannot stand
+in for it. Earlier anonymous-read component results are historical evidence.
+
+For a successful HTTP response, the adapter checks the body fields, source, and equality between
 `as_of_sequence` and `X-Bullet-As-Of-Sequence`. Unavailable, malformed,
 oversized, or conflicting responses are typed tool errors. They never become
 an empty projection, PASS, VERIFIED, FAILED, or evidence.

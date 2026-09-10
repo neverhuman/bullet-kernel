@@ -29,6 +29,8 @@ pub mod materializer;
 pub mod memory;
 pub mod mutation_reservation;
 pub mod nonce_ledger;
+pub mod operator_commands;
+pub mod operator_sessions;
 pub mod policy_snapshot;
 pub mod queue;
 pub mod records;

@@ -7,6 +7,8 @@
 //! Raw SQL places an exact expired window without sleeping, exactly as the
 //! adapter's own `lease_reaper.rs` already does.
 
+#[path = "support/operator.rs"]
+mod operator;
 mod support;
 
 use bullet_adapters::SqliteLedger;
@@ -16,14 +18,14 @@ use bullet_application::{
 };
 use bullet_domain::{AttemptState, TaskClass};
 use bullet_farmd::reaper;
+use operator::Client;
 use rusqlite::Connection;
 use serde_json::Value;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 
 const MATERIALIZED_AT: &str = "2026-01-01T00:00:00.000Z";
@@ -90,16 +92,12 @@ fn attempt_state(ledger: &SqliteLedger, grant: &LeaseGrant) -> AttemptState {
         .state
 }
 
-async fn serve(app: axum::Router) -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
-    addr
-}
-
-async fn get(addr: SocketAddr, path: &str) -> String {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+async fn get(addr: &Client, path: &str) -> String {
+    let mut stream = TcpStream::connect(addr.addr).await.expect("connect");
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: {}\r\nConnection: close\r\n\r\n",
+        addr.cookie
+    );
     stream.write_all(request.as_bytes()).await.expect("write");
     let mut bytes = Vec::new();
     timeout(Duration::from_secs(10), stream.read_to_end(&mut bytes))
@@ -320,11 +318,16 @@ fn the_tick_never_touches_a_live_lease_and_is_silent_when_nothing_is_due() {
 async fn health_reports_the_tick_only_after_it_has_run() {
     let directory = support::private_tempdir();
     let path = directory.path().join("health.sqlite");
-    let (app, state) =
-        bullet_farmd::api::daemon(&path, None, LOCAL_ORIGIN.to_string(), None).expect("daemon");
-    let addr = serve(app).await;
+    let (app, state) = bullet_farmd::api::daemon(
+        &path,
+        Some(operator::BOOTSTRAP),
+        LOCAL_ORIGIN.to_string(),
+        None,
+    )
+    .expect("daemon");
+    let addr = operator::serve(app).await;
 
-    let before = get(addr, "/health").await;
+    let before = get(&addr, "/health").await;
     assert!(
         !before.contains("reap"),
         "a daemon whose tick has never fired answers exactly what it always did: {before}"
@@ -339,7 +342,7 @@ async fn health_reports_the_tick_only_after_it_has_run() {
         .await
         .expect("idle tick")
         .is_empty());
-    let idle: Value = serde_json::from_str(&get(addr, "/health").await).expect("health json");
+    let idle: Value = serde_json::from_str(&get(&addr, "/health").await).expect("health json");
     assert_eq!(idle["status"], "ok");
     assert_eq!(idle["reap"]["reclaimed"], 0);
     chrono::DateTime::parse_from_rfc3339(idle["reap"]["last_run_at"].as_str().expect("last run"))
@@ -352,7 +355,7 @@ async fn health_reports_the_tick_only_after_it_has_run() {
         1,
         "the tick reclaims the dead lease against the daemon's own ledger"
     );
-    let after: Value = serde_json::from_str(&get(addr, "/health").await).expect("health json");
+    let after: Value = serde_json::from_str(&get(&addr, "/health").await).expect("health json");
     assert_eq!(after["status"], "ok");
     assert_eq!(
         after["reap"]["reclaimed"], 1,
@@ -373,12 +376,17 @@ async fn fleet_drops_the_lease_the_tick_reclaimed_and_shows_the_work_ready() {
     let path = directory.path().join("fleet.sqlite");
     let (_graph, grant) = crashed_writer(&path, "fleet");
     force_expired(&path);
-    let (app, state) =
-        bullet_farmd::api::daemon(&path, None, LOCAL_ORIGIN.to_string(), None).expect("daemon");
-    let addr = serve(app).await;
+    let (app, state) = bullet_farmd::api::daemon(
+        &path,
+        Some(operator::BOOTSTRAP),
+        LOCAL_ORIGIN.to_string(),
+        None,
+    )
+    .expect("daemon");
+    let addr = operator::serve(app).await;
 
     let before: Value =
-        serde_json::from_str(&get(addr, "/api/v1/fleet").await).expect("fleet json");
+        serde_json::from_str(&get(&addr, "/api/v1/fleet").await).expect("fleet json");
     let leases = before["data"]["leases"].as_array().expect("leases");
     assert_eq!(leases.len(), 1, "the dead holder row is still there");
     assert_eq!(leases[0]["liveness"], "expired");
@@ -394,7 +402,8 @@ async fn fleet_drops_the_lease_the_tick_reclaimed_and_shows_the_work_ready() {
 
     assert_eq!(reaper::run_once(&state).await.expect("tick").len(), 1);
 
-    let after: Value = serde_json::from_str(&get(addr, "/api/v1/fleet").await).expect("fleet json");
+    let after: Value =
+        serde_json::from_str(&get(&addr, "/api/v1/fleet").await).expect("fleet json");
     assert!(
         after["data"]["leases"]
             .as_array()

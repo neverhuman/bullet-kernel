@@ -1,6 +1,8 @@
 //! Bullet Farm CLI.
 
+mod auth;
 mod authority;
+mod client;
 mod coding;
 mod contracts;
 #[path = "demo_live/mod.rs"]
@@ -11,6 +13,7 @@ mod mission;
 mod provider;
 mod run;
 mod transaction;
+mod tui;
 
 use bullet_adapters::SqliteLedger;
 use bullet_application::run_demo;
@@ -28,6 +31,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Browse authenticated durable work; Ctrl+C detaches this client.
+    Tui(tui::TuiArgs),
+    /// Authenticate this client without putting credentials in shell arguments.
+    Auth {
+        #[command(subcommand)]
+        command: auth::AuthCommands,
+    },
     /// Initialize a local data directory.
     Farm {
         #[command(subcommand)]
@@ -186,6 +196,8 @@ fn ensure_private_data_dir(_path: &std::path::Path) -> Result<(), String> {
 
 fn run(command: Commands) -> Result<(), String> {
     match command {
+        Commands::Tui(args) => tui::run(args),
+        Commands::Auth { command } => auth::run(command),
         Commands::Provider { .. } => unreachable!("provider is handled in main"),
         Commands::Transaction { .. } => unreachable!("transaction is handled in main"),
         Commands::Dogfood { .. } => unreachable!("dogfood is handled in main"),

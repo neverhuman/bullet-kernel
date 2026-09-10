@@ -2,7 +2,13 @@ openapi: 3.1.0
 info:
   title: Bullet Farm Control Plane
   version: 0.1.0
-  description: Projection API. The portal is never an authority source.
+  description: >
+    Projection API. The portal is never an authority source. All /api/v1
+    GET/HEAD reads require a live browserSession cookie. A supplied Origin
+    must match the configured Portal origin; read requests do not require
+    CSRF. Operator read responses use Cache-Control: no-store. SSE closes
+    when its opening session expires or is revoked; reconnect requires
+    current authority. /health and /openapi.yaml are public.
 servers:
   - url: http://127.0.0.1:7420
 paths:
@@ -22,10 +28,61 @@ paths:
       responses:
         "200":
           description: OpenAPI document
+  /api/v1/operator-snapshot:
+    get:
+      security:
+        - browserSession: []
+      summary: All durable operator projections from one atomic ledger snapshot
+      responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "200":
+          description: One compatible operator view; any corrupt component refuses the whole response
+          headers:
+            X-Bullet-As-Of-Sequence:
+              description: Latest durable event sequence covered by this snapshot.
+              required: true
+              schema:
+                type: integer
+                format: uint64
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperatorSnapshot"
+        "500":
+          description: store failure
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /api/v1/missions:
     get:
+      security:
+        - browserSession: []
       summary: List missions
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: missions
           headers:
@@ -47,6 +104,8 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /api/v1/missions/{id}:
     get:
+      security:
+        - browserSession: []
       summary: Mission graph projection
       parameters:
         - in: path
@@ -55,6 +114,18 @@ paths:
           schema:
             $ref: "#/components/schemas/MissionId"
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: mission view
           headers:
@@ -82,8 +153,22 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /api/v1/demo:
     get:
+      security:
+        - browserSession: []
       summary: Demo receipt re-derived from ledger rows, or null before a run
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: receipt or null
           headers:
@@ -151,12 +236,164 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /api/v1/auth/session:
+    get:
+      summary: Current durable operator session metadata
+      description: No bearer, CSRF token or credential digest is returned. Sessions survive restart until expiry, revocation or restore-epoch change.
+      security:
+        - browserSession: []
+      responses:
+        "200":
+          description: Authenticated session identity and absolute lifetime
+          headers:
+            Cache-Control:
+              required: true
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperatorSessionView"
+        "401":
+          description: missing, invalid, expired, revoked or ambiguous session
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is denied
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: durable authentication store failure
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/auth/revoke:
+    post:
+      summary: Revoke only the presented operator session
+      description: Requires exact Origin, session cookie and its CSRF token. Revocation is durable and closes streams opened by this session; other sessions remain valid.
+      security:
+        - browserSession: []
+          csrfToken: []
+      parameters:
+        - in: header
+          name: Origin
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeSessionRequest"
+      responses:
+        "200":
+          description: Durable self-revocation acknowledgement, without credentials
+          headers:
+            Cache-Control:
+              required: true
+              schema: { type: string, const: no-store }
+            Set-Cookie:
+              required: true
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionRevocationView"
+        "400":
+          description: body is not an exact empty object
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: missing, invalid, expired, revoked or ambiguous session
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Origin or CSRF refusal
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: durable authentication store failure
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /api/v1/commands:
+    get:
+      summary: Recover the current operator's durable commands without a local cache
+      description: >
+        One atomic snapshot of owned commands in ascending submitted-event
+        sequence. Historical unowned commands are excluded. Pages stop at
+        either the requested count or a conservative 7 MiB serialized budget.
+        Continue with next_after until null; no row is dropped at a byte cutoff.
+      security:
+        - browserSession: []
+      parameters:
+        - in: query
+          name: after
+          description: Canonical decimal submitted-event cursor, without leading zeros except zero itself.
+          schema: { type: integer, minimum: 0, maximum: 9007199254740991, default: 0 }
+        - in: query
+          name: limit
+          description: Canonical decimal maximum row count; the byte cap may return fewer rows.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Current owned command states from one compatible ledger snapshot
+          headers:
+            X-Bullet-As-Of-Sequence:
+              required: true
+              schema: { type: integer, minimum: 0, maximum: 9007199254740991 }
+            Cache-Control:
+              required: true
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandDiscoverySnapshot"
+        "400":
+          description: Unknown, repeated, malformed or out-of-range query parameter
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Missing, invalid, expired or revoked operator session
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Supplied Origin is not the configured origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Corrupt or inconsistent durable command ownership/projection
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
     post:
       summary: Durably admit a command as pending
       description: >
         Requires the browser session cookie, its CSRF token, and the exact
-        configured loopback Origin. HTTP acceptance is never verification.
+        configured loopback Origin. New admission records operator ownership
+        atomically with command, outbox, audit and admission effects. Exact
+        retry returns the original command's current phase without fresh
+        authority or quota admission, while verifying its original immutable
+        bindings. Historical unowned keys and other-owner keys conflict.
+        HTTP acceptance is never verification.
       security:
         - browserSession: []
           csrfToken: []
@@ -174,6 +411,13 @@ paths:
       responses:
         "202":
           description: initial or exact-replay durable command status
+          headers:
+            X-Bullet-As-Of-Sequence:
+              required: true
+              schema: { type: integer, minimum: 0, maximum: 9007199254740991 }
+            Cache-Control:
+              required: true
+              schema: { type: string, const: no-store }
           content:
             application/json:
               schema:
@@ -197,14 +441,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
         "409":
-          description: idempotency key is bound to another exact request
+          description: idempotency key is bound to another exact request or outside the authenticated operator history
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
   /api/v1/commands/{id}:
     get:
-      summary: Reconcile one durable command
+      summary: Read the current phase of one owned durable command
+      description: >
+        Authenticated owner-only atomic command/outbox/claim/audit projection.
+        Absent, foreign-owner and historical unowned commands return 404.
+        This read performs no reconciliation or mutation.
       security:
         - browserSession: []
       parameters:
@@ -214,8 +462,21 @@ paths:
           schema:
             $ref: "#/components/schemas/CommandId"
       responses:
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: PENDING, APPLIED, VERIFIED, FAILED, or UNKNOWN durable truth
+          headers:
+            X-Bullet-As-Of-Sequence:
+              required: true
+              schema: { type: integer, minimum: 0, maximum: 9007199254740991 }
+            Cache-Control:
+              required: true
+              schema: { type: string, const: no-store }
           content:
             application/json:
               schema:
@@ -240,8 +501,22 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /api/v1/outbox:
     get:
+      security:
+        - browserSession: []
       summary: Outbox rows with real delivery phases
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: outbox rows
           headers:
@@ -257,6 +532,8 @@ paths:
                 $ref: "#/components/schemas/OutboxSnapshot"
   /api/v1/events:
     get:
+      security:
+        - browserSession: []
       summary: Server-sent event stream of ledger events
       description: >
         Emits one default SSE message per ledger event with the ledger sequence
@@ -276,6 +553,18 @@ paths:
           schema:
             type: integer
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: text/event-stream of Event frames
           content:
@@ -296,8 +585,22 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /api/v1/ready:
     get:
+      security:
+        - browserSession: []
       summary: The next ready work package
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: next dispatchable package
           headers:
@@ -313,12 +616,26 @@ paths:
                 $ref: "#/components/schemas/ReadySnapshot"
   /api/v1/fleet:
     get:
+      security:
+        - browserSession: []
       summary: Fleet projection (spec 25.5) of active lease rows and the ready queue
       description: >
         One atomic ledger read. Lease liveness is judged against the store's
         own clock returned as authority_time, never against a caller clock. An
         empty list is zero rows verified at as_of_sequence, not health.
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: fleet view
           headers:
@@ -340,12 +657,26 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /api/v1/sessions:
     get:
+      security:
+        - browserSession: []
       summary: Session Supervisor projection (spec 25.7) of attempt rows by state
       description: >
         One atomic ledger read of every attempt row, whether an active lease
         names it, and the durable lease events recorded for it. Attempt rows
         carry no timestamps; only durable event times are shown.
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: session supervisor view
           headers:
@@ -367,12 +698,26 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /api/v1/context-lineage:
     get:
+      security:
+        - browserSession: []
       summary: Context Lineage projection (spec 25.8) of immutable initial capsules
       description: >
         One atomic ledger read of exact plan-derived Context Capsule subjects.
         This schema publishes revision-one lineage only; no provider-created,
         compressed, or successor capsule exists in this slice.
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: context lineage view
           headers:
@@ -394,11 +739,25 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /api/v1/merge-rail:
     get:
+      security:
+        - browserSession: []
       summary: Merge Rail projection (spec 25.13) of Candidates, effect intents, and receipts
       description: >
         One atomic ledger read. Every effect state in the catalog is counted so
         a zero OUTCOME_UNKNOWN is explicit rather than absent.
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: merge rail view
           headers:
@@ -420,11 +779,25 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /api/v1/quality-lab:
     get:
+      security:
+        - browserSession: []
       summary: Quality Lab projection (spec 25.14) of evidence rows with typed outcomes
       description: >
         One atomic ledger read. A stored result outside the outcome catalog
         projects as UNKNOWN and never satisfies a requirement.
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: quality lab view
           headers:
@@ -446,12 +819,26 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /api/v1/audit:
     get:
+      security:
+        - browserSession: []
       summary: Incidents and Audit projection (spec 25.15) of the bounded durable event tail
       description: >
         One atomic ledger read of the newest events up to tail_window, each
         passing the same envelope integrity check as /api/v1/events. A gap or a
         corrupt row inside the tail is a store failure, never a shorter list.
       responses:
+        "401":
+          description: browser session missing, invalid, expired, or ambiguous
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: supplied Origin is not the configured Portal origin
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "200":
           description: audit view
           headers:
@@ -543,6 +930,53 @@ components:
           type: string
           pattern: '^csrf_[0-9a-f]{64}$'
         expires_in_seconds: { type: integer, minimum: 1, maximum: 9007199254740991 }
+    OperatorSessionView:
+      type: object
+      additionalProperties: false
+      required: [status, operator_id, session_id, issued_at, expires_at]
+      properties:
+        status: { type: string, enum: [AUTHENTICATED] }
+        operator_id: { type: string, pattern: '^opr_[0-9a-f]{64}$' }
+        session_id: { type: string, pattern: '^sid_[0-9a-f]{64}$' }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+    SessionRevocationView:
+      type: object
+      additionalProperties: false
+      required: [status, operator_id, session_id, revoked_at]
+      properties:
+        status: { type: string, enum: [REVOKED] }
+        operator_id: { type: string, pattern: '^opr_[0-9a-f]{64}$' }
+        session_id: { type: string, pattern: '^sid_[0-9a-f]{64}$' }
+        revoked_at: { type: string, format: date-time }
+    RevokeSessionRequest:
+      type: object
+      additionalProperties: false
+      properties: {}
+    CommandDiscoveryView:
+      type: object
+      additionalProperties: false
+      required: [commands, next_after]
+      properties:
+        commands:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/CommandStatus"
+        next_after:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 9007199254740991
+    CommandDiscoverySnapshot:
+      type: object
+      additionalProperties: false
+      required: [data, as_of_sequence, observed_at, source]
+      properties:
+        data:
+          $ref: "#/components/schemas/CommandDiscoveryView"
+        as_of_sequence: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        observed_at: { type: string, format: date-time }
+        source: { type: string, const: "bullet-kernel/sqlite-ledger" }
     CommandEnvelope:
       type: object
       additionalProperties: false
@@ -642,6 +1076,47 @@ components:
         fence:
           type: [integer, "null"]
           minimum: 0
+    OperatorSnapshotView:
+      type: object
+      additionalProperties: false
+      required: [missions, graphs, outbox, ready, fleet, sessions, context_lineage, merge_rail, quality_lab, audit]
+      properties:
+        missions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Mission"
+        graphs:
+          type: array
+          items:
+            $ref: "#/components/schemas/MissionView"
+        outbox:
+          $ref: "#/components/schemas/OutboxView"
+        ready:
+          oneOf:
+            - $ref: "#/components/schemas/ReadyView"
+            - type: "null"
+        fleet:
+          $ref: "#/components/schemas/FleetView"
+        sessions:
+          $ref: "#/components/schemas/SessionSupervisorView"
+        context_lineage:
+          $ref: "#/components/schemas/ContextLineageView"
+        merge_rail:
+          $ref: "#/components/schemas/MergeRailView"
+        quality_lab:
+          $ref: "#/components/schemas/QualityLabView"
+        audit:
+          $ref: "#/components/schemas/AuditView"
+    OperatorSnapshot:
+      type: object
+      additionalProperties: false
+      required: [data, as_of_sequence, observed_at, source]
+      properties:
+        data:
+          $ref: "#/components/schemas/OperatorSnapshotView"
+        as_of_sequence: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        observed_at: { type: string, format: date-time }
+        source: { type: string, enum: [bullet-kernel/sqlite-ledger] }
     MissionListSnapshot:
       type: object
       additionalProperties: false

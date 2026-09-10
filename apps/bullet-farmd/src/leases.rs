@@ -31,7 +31,7 @@ fn graph_for_package<L: Ledger>(
 }
 
 #[derive(Serialize)]
-struct ReadyViewBody {
+pub(crate) struct ReadyViewBody {
     work_package_id: String,
     mission_id: String,
     variant_id: String,
@@ -41,25 +41,27 @@ struct ReadyViewBody {
 
 pub(crate) async fn next_ready(State(state): State<SharedState>) -> Result<Response, ApiError> {
     let ledger = state.ledger.lock().await;
-    let (view, as_of_sequence) = ledger.read_snapshot(|ledger| {
-        let Some(row) = ledger.ready_rows()?.into_iter().next() else {
-            return Ok(None);
-        };
-        let (graph, variant_id) = graph_for_package(ledger, &row.work_package_id)?
-            .ok_or_else(|| LedgerError::Store("ready row has no owning graph variant".into()))?;
-        let title = graph
-            .packages
-            .iter()
-            .find(|package| package.id == row.work_package_id)
-            .map(|package| package.title.clone())
-            .ok_or_else(|| LedgerError::Store("ready row package is absent from graph".into()))?;
-        Ok(Some(ReadyViewBody {
-            work_package_id: row.work_package_id.to_string(),
-            mission_id: graph.mission.id.to_string(),
-            variant_id: variant_id.to_string(),
-            title,
-            enqueued_at: row.enqueued_at,
-        }))
-    })?;
+    let (view, as_of_sequence) = ledger.read_snapshot(read)?;
     snapshot_response(view, as_of_sequence)
+}
+
+pub(crate) fn read<L: Ledger>(ledger: &L) -> Result<Option<ReadyViewBody>, LedgerError> {
+    let Some(row) = ledger.ready_rows()?.into_iter().next() else {
+        return Ok(None);
+    };
+    let (graph, variant_id) = graph_for_package(ledger, &row.work_package_id)?
+        .ok_or_else(|| LedgerError::Store("ready row has no owning graph variant".into()))?;
+    let title = graph
+        .packages
+        .iter()
+        .find(|package| package.id == row.work_package_id)
+        .map(|package| package.title.clone())
+        .ok_or_else(|| LedgerError::Store("ready row package is absent from graph".into()))?;
+    Ok(Some(ReadyViewBody {
+        work_package_id: row.work_package_id.to_string(),
+        mission_id: graph.mission.id.to_string(),
+        variant_id: variant_id.to_string(),
+        title,
+        enqueued_at: row.enqueued_at,
+    }))
 }

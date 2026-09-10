@@ -33,9 +33,9 @@ pub enum LedgerError {
     /// Durable store failure.
     #[error("ledger: {0}")]
     Store(String),
-    /// Persisted schema is not the exact disposable pre-1.0 schema this binary owns.
+    /// Persisted schema is not an admitted current schema or supervised predecessor.
     #[error(
-        "unsupported schema: {detail}. Export any data you need before removing the database file and starting fresh; pre-1.0 Bullet Farm databases are not migrated in place"
+        "unsupported schema: {detail}. Preserve the database and use a qualified supervised upgrade or verified backup/restore procedure; startup never rewrites an unsupported schema"
     )]
     UnsupportedSchema {
         /// Exact fail-closed reason suitable for operator logs.

@@ -1,13 +1,13 @@
 //! Idempotent command rows.
 
-use super::{authority, events, nonces, outbox, store};
+use super::{events, outbox, store};
 use bullet_application::commands::COMMAND_RECONCILED_EVENT;
-use bullet_application::{
-    plan_run_coding_admission, CodingAdmissionView, CommandRecord, CommandRequest, LedgerError,
-    RunCodingPayload, RUN_CODING_KIND,
-};
+use bullet_application::{CommandRecord, CommandRequest, LedgerError};
 use bullet_domain::{CommandId, CommandPhase, Digest, DomainError};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+
+mod admission;
+pub(super) use admission::verify_replay as verify_coding_replay;
 
 const DISPATCH_KIND: &str = "command_dispatch";
 
@@ -136,12 +136,23 @@ pub(super) fn submit_command(
     let transaction = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(store)?;
-    let existed = get_command(&transaction, &request.idempotency_key)?.is_some();
-    let record = record_command(&transaction, request)?;
+    let record = submit_command_in(&transaction, fail_after, request)?;
+    transaction.commit().map_err(store)?;
+    Ok(record)
+}
+
+pub(super) fn submit_command_in(
+    transaction: &Transaction<'_>,
+    fail_after: &mut Option<u8>,
+    request: &CommandRequest,
+) -> Result<CommandRecord, LedgerError> {
+    request.validate()?;
+    let existed = get_command(transaction, &request.idempotency_key)?.is_some();
+    let record = record_command(transaction, request)?;
     fail_boundary(fail_after)?;
     let dispatch = serde_json::to_string(request).map_err(store)?;
     if existed {
-        let rows = outbox::for_command(&transaction, &record.id)?;
+        let rows = outbox::for_command(transaction, &record.id)?;
         if rows.len() != 1 || rows[0].kind != DISPATCH_KIND || rows[0].payload != dispatch {
             return Err(LedgerError::Store(
                 "public command has incomplete or conflicting outbox truth".into(),
@@ -161,10 +172,10 @@ pub(super) fn submit_command(
             ));
         }
     } else {
-        outbox::enqueue(&transaction, Some(&record.id), DISPATCH_KIND, &dispatch)?;
+        outbox::enqueue(transaction, Some(&record.id), DISPATCH_KIND, &dispatch)?;
         fail_boundary(fail_after)?;
         events::insert_event(
-            &transaction,
+            transaction,
             "command_submitted",
             record.id.as_str(),
             Some(record.id.as_str()),
@@ -173,74 +184,13 @@ pub(super) fn submit_command(
         )?;
     }
     fail_boundary(fail_after)?;
-    admit_run_coding(&transaction, request, existed)?;
+    if existed {
+        admission::verify_replay(transaction, request)?;
+    } else {
+        admission::admit_run_coding(transaction, request)?;
+    }
     fail_boundary(fail_after)?;
-    transaction.commit().map_err(store)?;
     Ok(record)
-}
-
-fn admit_run_coding(
-    tx: &Transaction<'_>,
-    request: &CommandRequest,
-    existed: bool,
-) -> Result<(), LedgerError> {
-    if request.kind != RUN_CODING_KIND {
-        return Ok(());
-    }
-    let payload = RunCodingPayload::parse(&request.payload)?;
-    let authority = authority::current(tx)?;
-    let used: i64 = tx
-        .query_row(
-            "SELECT COALESCE(SUM(amount), 0) FROM budget_reservations",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(store)?;
-    let existing = tx
-        .query_row(
-            "SELECT reservation_id, amount FROM budget_reservations WHERE reservation_id = ?1",
-            params![payload.quota_reservation],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-        )
-        .optional()
-        .map_err(store)?;
-    let existing_reservation = match existing {
-        Some((id, amount)) => Some((
-            id,
-            u64::try_from(amount).map_err(|error| store(error.to_string()))?,
-        )),
-        None => None,
-    };
-    let mut nonce = nonces::inspect(tx, &payload.launch_nonce).map_err(nonce_store)?;
-    if nonce.is_none() && !existed {
-        let digest = request.digest().to_hex();
-        nonces::issue_in(tx, &payload.launch_nonce, &digest).map_err(nonce_store)?;
-        nonce = nonces::inspect(tx, &payload.launch_nonce).map_err(nonce_store)?;
-    }
-    let view = CodingAdmissionView {
-        authority_epoch: authority.authority_epoch(),
-        used_quota: u64::try_from(used).map_err(|error| store(error.to_string()))?,
-        existing_reservation,
-        nonce,
-    };
-    let Some(plan) = plan_run_coding_admission(request, existed, &view)? else {
-        return Ok(());
-    };
-    nonces::consume_in(tx, &plan.consume_nonce, &request.digest().to_hex()).map_err(nonce_store)?;
-    tx.execute(
-        "INSERT INTO budget_reservations (reservation_id, amount, settled_amount, unknown_liability)
-         VALUES (?1, ?2, NULL, 0)",
-        params![
-            plan.reservation.0,
-            i64::try_from(plan.reservation.1).map_err(|error| store(error.to_string()))?
-        ],
-    )
-    .map_err(store)?;
-    Ok(())
-}
-
-fn nonce_store(error: bullet_application::NonceError) -> LedgerError {
-    LedgerError::Store(error.to_string())
 }
 
 pub(super) fn reconcile_offline_command(
@@ -395,7 +345,7 @@ fn reconcile_fail_boundary(fail_after: &mut Option<u8>) -> Result<(), LedgerErro
     }
 }
 
-fn fail_boundary(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {
+pub(super) fn fail_boundary(fail_after: &mut Option<u8>) -> Result<(), LedgerError> {
     match fail_after {
         Some(0) => {
             *fail_after = None;

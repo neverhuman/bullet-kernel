@@ -213,7 +213,10 @@ fn verify_applied_migrations(conn: &Connection) -> Result<SchemaState, LedgerErr
         .map_err(store)?;
     let schema = match rows.len() {
         count if count == MIGRATIONS.len() => SchemaState::Current,
-        22 if MIGRATIONS.len() == 23 => SchemaState::UpgradeRequired { from: 22, to: 23 },
+        22..=24 if MIGRATIONS.len() == 25 => SchemaState::UpgradeRequired {
+            from: i64::try_from(rows.len()).map_err(store)?,
+            to: 25,
+        },
         _ => {
             return Err(unsupported(
                 "schema_version is partial or contains a future migration",

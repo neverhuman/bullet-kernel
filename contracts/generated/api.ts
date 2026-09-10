@@ -42,6 +42,36 @@ export type BootstrapResponse = {
   expires_in_seconds: number;
 };
 
+export type OperatorSessionView = {
+  status: "AUTHENTICATED";
+  operator_id: string;
+  session_id: string;
+  issued_at: string;
+  expires_at: string;
+};
+
+export type SessionRevocationView = {
+  status: "REVOKED";
+  operator_id: string;
+  session_id: string;
+  revoked_at: string;
+};
+
+export type RevokeSessionRequest = {
+};
+
+export type CommandDiscoveryView = {
+  commands: CommandStatus[];
+  next_after: number | null;
+};
+
+export type CommandDiscoverySnapshot = {
+  data: CommandDiscoveryView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: string;
+};
+
 export type CommandEnvelope = {
   idempotency_key: string;
   kind: string;
@@ -85,6 +115,26 @@ export type MissionView = {
   mission: Mission;
   packages: WorkPackage[];
   fence: number | null;
+};
+
+export type OperatorSnapshotView = {
+  missions: Mission[];
+  graphs: MissionView[];
+  outbox: OutboxView;
+  ready: ReadyView | null;
+  fleet: FleetView;
+  sessions: SessionSupervisorView;
+  context_lineage: ContextLineageView;
+  merge_rail: MergeRailView;
+  quality_lab: QualityLabView;
+  audit: AuditView;
+};
+
+export type OperatorSnapshot = {
+  data: OperatorSnapshotView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: "bullet-kernel/sqlite-ledger";
 };
 
 export type MissionListSnapshot = {
@@ -657,6 +707,31 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
         "head_sha",
         "tree_sha",
         "patch_digest"
+      ],
+      "type": "object"
+    },
+    "CommandDiscoveryView": {
+      "additionalProperties": false,
+      "properties": {
+        "commands": {
+          "items": {
+            "$ref": "#/$defs/CommandStatus"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "next_after": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "commands",
+        "next_after"
       ],
       "type": "object"
     },
@@ -1396,6 +1471,102 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       ],
       "type": "object"
     },
+    "OperatorSessionView": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operator_id": {
+          "pattern": "^opr_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "session_id": {
+          "pattern": "^sid_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "AUTHENTICATED"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "operator_id",
+        "session_id",
+        "issued_at",
+        "expires_at"
+      ],
+      "type": "object"
+    },
+    "OperatorSnapshotView": {
+      "additionalProperties": false,
+      "properties": {
+        "audit": {
+          "$ref": "#/$defs/AuditView"
+        },
+        "context_lineage": {
+          "$ref": "#/$defs/ContextLineageView"
+        },
+        "fleet": {
+          "$ref": "#/$defs/FleetView"
+        },
+        "graphs": {
+          "items": {
+            "$ref": "#/$defs/MissionView"
+          },
+          "type": "array"
+        },
+        "merge_rail": {
+          "$ref": "#/$defs/MergeRailView"
+        },
+        "missions": {
+          "items": {
+            "$ref": "#/$defs/Mission"
+          },
+          "type": "array"
+        },
+        "outbox": {
+          "$ref": "#/$defs/OutboxView"
+        },
+        "quality_lab": {
+          "$ref": "#/$defs/QualityLabView"
+        },
+        "ready": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ReadyView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessions": {
+          "$ref": "#/$defs/SessionSupervisorView"
+        }
+      },
+      "required": [
+        "missions",
+        "graphs",
+        "outbox",
+        "ready",
+        "fleet",
+        "sessions",
+        "context_lineage",
+        "merge_rail",
+        "quality_lab",
+        "audit"
+      ],
+      "type": "object"
+    },
     "OrganizationId": {
       "pattern": "^org_[0-9a-f]{64}$",
       "type": "string"
@@ -1609,6 +1780,36 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       "pattern": "^run_[0-9a-f]{64}$",
       "type": "string"
     },
+    "SessionRevocationView": {
+      "additionalProperties": false,
+      "properties": {
+        "operator_id": {
+          "pattern": "^opr_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "revoked_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "session_id": {
+          "pattern": "^sid_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "REVOKED"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "operator_id",
+        "session_id",
+        "revoked_at"
+      ],
+      "type": "object"
+    },
     "SessionSupervisorView": {
       "additionalProperties": false,
       "properties": {
@@ -1704,6 +1905,7 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
 export const PUBLIC_API_RUNTIME_REFS = {
   AuditView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/AuditView",
   BootstrapResponse: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/BootstrapResponse",
+  CommandDiscoveryView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandDiscoveryView",
   CommandStatus: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandStatus",
   ContextLineageView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ContextLineageView",
   EventEnvelope: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/EventEnvelope",
@@ -1712,10 +1914,13 @@ export const PUBLIC_API_RUNTIME_REFS = {
   MergeRailView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/MergeRailView",
   Mission: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/Mission",
   MissionView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/MissionView",
+  OperatorSessionView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/OperatorSessionView",
+  OperatorSnapshotView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/OperatorSnapshotView",
   OutboxView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/OutboxView",
   Problem: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/Problem",
   QualityLabView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/QualityLabView",
   ReadyView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ReadyView",
+  SessionRevocationView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/SessionRevocationView",
   SessionSupervisorView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/SessionSupervisorView",
 } as const;
 

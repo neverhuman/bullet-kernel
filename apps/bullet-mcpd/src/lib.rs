@@ -187,7 +187,11 @@ fn tool_result(result: Result<Value, ClientError>) -> CallToolResult {
         Err(error) => CallToolResult::structured_error(json!({
             "code": error_code(&error),
             "detail": error.to_string(),
-            "repair": "Confirm bullet-farmd is running on the configured loopback endpoint and read a fresh projection. Never infer empty, PASS, VERIFIED, or command failure from this error."
+            "repair": if matches!(error, ClientError::Refused { status: 401 | 403 }) {
+                "A separately scoped MCP read principal is required; this build cannot enroll one. Do not reuse browser or worker credentials. This refusal is not projection truth."
+            } else {
+                "Confirm bullet-farmd is running on the configured loopback endpoint and read a fresh projection. Never infer empty, PASS, VERIFIED, or command failure from this error."
+            }
         })),
     }
 }
