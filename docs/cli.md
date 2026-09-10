@@ -104,6 +104,40 @@ data with STALE/UNKNOWN. `NO_COLOR` preserves text labels without color;
 updates are polled GETs. Native controls, exact queue blockers and approval
 mutations remain separate unfinished backend/UI obligations.
 
+## Durable conversation API
+
+The shared conversation backend accepts `conversation_message` only through
+authenticated `POST /api/v1/commands`. Its closed
+`bullet.conversation-message.v1` payload contains required `cursor` and `content`.
+A null cursor starts a server-identified thread. A reply supplies the exact
+current `{conversation_id, message_id, sequence}` read from the server; a stale
+cursor returns `CONVERSATION_CURSOR_CONFLICT` without saving another message.
+The original content is preserved, limited to 32768 UTF-8 bytes. Caller-selected
+roles, head identities and execution authority are refused.
+
+An `APPLIED` command receipt confirms the human message and its queued head-turn
+reference were saved atomically with operator ownership and audit records.
+Retrying the exact original command returns that original receipt even after
+the thread advances. Generic outbox/audit rows contain references rather than
+the message text. This acknowledgement establishes neither an assistant reply
+nor successful coding.
+
+`GET /api/v1/conversations` discovers owned threads in stable creation order.
+`GET /api/v1/conversations/{conversation_id}` returns complete messages, the
+current cursor and `HEAD_RUNTIME_BINDING_REQUIRED`. Both support bounded
+`after`/`limit` pages with a snapshot watermark and `Cache-Control: no-store`;
+the index cursor is a creation-event sequence and the message cursor is a
+thread-local sequence. Separate pages are separate snapshots. A revoked
+session cannot read either endpoint. Readers reject inconsistent prior history
+and assistant rows without a validated native outcome.
+
+Schema 27 appends immutable conversation, message and head-request tables.
+Recognized prior schemas return `UPGRADE_REQUIRED` without rewriting their
+files. Guided migration, the native head worker, conversational CLI/Portal
+consumers and Slack/Telegram transport remain separate implementation work.
+These backend tests use isolated synthetic identities and make no live-provider
+or installation claim.
+
 ## `authority keygen`
 
 | Flag | Required | Default | Meaning |

@@ -14,7 +14,7 @@ struct CommandDiscoveryView {
     commands: Vec<CommandStatus>,
     next_after: Option<u64>,
 }
-fn query(raw: Option<&str>) -> Result<(u64, u32), ApiError> {
+pub(super) fn query(raw: Option<&str>) -> Result<(u64, u32), ApiError> {
     let bad = || operator_error(OperatorCommandError::InvalidRequest);
     let Some(raw) = raw.filter(|query| !query.is_empty()) else {
         return Ok((0, 50));

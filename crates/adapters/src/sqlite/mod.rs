@@ -8,6 +8,7 @@ mod coding_tasks;
 mod command_dispatch;
 mod commands;
 mod context;
+mod conversations;
 mod effect_recovery;
 mod effects;
 mod events;

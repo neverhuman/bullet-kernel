@@ -79,6 +79,75 @@ export type CommandEnvelope = {
   };
 };
 
+export type ConversationId = string;
+
+export type ConversationMessageId = string;
+
+export type ConversationHeadTurnId = string;
+
+export type ConversationCursor = {
+  conversation_id: ConversationId;
+  message_id: ConversationMessageId;
+  sequence: number;
+};
+
+export type ConversationMessagePayload = {
+  schema_version: string;
+  cursor: ConversationCursor | null;
+  content: string;
+};
+
+export type ConversationMessageReceipt = {
+  schema_version: string;
+  cursor: ConversationCursor;
+  content_digest: Digest;
+  head_turn_id: ConversationHeadTurnId;
+};
+
+export type ConversationMessage = {
+  cursor: ConversationCursor;
+  parent_message_id: ConversationMessageId | null;
+  role: "user" | "assistant";
+  content: string;
+  content_digest: Digest;
+  command_id: CommandId | null;
+  head_turn_id: ConversationHeadTurnId;
+  accepted_at: string;
+};
+
+export type ConversationView = {
+  cursor: ConversationCursor;
+  messages: ConversationMessage[];
+  next_after: number | null;
+  head_blocker: string;
+};
+
+export type ConversationSummary = {
+  cursor: ConversationCursor;
+  preview: string;
+  created_at: string;
+  last_activity_at: string;
+};
+
+export type ConversationIndexView = {
+  conversations: ConversationSummary[];
+  next_after: number | null;
+};
+
+export type ConversationSnapshot = {
+  data: ConversationView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: string;
+};
+
+export type ConversationIndexSnapshot = {
+  data: ConversationIndexView;
+  as_of_sequence: number;
+  observed_at: string;
+  source: string;
+};
+
 export type CodingTaskRevisionId = string;
 
 export type CodingRunId = string;
@@ -1142,6 +1211,246 @@ export const PUBLIC_API_RUNTIME_SCHEMA = {
       ],
       "type": "object"
     },
+    "ConversationCursor": {
+      "additionalProperties": false,
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "message_id": {
+          "$ref": "#/$defs/ConversationMessageId"
+        },
+        "sequence": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "conversation_id",
+        "message_id",
+        "sequence"
+      ],
+      "type": "object"
+    },
+    "ConversationHeadTurnId": {
+      "pattern": "^hdt_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ConversationId": {
+      "pattern": "^cnv_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ConversationIndexView": {
+      "additionalProperties": false,
+      "properties": {
+        "conversations": {
+          "items": {
+            "$ref": "#/$defs/ConversationSummary"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "next_after": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "conversations",
+        "next_after"
+      ],
+      "type": "object"
+    },
+    "ConversationMessage": {
+      "additionalProperties": false,
+      "description": "Assistant authorship requires a validated native outcome.",
+      "properties": {
+        "accepted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "command_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CommandId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content": {
+          "maxLength": 32768,
+          "minLength": 1,
+          "type": "string"
+        },
+        "content_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "cursor": {
+          "$ref": "#/$defs/ConversationCursor"
+        },
+        "head_turn_id": {
+          "$ref": "#/$defs/ConversationHeadTurnId"
+        },
+        "parent_message_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ConversationMessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "cursor",
+        "parent_message_id",
+        "role",
+        "content",
+        "content_digest",
+        "command_id",
+        "head_turn_id",
+        "accepted_at"
+      ],
+      "type": "object"
+    },
+    "ConversationMessageId": {
+      "pattern": "^msg_[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ConversationMessagePayload": {
+      "additionalProperties": false,
+      "description": "Payload for conversation_message at the common command ingress. Cursor is required and nullable; null starts a thread. Content is preserved exactly and additionally limited to 32768 UTF-8 bytes. Whitespace-only messages and controls other than tab and newline are rejected.\n",
+      "properties": {
+        "content": {
+          "maxLength": 32768,
+          "minLength": 1,
+          "type": "string"
+        },
+        "cursor": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ConversationCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "const": "bullet.conversation-message.v1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cursor",
+        "content"
+      ],
+      "type": "object"
+    },
+    "ConversationMessageReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "content_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "cursor": {
+          "$ref": "#/$defs/ConversationCursor"
+        },
+        "head_turn_id": {
+          "$ref": "#/$defs/ConversationHeadTurnId"
+        },
+        "schema_version": {
+          "const": "bullet.conversation-message-receipt.v1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cursor",
+        "content_digest",
+        "head_turn_id"
+      ],
+      "type": "object"
+    },
+    "ConversationSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "cursor": {
+          "$ref": "#/$defs/ConversationCursor"
+        },
+        "last_activity_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "preview": {
+          "maxLength": 80,
+          "type": "string"
+        }
+      },
+      "required": [
+        "cursor",
+        "preview",
+        "created_at",
+        "last_activity_at"
+      ],
+      "type": "object"
+    },
+    "ConversationView": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "$ref": "#/$defs/ConversationCursor"
+        },
+        "head_blocker": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^HEAD_[A-Z_]+$",
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/ConversationMessage"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "next_after": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cursor",
+        "messages",
+        "next_after",
+        "head_blocker"
+      ],
+      "type": "object"
+    },
     "Digest": {
       "pattern": "^[0-9a-f]{64}$",
       "type": "string"
@@ -2201,6 +2510,10 @@ export const PUBLIC_API_RUNTIME_REFS = {
   CommandDiscoveryView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandDiscoveryView",
   CommandStatus: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CommandStatus",
   CodingRunView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/CodingRunView",
+  ConversationIndexView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ConversationIndexView",
+  ConversationView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ConversationView",
+  ConversationMessagePayload: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ConversationMessagePayload",
+  ConversationMessageReceipt: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ConversationMessageReceipt",
   RunCodingTaskPayload: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/RunCodingTaskPayload",
   ContextLineageView: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/ContextLineageView",
   EventEnvelope: "https://bullet.farm/schemas/public-api-runtime-v1#/$defs/EventEnvelope",

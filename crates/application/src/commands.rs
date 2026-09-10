@@ -162,6 +162,9 @@ impl CommandRequest {
         if self.kind == RUN_CODING_KIND {
             CodingSubmission::parse(&self.payload)?;
         }
+        if self.kind == crate::conversations::CONVERSATION_MESSAGE_KIND {
+            crate::conversations::ConversationMessagePayload::parse(&self.payload)?;
+        }
         Ok(())
     }
 

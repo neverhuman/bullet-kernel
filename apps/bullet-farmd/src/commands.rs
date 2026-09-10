@@ -13,6 +13,7 @@ use bullet_application::{CommandRecord, CommandRequest};
 use bullet_harness_core::strict_json::StrictJson;
 
 pub(crate) mod coding;
+pub(crate) mod conversations;
 pub(crate) mod discovery;
 use bullet_domain::{CommandId, CommandPhase};
 use serde::{Deserialize, Serialize};

@@ -148,6 +148,12 @@ pub(super) fn submit_command_in(
     operator: Option<&str>,
 ) -> Result<CommandRecord, LedgerError> {
     request.validate()?;
+    if request.kind == bullet_application::conversations::CONVERSATION_MESSAGE_KIND {
+        let operator = operator.ok_or(
+            bullet_application::conversations::ConversationRefusal::OperatorIngressRequired,
+        )?;
+        return super::conversations::submit(transaction, fail_after, operator, request);
+    }
     let existed = get_command(transaction, &request.idempotency_key)?.is_some();
     let record = record_command(transaction, request)?;
     fail_boundary(fail_after)?;

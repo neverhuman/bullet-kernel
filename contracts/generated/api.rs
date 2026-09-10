@@ -140,6 +140,129 @@ impl ApiModel for CommandEnvelope {
     const SCHEMA_NAME: &'static str = "CommandEnvelope";
 }
 
+pub type ConversationId = String;
+
+pub type ConversationMessageId = String;
+
+pub type ConversationHeadTurnId = String;
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationCursor {
+    pub r#conversation_id: ConversationId,
+    pub r#message_id: ConversationMessageId,
+    pub r#sequence: u64,
+}
+
+impl ApiModel for ConversationCursor {
+    const SCHEMA_NAME: &'static str = "ConversationCursor";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationMessagePayload {
+    pub r#schema_version: String,
+    pub r#cursor: Option<ConversationCursor>,
+    pub r#content: String,
+}
+
+impl ApiModel for ConversationMessagePayload {
+    const SCHEMA_NAME: &'static str = "ConversationMessagePayload";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationMessageReceipt {
+    pub r#schema_version: String,
+    pub r#cursor: ConversationCursor,
+    pub r#content_digest: Digest,
+    pub r#head_turn_id: ConversationHeadTurnId,
+}
+
+impl ApiModel for ConversationMessageReceipt {
+    const SCHEMA_NAME: &'static str = "ConversationMessageReceipt";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationMessage {
+    pub r#cursor: ConversationCursor,
+    pub r#parent_message_id: Option<ConversationMessageId>,
+    pub r#role: String,
+    pub r#content: String,
+    pub r#content_digest: Digest,
+    pub r#command_id: Option<CommandId>,
+    pub r#head_turn_id: ConversationHeadTurnId,
+    pub r#accepted_at: String,
+}
+
+impl ApiModel for ConversationMessage {
+    const SCHEMA_NAME: &'static str = "ConversationMessage";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationView {
+    pub r#cursor: ConversationCursor,
+    pub r#messages: Vec<ConversationMessage>,
+    pub r#next_after: Option<u64>,
+    pub r#head_blocker: String,
+}
+
+impl ApiModel for ConversationView {
+    const SCHEMA_NAME: &'static str = "ConversationView";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationSummary {
+    pub r#cursor: ConversationCursor,
+    pub r#preview: String,
+    pub r#created_at: String,
+    pub r#last_activity_at: String,
+}
+
+impl ApiModel for ConversationSummary {
+    const SCHEMA_NAME: &'static str = "ConversationSummary";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationIndexView {
+    pub r#conversations: Vec<ConversationSummary>,
+    pub r#next_after: Option<u64>,
+}
+
+impl ApiModel for ConversationIndexView {
+    const SCHEMA_NAME: &'static str = "ConversationIndexView";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationSnapshot {
+    pub r#data: ConversationView,
+    pub r#as_of_sequence: u64,
+    pub r#observed_at: String,
+    pub r#source: String,
+}
+
+impl ApiModel for ConversationSnapshot {
+    const SCHEMA_NAME: &'static str = "ConversationSnapshot";
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationIndexSnapshot {
+    pub r#data: ConversationIndexView,
+    pub r#as_of_sequence: u64,
+    pub r#observed_at: String,
+    pub r#source: String,
+}
+
+impl ApiModel for ConversationIndexSnapshot {
+    const SCHEMA_NAME: &'static str = "ConversationIndexSnapshot";
+}
+
 pub type CodingTaskRevisionId = String;
 
 pub type CodingRunId = String;

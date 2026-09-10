@@ -122,3 +122,7 @@ note = "Adds immutable ownership and submission-sequence cursor for new public c
 [[migration]]
 file = "0026_coding_task_intent.sql"
 note = "Adds immutable operator-owned task revisions, dependency edges and server-derived run-tracking identities within public command admission. Intent creates no reservation, launch nonce, lease or dispatch claim. Historical commands acquire no invented task records. Checksummed22–25 remain intact and require supervised upgrade; startup never rewrites them."
+
+[[migration]]
+file = "0027_conversations.sql"
+note = "Adds append-only operator-owned threads, complete sequenced human/assistant messages and causal head-turn requests. Exact parents prevent stale concurrent appends; assistant records require a same-thread head-turn cause. These are conversation records, not provider, account or coding authority. Existing migration bytes remain intact; checksummed22–26 require supervised upgrade and startup never rewrites them."

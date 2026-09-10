@@ -357,6 +357,9 @@ printf '%s\n' \
   'bullet-adapters::sqlite::migrations::tests::checksum_binds_domain_version_name_and_sql' \
   'bullet-adapters::sqlite::migrations::tests::command_identity_is_unique_and_outbox_correlation_is_foreign_keyed' \
   'bullet-adapters::sqlite::migrations::tests::configured_connection_enforces_the_receipt_foreign_key' \
+  'bullet-adapters::sqlite::migrations::tests::conversations::assistant_rows_require_a_durable_same_thread_head_cause' \
+  'bullet-adapters::sqlite::migrations::tests::conversations::conversation_history_requires_exact_parent_and_preserves_complete_turns' \
+  'bullet-adapters::sqlite::migrations::tests::conversations::conversation_schema_preserves_every_supported_predecessor_without_rewrite' \
   'bullet-adapters::sqlite::migrations::tests::corrupt_or_pending_restore_state_fails_closed' \
   'bullet-adapters::sqlite::migrations::tests::fresh_creation_records_exact_checksums_and_reopens' \
   'bullet-adapters::sqlite::migrations::tests::lease_migration_matches_the_frozen_phase_one_maximum' \
@@ -377,7 +380,7 @@ printf '%s\n' \
 
 if ! cmp -s "$test_root/expected" "$test_root/actual"; then
   diff -u "$test_root/expected" "$test_root/actual" >&2 || true
-  refuse NEXTEST_SCHEMA_GROUP_EXPANSION_DRIFT 'migration group must contain exactly 23 reviewed identities'
+  refuse NEXTEST_SCHEMA_GROUP_EXPANSION_DRIFT 'migration group must contain exactly 26 reviewed identities'
   exit 1
 fi
 

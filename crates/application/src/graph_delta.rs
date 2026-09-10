@@ -26,6 +26,10 @@ pub enum GraphDeltaCommandResult {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GraphDeltaFailure {
+    /// Typed conversation admission refusal, preserved without diagnostic parsing.
+    Conversation {
+        reason: crate::conversations::ConversationRefusal,
+    },
     /// Typed task constraint refusal, preserved without parsing error text.
     CodingTask {
         reason: crate::coding_tasks::CodingTaskRefusal,
@@ -59,6 +63,7 @@ impl GraphDeltaFailure {
     #[must_use]
     pub fn from_error(error: &LedgerError) -> Self {
         match error {
+            LedgerError::Conversation(reason) => Self::Conversation { reason: *reason },
             LedgerError::CodingTask(reason) => Self::CodingTask { reason: *reason },
             LedgerError::Store(message) => Self::Store {
                 message: message.clone(),
@@ -103,6 +108,7 @@ impl GraphDeltaFailure {
     #[must_use]
     pub fn into_error(self) -> LedgerError {
         match self {
+            Self::Conversation { reason } => reason.into(),
             Self::CodingTask { reason } => reason.into(),
             Self::Store { message } => LedgerError::Store(message),
             Self::UnsupportedSchema { detail } => LedgerError::UnsupportedSchema { detail },

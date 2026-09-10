@@ -19,8 +19,10 @@ macro_rules! core_route_catalog {
             Get, "/api/v1/auth/session", crate::auth::sessions::get, true, "current durable operator session metadata";
             Post, "/api/v1/auth/revoke", crate::auth::sessions::revoke, true, "authenticated self-revocation of the presented session";
             Get, "/api/v1/commands", crate::commands::discovery::list, true, "bounded discovery of the current operator’s commands";
-            Post, "/api/v1/commands", crate::commands::submit, true, "authenticated command submission records `PENDING`";
+            Post, "/api/v1/commands", crate::commands::submit, true, "authenticated command submission returns its current durable phase";
             Get, "/api/v1/commands/{id}", crate::commands::get, true, "command status";
+            Get, "/api/v1/conversations", crate::commands::conversations::list, true, "owned conversation discovery in stable creation order";
+            Get, "/api/v1/conversations/{conversation_id}", crate::commands::conversations::get, true, "complete owned messages and current cursor from one atomic snapshot";
             Get, "/api/v1/commands/{id}/coding", crate::commands::coding::get, true, "owned coding task, run and queue blockers from one atomic snapshot";
             Post, "/internal/v1/commands/{id}/reconcile", crate::commands::reconcile, false, "worker-bearer reconciler, outside the public contract";
             Get, "/api/v1/operator-snapshot", crate::projections::operator_snapshot, true, "operator surfaces from one atomic ledger snapshot";

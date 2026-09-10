@@ -56,8 +56,10 @@ gates the generated client against the complete OpenAPI document.
 | GET | `/api/v1/auth/session` | yes | current durable operator session metadata |
 | POST | `/api/v1/auth/revoke` | yes | authenticated self-revocation of the presented session |
 | GET | `/api/v1/commands` | yes | bounded discovery of the current operator’s commands |
-| POST | `/api/v1/commands` | yes | authenticated command submission records `PENDING` |
+| POST | `/api/v1/commands` | yes | authenticated command submission returns its current durable phase |
 | GET | `/api/v1/commands/{id}` | yes | command status |
+| GET | `/api/v1/conversations` | yes | owned conversation discovery in stable creation order |
+| GET | `/api/v1/conversations/{conversation_id}` | yes | complete owned messages and current cursor from one atomic snapshot |
 | GET | `/api/v1/commands/{id}/coding` | yes | owned coding task, run and queue blockers from one atomic snapshot |
 | POST | `/internal/v1/commands/{id}/reconcile` | no | worker-bearer reconciler, outside the public contract |
 | GET | `/api/v1/operator-snapshot` | yes | operator surfaces from one atomic ledger snapshot |

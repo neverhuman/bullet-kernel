@@ -11,6 +11,7 @@ pub mod commands;
 pub mod conformance;
 pub mod conformance_effects;
 pub mod context;
+pub mod conversations;
 pub mod demo;
 pub mod dogfood;
 #[cfg(feature = "dogfood-claude")]
