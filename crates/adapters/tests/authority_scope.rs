@@ -79,7 +79,7 @@ fn scope_admission_replays_exactly_across_restart_and_binds_backup() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!((schema, admissions), (26, 1));
+    assert_eq!((schema, admissions), (27, 1));
 }
 
 #[test]
