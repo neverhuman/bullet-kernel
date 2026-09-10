@@ -138,7 +138,7 @@ jobs:
         run: bash ops/ci/install-actionlint.sh
       - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
         with:
-          tool: shellcheck@0.10.0
+          tool: shellcheck@0.10.0,zizmor@1.25.2
           fallback: none
       - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
         with:
