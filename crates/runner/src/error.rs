@@ -114,6 +114,25 @@ pub enum RunnerError {
     /// A wire response violated its protocol.
     #[error("protocol violation: {0}")]
     Protocol(String),
+    /// A preserved attempt requires reconciliation; never issue a fallback release.
+    #[error("finalization unresolved at {stage}: attempt {attempt_id}, candidate {candidate_id}, receipt {receipt_digest}, destination {destination:?}; cause: {primary}; recovery journal failure: {recovery_journal_error:?}")]
+    FinalizationUnresolved {
+        /// Last operation attempted, not an assertion that it committed.
+        stage: &'static str,
+        /// Exact producing Attempt.
+        attempt_id: Box<str>,
+        /// Candidate recorded before finalization began.
+        candidate_id: Box<str>,
+        /// Receipt identity only; cleanup bearer material is never logged.
+        receipt_digest: Box<str>,
+        /// Recorded artifact destination; current integrity requires read-back.
+        destination: Box<std::path::Path>,
+        /// Original refusal or ambiguous transport outcome.
+        #[source]
+        primary: Box<RunnerError>,
+        /// Failure to persist the required recovery event, if any.
+        recovery_journal_error: Option<Box<str>>,
+    },
     /// The original refusal was followed by a failed daemon shutdown.
     #[error("{primary}; gitd shutdown also failed: {cleanup}")]
     Shutdown {
@@ -148,6 +167,7 @@ impl RunnerError {
             Self::NoProposal(_) => "NO_PROPOSAL",
             Self::Io { .. } => "IO_FAILED",
             Self::Protocol(_) => "PROTOCOL_ERROR",
+            Self::FinalizationUnresolved { .. } => "FINALIZATION_UNRESOLVED",
             Self::Shutdown { primary, .. } => primary.reason_code(),
         }
     }

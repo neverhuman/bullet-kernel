@@ -22,6 +22,8 @@ pub(super) struct SimWorkspace {
     authority: AuthorityToken,
     active_generation: Option<ActiveGenerationBinding>,
     preserve_failure: Option<String>,
+    cleanup_failure_after_delete: Option<bool>,
+    cleanup_calls: usize,
 }
 
 impl SimWorkspace {
@@ -37,11 +39,21 @@ impl SimWorkspace {
             authority,
             active_generation: None,
             preserve_failure: None,
+            cleanup_failure_after_delete: None,
+            cleanup_calls: 0,
         }
     }
 
     pub(super) fn fail_preserve(&mut self, reason: impl Into<String>) {
         self.preserve_failure = Some(reason.into());
+    }
+
+    pub(super) fn fail_cleanup(&mut self, after_delete: bool) {
+        self.cleanup_failure_after_delete = Some(after_delete);
+    }
+
+    pub(super) fn cleanup_calls(&self) -> usize {
+        self.cleanup_calls
     }
 
     fn repo(&self) -> Result<&Path, RunnerError> {
@@ -402,6 +414,12 @@ impl WorkspaceSession for SimWorkspace {
         receipt: &PreservationReceipt,
         deleted_at: &str,
     ) -> Result<(), RunnerError> {
+        self.cleanup_calls += 1;
+        if self.cleanup_failure_after_delete == Some(false) {
+            return Err(RunnerError::Protocol(
+                "test cleanup refused before deletion".into(),
+            ));
+        }
         if receipt.token.is_empty() || deleted_at.is_empty() {
             return Err(RunnerError::Protocol(
                 "test simulator cleanup lacks its preservation binding".into(),
@@ -417,6 +435,12 @@ impl WorkspaceSession for SimWorkspace {
             context: "test simulator cleanup".into(),
             reason: error.to_string(),
         })?;
+        if self.cleanup_failure_after_delete == Some(true) {
+            return Err(RunnerError::Io {
+                context: "test cleanup response".into(),
+                reason: "response lost after deletion".into(),
+            });
+        }
         let runtime = self
             .runtime_dir
             .as_deref()

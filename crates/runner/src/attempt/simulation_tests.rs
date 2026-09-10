@@ -356,6 +356,7 @@ async fn gate_delete_repairs_only_in_test_simulator() {
 
 #[tokio::test]
 async fn failed_terminate_after_success_is_not_reported_as_success() {
+    use bullet_application::Ledger as _;
     let dir = tempfile::tempdir().expect("tempdir");
     let adapter = Arc::new(ScriptedSim::new());
     adapter.override_proposal(
@@ -368,7 +369,7 @@ async fn failed_terminate_after_success_is_not_reported_as_success() {
     let root = dir.path();
     let (origin, base) = build_origin(root);
     let (ledger, package) = seeded_ledger("terminate-fail");
-    let client = Arc::new(candidate::TestCandidateClient::new(ledger));
+    let client = Arc::new(candidate::TestCandidateClient::new(ledger.clone()));
     let journal = Arc::new(MemoryJournal::new());
     let request = AcquireRequest {
         work_package_id: package,
@@ -411,7 +412,36 @@ async fn failed_terminate_after_success_is_not_reported_as_success() {
     )
     .await
     .expect_err("terminate failure must not report success");
-    assert_eq!(error.reason_code(), "PROTOCOL_ERROR");
+    assert_eq!(error.reason_code(), "FINALIZATION_UNRESOLVED");
+    let RunnerError::FinalizationUnresolved {
+        stage,
+        primary,
+        destination,
+        ..
+    } = &error
+    else {
+        panic!("missing preserved subject")
+    };
+    assert_eq!(*stage, "provider_termination");
+    assert_eq!(primary.reason_code(), "PROTOCOL_ERROR");
+    assert!(destination.join("generation/repo/PONG.txt").is_file());
+    assert!(info.repo_dir.is_dir());
+    assert_eq!(workspace.cleanup_calls(), 0);
+    let state = ledger.lock().expect("ledger");
+    let attempt = state
+        .get_attempt(&grant.attempt.id)
+        .expect("attempt")
+        .expect("present");
+    assert_eq!(attempt.state, bullet_domain::AttemptState::Preparing);
+    assert!(state
+        .get_lease(&attempt.variant_id)
+        .expect("lease")
+        .is_some());
+    assert!(state.ready_rows().expect("ready").is_empty());
+    assert!(!journal
+        .stages()
+        .iter()
+        .any(|stage| stage == "released" || stage == "workspace_cleaned"));
     assert!(!journal
         .entries()
         .iter()

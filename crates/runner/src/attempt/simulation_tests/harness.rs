@@ -21,6 +21,7 @@ pub(super) struct ScriptedSim {
     send_delay: Mutex<Option<Duration>>,
     start_failure: Mutex<Option<String>>,
     terminate_failure: Mutex<Option<String>>,
+    terminate_acknowledged: AtomicBool,
     terminated: AtomicBool,
 }
 
@@ -33,6 +34,7 @@ impl ScriptedSim {
             send_delay: Mutex::new(None),
             start_failure: Mutex::new(None),
             terminate_failure: Mutex::new(None),
+            terminate_acknowledged: AtomicBool::new(true),
             terminated: AtomicBool::new(false),
         }
     }
@@ -62,6 +64,10 @@ impl ScriptedSim {
 
     pub(super) fn was_terminated(&self) -> bool {
         self.terminated.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn refuse_termination_ack(&self) {
+        self.terminate_acknowledged.store(false, Ordering::SeqCst);
     }
 }
 
@@ -150,6 +156,11 @@ impl HarnessAdapter for ScriptedSim {
     }
 
     async fn terminate(&self, session: &SessionHandle) -> HarnessResult<Ack> {
+        if !self.terminate_acknowledged.load(Ordering::SeqCst) {
+            return Ok(Ack {
+                acknowledged: false,
+            });
+        }
         if let Some(reason) = self
             .terminate_failure
             .lock()
