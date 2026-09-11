@@ -4,6 +4,7 @@ use bullet_adapters::SqliteLedger;
 use bullet_application::operator_sessions::{
     BootstrapRegistration, OperatorSessionStore, SessionIssue,
 };
+use bullet_application::Ledger;
 use bullet_domain::Digest;
 use serde_json::{json, Value};
 use std::{net::SocketAddr, path::Path};
@@ -166,6 +167,71 @@ async fn sessions_survive_restart_and_self_revocation_preserves_another_client()
     assert_eq!(one["operator_id"], two["operator_id"]);
     assert_ne!(one["session_id"], two["session_id"]);
     assert_eq!(session(second.addr, &cookie_one).await, one);
+    let sid = one["session_id"].as_str().unwrap();
+    let other_sid = two["session_id"].as_str().unwrap();
+    let command =
+        json!({"idempotency_key":"selected-session","kind":"run_demo","payload":{}}).to_string();
+    let ledger = SqliteLedger::open(&path).unwrap();
+    let counts = || {
+        (
+            ledger.list_events().unwrap().len(),
+            ledger.outbox_all().unwrap().len(),
+        )
+    };
+    let before = counts();
+    for (route, data) in [
+        ("/api/v1/commands", command.as_str()),
+        ("/api/v1/auth/revoke", "{}"),
+    ] {
+        for (selectors, expected, code) in [
+            (vec![other_sid], 403, "SESSION_CHANGED"),
+            (vec![""], 403, "SESSION_CHANGED"),
+            (vec!["sid_invalid"], 403, "SESSION_CHANGED"),
+            (vec![sid, sid], 401, "SESSION_INVALID"),
+        ] {
+            let mut headers = vec![
+                ("Origin", ORIGIN),
+                ("Cookie", cookie_one.as_str()),
+                ("X-Bullet-CSRF", csrf_one.as_str()),
+            ];
+            headers.extend(
+                selectors
+                    .into_iter()
+                    .map(|sid| ("x-bullet-expected-session", sid)),
+            );
+            let response = request(second.addr, "POST", route, &headers, data).await;
+            assert_eq!(status(&response), expected, "{route}: {response}");
+            assert_eq!(body(&response)["code"], code);
+            assert_eq!(header(&response, "x-bullet-session-id"), None);
+            assert_eq!(session(second.addr, &cookie_one).await, one);
+            assert_eq!(session(second.addr, &cookie_two).await, two);
+            assert_eq!(
+                counts(),
+                before,
+                "refused selector mutated durable command/audit/outbox"
+            );
+        }
+    }
+    let selected = [
+        ("Origin", ORIGIN),
+        ("Cookie", cookie_one.as_str()),
+        ("X-Bullet-CSRF", csrf_one.as_str()),
+        ("x-bullet-expected-session", sid),
+    ];
+    for (data, expected) in [("null", 400), (command.as_str(), 202)] {
+        let response = request(second.addr, "POST", "/api/v1/commands", &selected, data).await;
+        assert_eq!(status(&response), expected, "{response}");
+        assert_eq!(header(&response, "x-bullet-session-id"), Some(sid));
+        assert_eq!(response.matches("\r\nx-bullet-session-id:").count(), 1);
+    }
+    let admitted = counts();
+    let replay = request(second.addr, "POST", "/api/v1/commands", &selected, &command).await;
+    assert_eq!(status(&replay), 202);
+    assert_eq!(
+        counts(),
+        admitted,
+        "exact selected retry duplicated admission"
+    );
     for (headers, data, expected) in [
         (
             vec![("Origin", ORIGIN), ("Cookie", cookie_one.as_str())],
@@ -217,25 +283,17 @@ async fn sessions_survive_restart_and_self_revocation_preserves_another_client()
             400,
         ),
     ] {
-        assert_eq!(
-            status(&request(second.addr, "POST", "/api/v1/auth/revoke", &headers, data).await),
-            expected
-        );
+        let response = request(second.addr, "POST", "/api/v1/auth/revoke", &headers, data).await;
+        assert_eq!(status(&response), expected);
+        if expected == 400 {
+            assert_eq!(header(&response, "x-bullet-session-id"), Some(sid));
+        }
         assert_eq!(session(second.addr, &cookie_one).await, one);
     }
-    let response = request(
-        second.addr,
-        "POST",
-        "/api/v1/auth/revoke",
-        &[
-            ("Origin", ORIGIN),
-            ("Cookie", &cookie_one),
-            ("X-Bullet-CSRF", &csrf_one),
-        ],
-        "{}",
-    )
-    .await;
+    let response = request(second.addr, "POST", "/api/v1/auth/revoke", &selected, "{}").await;
     assert_eq!(status(&response), 200);
+    assert_eq!(header(&response, "x-bullet-session-id"), Some(sid));
+    assert_eq!(response.matches("\r\nx-bullet-session-id:").count(), 1);
     assert_eq!(header(&response, "cache-control"), Some("no-store"));
     assert!(header(&response, "set-cookie")
         .unwrap()

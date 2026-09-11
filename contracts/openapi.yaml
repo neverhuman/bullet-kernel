@@ -8,14 +8,16 @@ info:
     must match the configured Portal origin; read requests do not require
     CSRF. Operator read responses use Cache-Control: no-store. SSE closes
     when its opening session expires or is revoked; reconnect requires
-    current authority. Clients may bind GET/HEAD reads with
-    x-bullet-expected-session; a selector differing from the authenticated
+    current authority. Clients may bind GET/HEAD reads and the POST command-submission and
+    self-revocation operations with x-bullet-expected-session; a selector differing from the authenticated
     cookie is refused with SESSION_CHANGED before the handler executes.
-    Successful reads, handler absence responses, and SSE openings acknowledge
-    the authenticated subject in x-bullet-session-id, including downstream
+    Successful reads, selected mutations, handler absence responses, and SSE
+    openings acknowledge the authenticated subject in x-bullet-session-id, including downstream
     400/404/410/500 handler responses. The acknowledgement is mandatory after
-    successful read authentication. Authentication refusals
-    may occur before acknowledgement. Legacy reads without a selector remain
+    successful session authentication (and Origin/CSRF authentication for
+    mutations). Self-revocation acknowledges the same session after durable
+    revocation. Authentication refusals
+    may occur before acknowledgement. Legacy requests without a selector remain
     supported; clients requiring session binding must refuse missing or
     mismatched acknowledgements before consuming data or replaying a command.
     /health and /openapi.yaml are public.
@@ -311,6 +313,7 @@ paths:
         - browserSession: []
           csrfToken: []
       parameters:
+        - $ref: "#/components/parameters/ExpectedSession"
         - in: header
           name: Origin
           required: true
@@ -325,6 +328,8 @@ paths:
         "200":
           description: Durable self-revocation acknowledgement, without credentials
           headers:
+            x-bullet-session-id:
+              $ref: "#/components/headers/AcknowledgedSession"
             Cache-Control:
               required: true
               schema: { type: string, const: no-store }
@@ -337,6 +342,9 @@ paths:
                 $ref: "#/components/schemas/SessionRevocationView"
         "400":
           description: body is not an exact empty object
+          headers:
+            x-bullet-session-id:
+              $ref: "#/components/headers/AcknowledgedSession"
           content:
             application/problem+json:
               schema:
@@ -348,7 +356,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
         "403":
-          description: Origin or CSRF refusal
+          description: Origin or CSRF refusal, or SESSION_CHANGED before mutation when the selected session differs from the authenticated cookie.
           content:
             application/problem+json:
               schema:
@@ -442,6 +450,7 @@ paths:
         - browserSession: []
           csrfToken: []
       parameters:
+        - $ref: "#/components/parameters/ExpectedSession"
         - in: header
           name: Origin
           required: true
@@ -456,6 +465,8 @@ paths:
         "202":
           description: initial or exact-replay durable command status
           headers:
+            x-bullet-session-id:
+              $ref: "#/components/headers/AcknowledgedSession"
             X-Bullet-As-Of-Sequence:
               required: true
               schema: { type: integer, minimum: 0, maximum: 9007199254740991 }
@@ -468,6 +479,9 @@ paths:
                 $ref: "#/components/schemas/CommandStatus"
         "400":
           description: malformed or non-exact command
+          headers:
+            x-bullet-session-id:
+              $ref: "#/components/headers/AcknowledgedSession"
           content:
             application/problem+json:
               schema:
@@ -479,13 +493,16 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
         "403":
-          description: Origin or CSRF refusal
+          description: Origin or CSRF refusal, or SESSION_CHANGED before mutation when the selected session differs from the authenticated cookie.
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
         "409":
           description: idempotency key is bound to another exact request or outside the authenticated operator history
+          headers:
+            x-bullet-session-id:
+              $ref: "#/components/headers/AcknowledgedSession"
           content:
             application/problem+json:
               schema:
@@ -1148,14 +1165,14 @@ components:
       name: x-bullet-expected-session
       in: header
       required: false
-      description: Exact selected session; mismatch with the authenticated cookie refuses before reading data.
+      description: Exact selected session; mismatch with the authenticated cookie refuses before reading data or performing the selected mutation.
       schema:
         type: string
         pattern: '^sid_[0-9a-f]{64}$'
   headers:
     AcknowledgedSession:
       required: true
-      description: Authenticated session used for this read; validate before consuming data or treating absence as permission to replay.
+      description: Authenticated session selected before the handler; validate before consuming data, accepting mutation results or treating absence as permission to replay. Self-revocation acknowledges its original session.
       schema:
         type: string
         pattern: '^sid_[0-9a-f]{64}$'
