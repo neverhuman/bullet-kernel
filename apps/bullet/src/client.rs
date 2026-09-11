@@ -146,10 +146,11 @@ pub(crate) fn harness_outcome() -> &'static str {
         "BULLET_HARNESS_LEASE_RECOVERY",
         "BULLET_HARNESS_EXECUTABLE",
     ];
-    if REQUIRED
-        .iter()
-        .all(|name| std::env::var(name).ok().is_some_and(|value| !value.is_empty()))
-    {
+    if REQUIRED.iter().all(|name| {
+        std::env::var(name)
+            .ok()
+            .is_some_and(|value| !value.is_empty())
+    }) {
         "BOUND"
     } else {
         "UNBOUND"
