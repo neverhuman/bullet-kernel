@@ -4,9 +4,9 @@
 [![Jankurai](https://img.shields.io/badge/jankurai-audit-blue.svg)](docs/testing.md)
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
-Product-surface claims and the CI inventory were last reviewed 2026-09-10
-against product subject `8d7258a0`.
-<!-- bullet-doc-review:v1 subject=07d224e60545bc8e8f6c083c4edf327109304282 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,ops/ci/inventory.sh -->
+Product-surface claims and the CI inventory were last reviewed 2026-09-11
+against product subject `820221ce`.
+<!-- bullet-doc-review:v1 subject=820221ce7b3959afdbc164cc3ac878d6c189931e max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,ops/ci/inventory.sh -->
 Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.
@@ -30,7 +30,7 @@ Evidence classes follow
 | `apps/bullet-farmd` | loopback-only HTTP + SSE daemon; routes in the table below |
 | `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
 | `apps/bullet` | CLI: authenticated `auth`, `coding`, remote `mission` and read-only `tui`; advanced `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; command details are in [`docs/cli.md`](docs/cli.md) |
-| `apps/bullet-runner` | attempt runner with explicit peer/recovery and Candidate inputs; missing lease admission refuses. `--provider sim` is the deterministic simulator; `--provider claude` drives a real contained turn through the dogfood admission and refuses by name when any input is missing, never falling back to the simulator; `codex` and `cursor` construct and then refuse at `start` |
+| `apps/bullet-runner` | attempt runner with explicit peer/recovery and Candidate inputs; missing lease admission refuses. `--provider sim` is the deterministic simulator; `--provider claude` drives a real contained turn through the dogfood admission and refuses by name when any input is missing, never falling back to the simulator; `codex` and `cursor` construct a signed-in adapter, `start` succeeds when the workdir exists, and a missing structured proposal is a typed send refusal, never a simulator fallback |
 | `apps/bullet-verifier` | product verifier boundary; always returns the typed `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE` refusal without reading a job. The default-off `bullet-verifier-fixture` accepts unsigned fixture JSON only with `fixture-executor`; every fixture outcome is component-only, unsigned, non-independent, and transaction-gate-ineligible |
 | `apps/bullet-effects` | no-argument component demo over `LocalBareForge`; `serve <durable-queue-dir>` processes one UNKNOWN job only to `QUARANTINED`, never fabricated forge success |
 
