@@ -1,9 +1,9 @@
 # Kernel architecture
 
-Last reviewed: 2026-09-10 against source `a2825424`. Every claim names the code
+Last reviewed: 2026-09-11 against source `88de763`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
-<!-- bullet-doc-review:v1 subject=a282542425eb15fefd509c9d317527a2744ae45e max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,apps/bullet-farmd/src/commands.rs,apps/bullet-farmd/src/commands/conversations.rs,apps/bullet-farmd/src/api/routes.rs,apps/bullet/src/contracts.rs,crates/application/src/conversations.rs,crates/adapters/src/sqlite/conversations/admission.rs,crates/adapters/src/sqlite/migrations/catalog.rs,apps/bullet-runner/src/signed_in_cli.rs -->
+<!-- bullet-doc-review:v1 subject=88de763bf2507c1dbb13f48c2c095e3d745ce813 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,apps/bullet-farmd/src/commands.rs,apps/bullet-farmd/src/commands/conversations.rs,apps/bullet-farmd/src/api/routes.rs,apps/bullet/src/contracts.rs,crates/application/src/conversations.rs,crates/adapters/src/sqlite/conversations/admission.rs,crates/adapters/src/sqlite/migrations/catalog.rs,apps/bullet-runner/src/signed_in_cli.rs,apps/bullet-farmd/src/auth/read.rs,apps/bullet/src/coding/http.rs,apps/bullet/src/tui/submissions.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,crates/adapters/src/sqlite/candidate_preparation/source.rs,apps/bullet-runner/src/bin/bullet-command-worker/child/coding.rs,crates/application/src/dogfood_adapter.rs,crates/application/src/dogfood_run.rs,crates/harness-claude/src/dogfood.rs,crates/runner/src/attempt/session.rs,crates/runner/src/attempt/session/failure.rs -->
 
 ## Ledger core
 
@@ -64,6 +64,14 @@ and SSE require authenticated durable sessions. Browser Origin and CSRF checks
 remain enforced; operator-owned command and conversation discovery survives
 local cache loss and daemon restart.
 
+The read middleware (`apps/bullet-farmd/src/auth/read.rs`) checks an optional
+`X-Bullet-Expected-Session` on authenticated `/api/v1/` GET/HEAD requests and
+refuses a mismatch with `403 SESSION_CHANGED` before the handler runs. After
+an authenticated handler returns, it adds `X-Bullet-Session-Id` and
+`Cache-Control: no-store`. The CLI
+request path (`apps/bullet/src/coding/http.rs`) does not yet send or validate
+these identity headers; client owner-binding and recovery acceptance remain open.
+
 Public `POST /api/v1/commands` returns the command's current durable phase.
 Exact owned retries retain their original subject; they do not create another
 command. `run_coding` task intent persists the accepted repository/base, scope,
@@ -71,7 +79,15 @@ criteria, gates, dependencies, limits, and server-derived task revision and run
 tracking identities. Admission binds a request-digest nonce and quota
 reservation so an admitted task may enter command dispatch. The observation
 reports `CODING_BINDING_ADMISSION_UNAVAILABLE` only when that binding is
-missing. Intent still allocates no Runner lease or live provider grant.
+missing. This checks nonce/reservation records, not a complete execution binding.
+`crates/adapters/src/sqlite/coding_tasks/admission.rs` creates no Mission/graph,
+WorkPackage/Variant, or registered `CandidatePreparationSource`. The worker's
+`CodingLaunch::from_task` (`apps/bullet-runner/src/bin/bullet-command-worker/child/coding.rs`)
+derives a WorkPackage id from the command and puts the command request digest
+in the Candidate-request argument. The Candidate-source consumer instead checks
+its own typed canonical source digest (`crates/adapters/src/sqlite/candidate_preparation/source.rs`).
+A coherent producer joining accepted task intent to those durable execution
+subjects is still missing. Intent allocates no Runner lease or live provider grant.
 The retired HTTP worker reconciler (`POST /internal/v1/commands/{id}/reconcile`)
 authenticates and then returns `410 WORKLOAD_API_UDS_REQUIRED`; workload mutation
 uses the separate internal Unix-socket boundary. Durable store and corruption
@@ -95,6 +111,10 @@ Source: `apps/bullet-farmd/src/projections/{mod,operator,fleet,sessions,context_
 transaction. CLI/TUI and Portal consumers validate its watermark and subject
 relationships. This supplies a compatible board without composing independent
 route snapshots; it does not authorize a mutation or certify live work.
+The TUI's `Submissions` view (`apps/bullet/src/tui/submissions.rs`) retains its
+separate command-discovery snapshot and watermark. It shows submitted commands
+without inventing Mission, task or Attempt relationships or borrowing the
+operator snapshot's sequence. Exact command ids and payload digests remain visible.
 
 `/api/v1/fleet`, `/api/v1/sessions`, `/api/v1/context-lineage`, `/api/v1/merge-rail`,
 `/api/v1/quality-lab`, and `/api/v1/audit` are read-only spec §25 surfaces. Each route performs exactly one
@@ -168,10 +188,17 @@ kills the POSIX process group before bounded pipe reaping. This is the Linux V1
 process-tree mechanism, not a cross-platform sandbox. `crates/harness-sim` is
 the deterministic simulator. Harness-core supervision is tested as a component.
 The live-conformance spawn at step 11 below is unreachable under the committed
-policy. Separate Runner paths construct the Claude dogfood adapter and
-`apps/bullet-runner/src/signed_in_cli.rs` for Codex, Cursor and Antigravity.
-Their presence does not establish admitted subscription execution, complete
-native lifecycle control, or a verified coding transaction.
+policy. Generic signed-in Runner selectors `codex`, `cursor`, `agy` and
+`antigravity` all refuse with `SIGNED_IN_CONTAINMENT_UNAVAILABLE`
+(`apps/bullet-runner/src/signed_in_cli.rs`). After argv validation, construction
+refuses before Candidate/lease admission or workspace creation; direct `start`
+and `send` also refuse. A worker-launched Runner uses the same boundary.
+Claude uses the separate `DogfoodClaudeAdapter` and `dispatch_dogfood_compose`
+(`crates/application/src/{dogfood_adapter,dogfood_run}.rs`). That compose requires
+its policy, enrollment, credential/filesystem profile and egress preparation,
+mounts the clone read-only, and admits only `Read,Glob,Grep` in plan mode
+(`crates/harness-claude/src/dogfood.rs`). It is not an admitted coding workcell.
+Native lifecycle, subscription execution and the full coding transaction remain unqualified.
 
 ## Signed launch-grant admission
 
@@ -240,7 +267,7 @@ the frozen requirement. Exactly one path clears each:
   refuse). See [`egress-isolation.md`](egress-isolation.md).
 
 `require_dispatch` re-verifies the receipt digest and refuses while any
-blocker remains; it is the single chokepoint before a spawn.
+blocker remains; it is the final admission chokepoint on this conformance path.
 
 **Policy loader** (committed `0d848f6`, mirroring hub ADR 0012). `load_policy`
 admits `BULLET_POLICY_PATH` (absolute) or `<data-dir>/policy/policy.json`: a
@@ -352,9 +379,9 @@ exact-subject transaction.
 `crates/runner` (`apps/bullet-runner`) runs the attempt loop: scope check,
 heartbeat self-fence, checkpoint journal, and `bullet-gitd` supervision; the
 binary selects the provider explicitly: `sim` is the deterministic
-simulator and `claude` drives a real contained turn through the dogfood
-admission, refusing by name when any admission input is missing rather than
-falling back to the simulator. Since `ca380bc` the runner's `Capsule`
+simulator and `claude` selects the separately admitted read-only compose above.
+The other provider selectors refuse unsupported containment; missing real-provider
+inputs never select the simulator. Since `ca380bc` the runner's `Capsule`
 carries the producing Attempt and the daemon-issued base checkpoint id and
 digest; `pre_apply_refusal` refuses a proposal whose `producing_attempt_id`,
 `base_checkpoint_id`, or `base_checkpoint_digest` differs from the active
@@ -378,6 +405,17 @@ reports `FINALIZATION_UNRESOLVED` with recovery subjects and prevents a second
 fallback release. This does not establish termination of native descendants,
 capacity retention beyond legacy lease expiry, atomic quota/verifier settlement,
 or cleanup replay after a lost response.
+
+Turn acceptance (`crates/runner/src/attempt/session.rs`) bounds the stream at
+4,096 events and selects a close event matching both Bullet session and invocation.
+It requires `Some(0)` exit, no timeout, and `TurnCompleted` before decoding or
+applying a proposal. For a bounded failed turn, `session/failure.rs` retains the
+close payload and turn facts as a content-addressed, private
+`failed-turn-<digest>.json` with `FAILED_RUN_ARTIFACT_ONLY` disposition, then
+refuses proposal acceptance; retention errors also refuse. This is a failed-run
+artifact, not a successful Attempt. The Claude adapter preserves original compose
+evidence before projecting its session binding and retains native invocation and
+outcome facts, including the original close kind.
 
 ## Runner ↔ farmd lease admission refusal
 

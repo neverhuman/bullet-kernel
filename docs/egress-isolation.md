@@ -2,17 +2,39 @@
 
 Status: committed Linux boundary; `COMPONENT_PROOF` on a capable host
 Owner: Bullet Farm maintainers
-Last reviewed: 2026-09-10 against source `a2825424`
+Last reviewed: 2026-09-11 against source `88de763`
 Source of truth: `crates/harness-egress/src/{lib,allowlist,decisions,error,namespace,probes,proxy,receipt,request,ruleset,sandbox,tools,tunnel}.rs`;
 consumer: `crates/harness-core/src/admission/signed.rs`
-<!-- bullet-doc-review:v1 subject=a282542425eb15fefd509c9d317527a2744ae45e max_distance=25 paths=crates/harness-egress/src/lib.rs,crates/harness-egress/src/sandbox.rs,crates/harness-core/src/admission/signed.rs -->
+<!-- bullet-doc-review:v1 subject=88de763bf2507c1dbb13f48c2c095e3d745ce813 max_distance=25 paths=crates/harness-egress/src/lib.rs,crates/harness-egress/src/sandbox.rs,crates/harness-core/src/admission/signed.rs,crates/harness-egress/src/filesystem.rs,crates/application/src/dogfood_run.rs,crates/application/src/dogfood_adapter.rs,crates/harness-claude/src/dogfood.rs,apps/bullet-runner/src/main.rs,apps/bullet-runner/src/signed_in_cli.rs,ops/ci/egress.sh -->
 
-`bullet-harness-egress` launches a provider CLI inside a fresh Linux user +
-network namespace whose only route out is a `slirp4netns` uplink to a
-host-side, allow-listing HTTP `CONNECT` proxy. It is driven entirely through
-host binaries (no `unsafe`), proves itself with in-namespace probes before any
-child runs, and seals the result into an `EgressReceipt` that admission binds.
-It never depends on `harness-core`.
+`bullet-harness-egress` constructs a fresh Linux user + network namespace
+whose only route out is a `slirp4netns` uplink to a host-side, allow-listing
+HTTP `CONNECT` proxy. Host binaries establish this network boundary and run
+its probes before a provider command is released; the crate seals their result
+into an `EgressReceipt`. It never depends on `harness-core`.
+The network receipt alone does not admit a provider or isolate its filesystem,
+credentials, inherited descriptors or native process lifecycle.
+
+## Current Runner consumers
+
+Generic signed-in selectors `codex`, `cursor`, `agy` and `antigravity` refuse
+`SIGNED_IN_CONTAINMENT_UNAVAILABLE` in
+`apps/bullet-runner/src/signed_in_cli.rs`. Construction fails before Runner
+Candidate/lease admission and workspace creation; direct `start` and `send`
+also refuse. Private directories and cleared environment do not substitute for
+an admitted coding profile, and routing through the command worker grants no exemption.
+
+Claude uses the separate read-only compose in
+`crates/application/src/{dogfood_adapter,dogfood_run}.rs`. After its policy,
+enrollment and credential checks, it prepares `FilesystemSandboxProfileV0`
+(`crates/harness-egress/src/filesystem.rs`) and this egress sandbox, then uses
+`PreparedSandbox::filesystem_command`. That path revalidates retained filesystem
+subjects, builds the Bubblewrap command without ambient executable lookup,
+clears the outer environment and starts a fresh process group. The clone is
+mounted read-only; `crates/harness-claude/src/dogfood.rs` admits only
+`Read,Glob,Grep` in plan mode with closed configuration/MCP flags. This compose
+supports read-only proposal collection; it does not qualify a writable coding
+workcell, native terminal custody, a subscription account, or approved integration.
 
 ## Boundary, in order (`EgressSandbox::prepare_with`)
 
@@ -173,13 +195,16 @@ re-verified first and a second `admit_egress` is refused. The three digests
 are then carried into the `LiveConformanceReceipt`
 (`egress_receipt_digest`, `egress_ruleset_digest`, `egress_allowlist_digest`).
 
-## Child commands (`PreparedSandbox::command`)
+## Network-only commands (`PreparedSandbox::command`)
 
 Every command enters the namespace via `nsenter` in the holder's process
 group with `env_clear()` plus exactly the caller's `env` and `HTTPS_PROXY`,
 `HTTP_PROXY`, `https_proxy`, `http_proxy` = `http://10.0.2.2:<proxy_port>`,
 and `NO_PROXY` / `no_proxy` = empty. A bare program name is resolved against
-the caller's `PATH` (or this process's) before entering.
+the caller's `PATH` (or this process's) before entering. This helper adds no
+filesystem profile. The read-only Claude compose uses `filesystem_command`
+instead; generic signed-in coding must remain refused until its complete
+containment profile has an admitted consumer.
 
 ## Teardown guarantees (`namespace.rs`, `sandbox.rs`)
 
@@ -198,7 +223,8 @@ the proxy port no longer accepts, and the on-disk receipt still verifies.
   every other packaged platform must fail closed until one passes.
 - **Same UID.** The namespace is unprivileged and root-mapped to the calling
   user. A process running as the same UID outside the namespace is not
-  constrained by it; this is provider containment, not host hardening.
+  constrained by it. The network namespace does not itself hide canonical
+  repositories, signer keys, unrelated homes or privileged Unix sockets.
 - **No provider identity.** A passing receipt proves the boundary shape and
   the eight refusals/decisions on this host at `started_at`; it says nothing
   about which provider account, model, or credential later runs inside it.
@@ -228,6 +254,7 @@ host-dependent proofs (`claude_strict_sandbox_proves_every_probe_and_blocks_real
 exactly the eight probe names above, all passing, seven tool records, five
 containment probes in the evidence, and that a real `curl` from inside the
 sandbox reaches neither `1.1.1.1` nor `10.0.2.2:8787` directly. It is
-`COMPONENT_PROOF` for this host only. Unit tests for allowlist, request
+`COMPONENT_PROOF` for this host only; exit 78 remains non-passing and proves
+no host qualification. Unit tests for allowlist, request
 parsing, proxy decisions, ruleset text/listing/counters, and receipt sealing
 run in the plain workspace lanes without namespaces.
