@@ -16,14 +16,19 @@ use bullet_harness_core::{
 use chrono::Utc;
 use serde_json::json;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::Mutex;
+
+#[derive(Clone)]
+struct BoundPaths {
+    workdir: PathBuf,
+    artifact_dir: PathBuf,
+}
 
 pub struct SignedInCliAdapter {
     provider: String,
     executable: PathBuf,
     model: String,
-    bound: Mutex<Option<PathBuf>>,
+    bound: Mutex<Option<BoundPaths>>,
     events: Mutex<Vec<AgentEvent>>,
 }
 
@@ -125,7 +130,10 @@ impl HarnessAdapter for SignedInCliAdapter {
             .lock()
             .map_err(|_| HarnessError::AdmissionRefused {
                 reason: "SIGNED_IN_SESSION_POISONED: start".into(),
-            })? = Some(request.workdir.clone());
+            })? = Some(BoundPaths {
+            workdir: request.workdir.clone(),
+            artifact_dir: request.artifact_dir.clone(),
+        });
         Ok(SessionHandle {
             session_id: request.session_id,
             provider: self.provider.clone(),
@@ -138,7 +146,7 @@ impl HarnessAdapter for SignedInCliAdapter {
     }
 
     async fn send(&self, session: &SessionHandle, turn: Turn) -> HarnessResult<TurnHandle> {
-        let workdir = self
+        let bound = self
             .bound
             .lock()
             .map_err(|_| HarnessError::AdmissionRefused {
@@ -149,23 +157,22 @@ impl HarnessAdapter for SignedInCliAdapter {
                 reason: "SIGNED_IN_SESSION_UNBOUND: send before start".into(),
             })?;
         let executable = self.executable.clone();
+        let provider = self.provider.clone();
         let args = self.argv(&turn.prompt);
         let output = tokio::task::spawn_blocking(move || {
-            Command::new(&executable)
-                .args(&args)
-                .current_dir(&workdir)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
+            bullet_application::signed_in_containment::run_signed_in(
+                &provider,
+                &executable,
+                &bound.workdir,
+                &bound.artifact_dir,
+                &args,
+            )
         })
         .await
         .map_err(|error| HarnessError::AdmissionRefused {
             reason: format!("SIGNED_IN_DISPATCH_LOST: {error}"),
         })?
-        .map_err(|error| HarnessError::AdmissionRefused {
-            reason: format!("SIGNED_IN_SPAWN_FAILED: {error}"),
-        })?;
+        .map_err(|error| HarnessError::AdmissionRefused { reason: error })?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let invocation = InvocationId::new(session.session_id.as_str());
         let mut payload = json!({ "exit": output.status.code() });
@@ -319,7 +326,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let handle = adapter
+        let sent = adapter
             .send(
                 &SessionHandle {
                     session_id: AgentSessionId::new("signed-in-stub"),
@@ -330,17 +337,28 @@ mod tests {
                     prompt: "implement".into(),
                 },
             )
-            .await
-            .unwrap();
-        assert_eq!(handle.exit_code, Some(1));
-        let events: Vec<_> = futures::StreamExt::collect(adapter.events(&SessionHandle {
-            session_id: AgentSessionId::new("signed-in-stub"),
-            provider: "codex".into(),
-            native_session_id: None,
-        }))
-        .await;
-        assert!(events[0].payload.get("proposal").is_some());
-        assert!(!events[0].payload.to_string().contains("sim"));
+            .await;
+        match sent {
+            Ok(handle) => {
+                assert_eq!(handle.exit_code, Some(1));
+                let events: Vec<_> = futures::StreamExt::collect(adapter.events(&SessionHandle {
+                    session_id: AgentSessionId::new("signed-in-stub"),
+                    provider: "codex".into(),
+                    native_session_id: None,
+                }))
+                .await;
+                assert!(events[0].payload.get("proposal").is_some());
+                assert!(!events[0].payload.to_string().contains("sim"));
+            }
+            Err(error) => {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("SIGNED_IN_CONTAINMENT_UNAVAILABLE"),
+                    "{error}"
+                );
+            }
+        }
 
         let garbage = dir.path().join("garbage");
         std::fs::OpenOptions::new()
@@ -379,9 +397,11 @@ mod tests {
             )
             .await
             .unwrap_err();
+        let text = error.to_string();
         assert!(
-            error.to_string().contains("CURSOR_ACP_EVENTS_EMPTY"),
-            "{error}"
+            text.contains("CURSOR_ACP_EVENTS_EMPTY")
+                || text.contains("SIGNED_IN_CONTAINMENT_UNAVAILABLE"),
+            "{text}"
         );
     }
 }

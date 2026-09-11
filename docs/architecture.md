@@ -1,9 +1,9 @@
 # Kernel architecture
 
-Last reviewed: 2026-09-10 against source `a2825424`. Every claim names the code
+Last reviewed: 2026-09-11 against source `965392cc`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
-<!-- bullet-doc-review:v1 subject=a282542425eb15fefd509c9d317527a2744ae45e max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,apps/bullet-farmd/src/commands.rs,apps/bullet-farmd/src/commands/conversations.rs,apps/bullet-farmd/src/api/routes.rs,apps/bullet/src/contracts.rs,crates/application/src/conversations.rs,crates/adapters/src/sqlite/conversations/admission.rs,crates/adapters/src/sqlite/migrations/catalog.rs,apps/bullet-runner/src/signed_in_cli.rs -->
+<!-- bullet-doc-review:v1 subject=965392ccdcad315814eeb96ce5fa192b089b4409 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/application/src/signed_in_containment.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,apps/bullet-farmd/src/commands.rs,apps/bullet-farmd/src/commands/conversations.rs,apps/bullet-farmd/src/api/routes.rs,apps/bullet/src/contracts.rs,crates/application/src/conversations.rs,crates/adapters/src/sqlite/conversations/admission.rs,crates/adapters/src/sqlite/migrations/catalog.rs,apps/bullet-runner/src/signed_in_cli.rs -->
 
 ## Ledger core
 
@@ -170,8 +170,11 @@ the deterministic simulator. Harness-core supervision is tested as a component.
 The live-conformance spawn at step 11 below is unreachable under the committed
 policy. Separate Runner paths construct the Claude dogfood adapter and
 `apps/bullet-runner/src/signed_in_cli.rs` for Codex, Cursor and Antigravity.
-Their presence does not establish admitted subscription execution, complete
-native lifecycle control, or a verified coding transaction.
+`send` admits the existing harness-egress filesystem + network profile via
+`crates/application/src/signed_in_containment.rs` or refuses
+`SIGNED_IN_CONTAINMENT_UNAVAILABLE`. Their presence does not establish
+admitted subscription execution, complete native lifecycle control, or a
+verified coding transaction.
 
 ## Signed launch-grant admission
 

@@ -37,6 +37,8 @@ pub mod policy_snapshot;
 pub mod queue;
 pub mod records;
 pub mod run_coding;
+#[cfg(feature = "dogfood-claude")]
+pub mod signed_in_containment;
 pub mod simulators;
 pub mod store;
 
