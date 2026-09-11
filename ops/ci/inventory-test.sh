@@ -213,7 +213,7 @@ rg -Fxq 'selected="$(partition_count "$EGRESS_FILTER")"' ops/ci/egress.sh \
 rg -Fxq 'cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --run-ignored all --no-tests fail -E "$EGRESS_FILTER"' \
   ops/ci/egress.sh \
   || { refuse EGRESS_EXECUTION_POLICY_MISSING ops/ci/egress.sh; exit 1; }
-rg -Fxq '  cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --profile "$profile" -E "$filter"' \
+rg -Fxq '  cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --profile "$profile" --run-ignored all -E "$filter"' \
   ops/ci/lib.sh \
   || { refuse VERIFIER_FIXTURE_FEATURE_MISSING ops/ci/lib.sh; exit 1; }
 rg -Fq 'cargo nextest list --locked --workspace "${NEXTEST_FEATURES[@]}"' ops/ci/lib.sh \
@@ -227,12 +227,13 @@ mapfile -t ignored_runners < <(
   rg -l --glob '*.sh' --glob '!inventory-test.sh' -- 'cargo nextest run .*--run-ignored' \
     ops/ci scripts | sort -u
 )
-if [[ "${#ignored_runners[@]}" -ne 1 ]]; then
-  refuse EGRESS_RUNNER_DRIFT "ignored tests must have exactly one runner; found ${#ignored_runners[@]}"
-  exit 1
-fi
-if [[ "${ignored_runners[0]}" != ops/ci/egress.sh ]]; then
-  refuse EGRESS_RUNNER_DRIFT "ignored tests must run only through ops/ci/egress.sh"
+# Shared partition execution uses the same ignored-test mode as enumeration.
+# The identities above still allow only the three explicit egress tests to be
+# ignored, and require zero ignored tests in the standalone partition.
+if [[ "${#ignored_runners[@]}" -ne 2 \
+    || "${ignored_runners[0]:-}" != ops/ci/egress.sh \
+    || "${ignored_runners[1]:-}" != ops/ci/lib.sh ]]; then
+  refuse EGRESS_RUNNER_DRIFT "ignored-mode commands must be exactly the egress runner and shared partition helper"
   exit 1
 fi
 rg -Fxq 'bash ops/ci/inventory-test.sh' ops/ci/lint.sh \
