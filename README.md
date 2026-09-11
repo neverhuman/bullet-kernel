@@ -5,8 +5,8 @@
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
 Product-surface claims and the CI inventory were last reviewed 2026-09-11
-against product subject `820221ce`.
-<!-- bullet-doc-review:v1 subject=820221ce7b3959afdbc164cc3ac878d6c189931e max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,ops/ci/inventory.sh -->
+against product subject `965392cc`.
+<!-- bullet-doc-review:v1 subject=965392ccdcad315814eeb96ce5fa192b089b4409 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,ops/ci/inventory.sh -->
 Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.
