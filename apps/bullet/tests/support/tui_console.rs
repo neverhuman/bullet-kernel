@@ -105,7 +105,13 @@ impl Console {
                 self.child.try_wait().unwrap().is_none(),
                 "CLI exited before expected display: {text}"
             );
-            assert!(Instant::now() < deadline, "missing display: {text}");
+            assert!(
+                Instant::now() < deadline,
+                "missing display: {text}; pid={}; screen={:?}; PTY tail={:?}",
+                self.child.id(),
+                self.parser.screen().contents(),
+                String::from_utf8_lossy(&self.output[self.output.len().saturating_sub(8192)..])
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
     }

@@ -189,6 +189,14 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            match self.requests.try_lock() {
+                Ok(requests) => eprintln!("validated synthetic fixture requests: {requests:?}"),
+                Err(_) => {
+                    eprintln!("synthetic fixture request diagnostics unavailable during unwind")
+                }
+            }
+        }
         self.stop.store(true, Ordering::SeqCst);
         if let Some(worker) = self.worker.take() {
             let result = worker.join();
