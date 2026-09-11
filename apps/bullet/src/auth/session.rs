@@ -5,21 +5,16 @@ use crate::client::{
     models::{OperatorSessionView, SessionRevocationView},
 };
 
-pub(super) fn status(credentials: &Credentials) -> Result<OperatorSessionView, String> {
-    let response = http::request(
-        &credentials.farmd,
-        "GET",
-        "/api/v1/auth/session",
-        &[
-            ("Cookie", &credentials.cookie),
-            ("Origin", &credentials.origin),
-        ],
-        None,
-    )?;
+pub(crate) fn status(credentials: &Credentials) -> Result<OperatorSessionView, String> {
+    let (response, acknowledged_session) =
+        http::observe_session(&credentials.farmd, &credentials.origin, &credentials.cookie)?;
     if response.status != 200 {
         return Err(format!("AUTH_SESSION_REFUSED: HTTP {}", response.status));
     }
     let view: OperatorSessionView = decode(&response.body)?;
+    if view.session_id != acknowledged_session {
+        return Err("AUTH_SESSION_SUBJECT_MISMATCH".into());
+    }
     let issued = chrono::DateTime::parse_from_rfc3339(&view.issued_at)
         .map_err(|_| "AUTH_SESSION_TIME_INVALID")?;
     let expires = chrono::DateTime::parse_from_rfc3339(&view.expires_at)

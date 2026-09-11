@@ -3,7 +3,7 @@
 #[cfg(unix)]
 mod input;
 #[cfg(unix)]
-mod session;
+pub(crate) mod session;
 #[cfg(unix)]
 pub(crate) mod store;
 
