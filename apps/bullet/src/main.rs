@@ -26,7 +26,7 @@ use std::process::ExitCode;
 #[command(name = "bullet", about = "Bullet Farm CLI")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -271,7 +271,10 @@ fn demo() -> Result<(), String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command {
+    match cli
+        .command
+        .unwrap_or_else(|| Commands::Tui(tui::TuiArgs::default()))
+    {
         Commands::Provider { command } => provider::run(command),
         Commands::Dogfood { command } => dogfood::run(*command),
         Commands::Coding { command } => coding::run(command),

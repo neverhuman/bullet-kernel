@@ -142,3 +142,106 @@ fn revoked_sessions_clear_displayed_owner_data_and_recover_after_reauthenticatio
         assert!(!String::from_utf8_lossy(&console.output).contains("csrf_"));
     }
 }
+
+#[test]
+fn default_bullet_and_bulletfarm_paint_during_contention_and_detach_independently() {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let fixture = fixture::Fixture::start();
+    let state_root = fixture.directory.path().join("default-state");
+    let directory = state_root.join("bullet/operator");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&directory)
+        .unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::copy(
+        fixture.directory.path().join("session.json"),
+        directory.join("session.json"),
+    )
+    .unwrap();
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(directory.join(".auth.lock"))
+        .unwrap();
+    flock(&lock, FlockOperation::NonBlockingLockExclusive).unwrap();
+    let binaries = [
+        env!("CARGO_BIN_EXE_bullet"),
+        env!("CARGO_BIN_EXE_bulletfarm"),
+    ];
+    let mut consoles = (0..6)
+        .map(|index| Console::start_default(&state_root, binaries[index % 2]))
+        .collect::<Vec<_>>();
+    for (console, _) in &mut consoles {
+        console.until("AUTH_BUSY");
+        console.send(b"?");
+        console.until("Operator help");
+        console.send(b"\x1b");
+        console.until_absent("Operator help");
+    }
+    assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+    consoles[0].0.detach();
+    for (console, _) in &mut consoles[1..] {
+        assert!(console.child.try_wait().unwrap().is_none());
+    }
+    flock(&lock, FlockOperation::Unlock).unwrap();
+    for (console, _) in &mut consoles[1..] {
+        console.send(b"r");
+        console.until("Synthetic PTY mission");
+        console.until("OBSERVED");
+        console.detach();
+    }
+    for (console, slave) in &consoles {
+        assert!(tcgetattr(slave)
+            .unwrap()
+            .local_modes
+            .contains(rustix::termios::LocalModes::ICANON));
+        let output = String::from_utf8_lossy(&console.output);
+        assert!(!output.contains("ses_"));
+        assert!(!output.contains("csrf_"));
+    }
+}
+
+#[test]
+fn default_aliases_keep_noninteractive_refusals_and_explicit_help() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    let directory = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let binaries = [
+        env!("CARGO_BIN_EXE_bullet"),
+        env!("CARGO_BIN_EXE_bulletfarm"),
+    ];
+    for binary in binaries {
+        let invoke = |args: &[&str]| {
+            Command::new(binary)
+                .args(args)
+                .env_clear()
+                .env("TERM", "dumb")
+                .env("XDG_STATE_HOME", directory.path())
+                .stdin(Stdio::null())
+                .output()
+                .unwrap()
+        };
+        let default = invoke(&[]);
+        let explicit = invoke(&["tui"]);
+        assert_eq!(default.status.code(), Some(1));
+        assert_eq!(default.status.code(), explicit.status.code());
+        assert!(default.stdout.is_empty());
+        assert_eq!(default.stdout, explicit.stdout);
+        assert_eq!(default.stderr, explicit.stderr);
+        assert!(String::from_utf8_lossy(&default.stderr).contains("AUTH_REQUIRED"));
+        let help = invoke(&["--help"]);
+        assert!(help.status.success());
+        let help = String::from_utf8(help.stdout).unwrap();
+        for command in ["tui", "coding", "auth"] {
+            assert!(help.contains(command));
+        }
+    }
+}

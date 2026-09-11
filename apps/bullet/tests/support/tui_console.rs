@@ -14,6 +14,17 @@ pub(super) struct Console {
 }
 impl Console {
     pub(super) fn start(directory: &std::path::Path, subject: Option<&str>) -> (Self, File) {
+        Self::start_command(directory, subject, env!("CARGO_BIN_EXE_bullet"), false)
+    }
+    pub(super) fn start_default(state_root: &std::path::Path, executable: &str) -> (Self, File) {
+        Self::start_command(state_root, None, executable, true)
+    }
+    fn start_command(
+        directory: &std::path::Path,
+        subject: Option<&str>,
+        executable: &str,
+        default_entry: bool,
+    ) -> (Self, File) {
         let master =
             openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).unwrap();
         grantpt(&master).unwrap();
@@ -37,11 +48,12 @@ impl Console {
         .unwrap();
         fcntl_setfl(&master, fcntl_getfl(&master).unwrap() | OFlags::NONBLOCK).unwrap();
         let mut command = Command::new("/usr/bin/setsid");
-        command
-            .arg("--ctty")
-            .arg(env!("CARGO_BIN_EXE_bullet"))
-            .args(["tui", "--state-dir"])
-            .arg(directory);
+        command.arg("--ctty").arg(executable);
+        if default_entry {
+            command.env("XDG_STATE_HOME", directory);
+        } else {
+            command.args(["tui", "--state-dir"]).arg(directory);
+        }
         if let Some(subject) = subject {
             command.args(["--subject", subject]);
         }
