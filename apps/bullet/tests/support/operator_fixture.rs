@@ -5,15 +5,22 @@ use std::net::TcpListener;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::sync::{
     atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadRequest {
+    pub path: String,
+    pub expected_session: Option<String>,
+}
 
 pub struct Fixture {
     pub directory: tempfile::TempDir,
     pub malformed: Arc<AtomicBool>,
     pub reads: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<ReadRequest>>>,
     // Only operator_tui exercises this switch; other integration binaries share the fixture.
     #[allow(dead_code)]
     pub command_refusal: Arc<AtomicU16>,
@@ -26,6 +33,12 @@ pub fn subject() -> String {
 }
 
 impl Fixture {
+    // Mission tests verify each discovery/projection pair; UI suites keep their gates.
+    #[allow(dead_code)]
+    pub fn requests(&self) -> Vec<ReadRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+
     pub fn start() -> Self {
         Self::start_with_gate(Arc::new(AtomicBool::new(false)))
     }
@@ -53,6 +66,8 @@ impl Fixture {
         file.sync_all().unwrap();
         let malformed = Arc::new(AtomicBool::new(false));
         let reads = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let observed_requests = requests.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let command_refusal = Arc::new(AtomicU16::new(0));
         let command_failure = command_refusal.clone();
@@ -108,6 +123,17 @@ impl Fixture {
                         vec![session_id.as_str()]
                     }
                 );
+                // Record actual validated request subjects before any response gate.
+                // Client success separately requires the matching response acknowledgement.
+                let mut observations = observed_requests.lock().unwrap();
+                assert!(observations.len() < 1024, "fixture request bound exceeded");
+                observations.push(ReadRequest {
+                    path: request.split_whitespace().nth(1).unwrap().into(),
+                    expected_session: values("x-bullet-expected-session")
+                        .first()
+                        .map(|value| (*value).into()),
+                });
+                drop(observations);
                 count.fetch_add(1, Ordering::SeqCst);
                 while gate.load(Ordering::SeqCst) && !end.load(Ordering::SeqCst) {
                     std::thread::sleep(Duration::from_millis(5));
@@ -154,6 +180,7 @@ impl Fixture {
             directory,
             malformed,
             reads,
+            requests,
             command_refusal,
             stop,
             worker: Some(worker),
