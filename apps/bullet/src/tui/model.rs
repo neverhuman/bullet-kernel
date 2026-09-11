@@ -540,7 +540,10 @@ mod tests {
         let text = model.plain();
         assert!(!text.contains(&hex));
         assert!(text.contains("cmd_<redacted>"));
-        assert_eq!(redact_ledger_hex("unobserved'subject"), "unobserved'subject");
+        assert_eq!(
+            redact_ledger_hex("unobserved'subject"),
+            "unobserved'subject"
+        );
     }
 
     #[test]

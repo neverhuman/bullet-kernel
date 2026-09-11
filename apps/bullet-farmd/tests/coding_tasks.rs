@@ -398,8 +398,7 @@ async fn v2_http_then_real_runner_stub_retains_failure_and_refuses_a_second_spaw
         "real runner stub path must not name the simulator: {combined}"
     );
     assert_ne!(output.status.code(), Some(0));
-    let receipt =
-        ComponentCommandCompletionV1::new(&claim, Digest::of(&output.stderr)).unwrap();
+    let receipt = ComponentCommandCompletionV1::new(&claim, Digest::of(&output.stderr)).unwrap();
     ledger
         .settle_component_command_dispatch(
             &claim.claim_id,

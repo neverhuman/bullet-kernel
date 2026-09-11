@@ -277,7 +277,8 @@ mod tests {
     #[test]
     fn codex_argv_can_emit_a_patch_and_cursor_argv_is_not_plan_mode() {
         let adapter =
-            SignedInCliAdapter::new("codex".into(), "/usr/bin/true".into(), "gpt-5".into()).unwrap();
+            SignedInCliAdapter::new("codex".into(), "/usr/bin/true".into(), "gpt-5".into())
+                .unwrap();
         let argv = adapter.argv("implement");
         assert!(argv.starts_with(&["exec".into(), "--skip-git-repo-check".into()]));
         assert!(!argv.iter().any(|a| a == "read-only"));

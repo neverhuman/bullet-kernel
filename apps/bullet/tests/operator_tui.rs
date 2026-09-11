@@ -359,10 +359,7 @@ fn assert_no_sixty_four_hex(text: &str) {
     for c in text.chars() {
         if c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_ascii_lowercase()) {
             n += 1;
-            assert!(
-                n < 64,
-                "TUI paint leaked a 64-hex ledger id"
-            );
+            assert!(n < 64, "TUI paint leaked a 64-hex ledger id");
         } else {
             n = 0;
         }
