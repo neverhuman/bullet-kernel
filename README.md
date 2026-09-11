@@ -86,7 +86,132 @@ recovery in an explicit file. Missing lease inputs refuse with
 `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE`. Candidate admission is also required,
 and serving dispatch selects only `sim`; no subscription Runner is qualified.
 
-## Quick start
+## Using Bullet: a step-by-step tutorial
+
+This is the operator path end to end. Every command below was run on a real host; where
+something does not work yet, this section says so rather than leaving you to discover it.
+
+### What you need
+
+- **Linux (GNU) on ext4.** The ledger checks the filesystem magic and the directory mode, and
+  refuses anything else with a typed code rather than corrupting state.
+- **A data directory you own, mode `0700`**, outside any repository and not under `/tmp`.
+- **Node 22.23.2 and npm 10.9.8** — only if you want the web Portal. The pins are exact, not
+  floors; a newer Node is refused. If you use `nvm`, `nvm use 22.23.2` provides both.
+
+### 1. Start the operator console
+
+The console starts the ledger daemon (`bullet-farmd`) on loopback and, optionally, the Portal.
+
+```bash
+# Only needed if your default Node is not the pinned version:
+export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
+
+cd <family-root>/bullet-farm
+scripts/operator-console.sh --data-dir "$HOME/bullet-live" \
+    --bullet "$(command -v bullet)" --farmd "$(command -v bullet-farmd)"
+```
+
+Passing `--bullet` and `--farmd` uses binaries you already have and skips a rebuild. Omit them
+and the script builds from source instead.
+
+The console prints where it wrote a **one-time bootstrap token**. It never prints the token
+itself, and neither should you.
+
+### 2. Authenticate this client
+
+```bash
+bullet auth login --stdin < <bootstrap-token-file>
+bullet auth status
+```
+
+`--stdin` reads the token from a pipe so it never appears in your shell history or in `ps`.
+Credentials are saved to `$XDG_STATE_HOME/bullet/operator` (default `~/.local/state/bullet/operator`).
+
+If you are also using the Portal, pass its origin so the session is valid for both:
+
+```bash
+bullet auth login --farmd http://127.0.0.1:7420 --origin http://127.0.0.1:5173 --stdin < <file>
+```
+
+### 3. Open the terminal UI
+
+```bash
+bullet tui
+```
+
+**Keys** — the same list is always on the bottom bar, and `?` opens full help:
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+K` | Jump list — every surface by name |
+| `Tab` | Move focus between the list and the details pane |
+| `j` / `k` or arrows | Move the selection, or scroll details when focused |
+| `Enter` | Descend: mission → task → Attempt → detail |
+| `Esc` | Back; also closes the jump list or help |
+| `r` | Request one snapshot refresh now |
+| `J` | Toggle raw JSON in the details pane |
+| `?` | Help |
+| `Ctrl+C` | Detach this client. Durable work continues; it does not stop anything |
+
+**What the views show.** Mission Graph, Tasks, Session Supervisor, Merge Rail, Incidents and
+Audit, and Context Lineage each read a durable ledger subject. The jump list also names surfaces
+that have **no ledger subject yet**; selecting one is deliberately inert and says so, rather
+than showing an empty table that looks like "nothing is wrong".
+
+The view polls every two seconds. A status of `OBSERVED` means the snapshot is current;
+`CONNECTING`, `STALE` and `UNKNOWN` are distinct states and are never rendered as success.
+
+### 4. Open the web Portal
+
+With the console running, open <http://127.0.0.1:5173>, paste the same one-time bootstrap token
+into **Authenticate local session**, and you get the same ledger through a browser: Shift Brief,
+Control Tower, Fleet, Session Supervisor, Merge Rail, Quality Lab, Context Lineage and
+Incidents. Updates arrive over a live event stream rather than polling.
+
+There is exactly **one local operator identity**. It is minted on first bootstrap and reused;
+there are no user accounts, roles, or tenancy.
+
+### 5. Put something in it
+
+A brand-new ledger is empty, and an empty table is not very instructive. To seed one:
+
+```bash
+BULLET_DATA_DIR="$HOME/bullet-live" bullet demo
+```
+
+This writes one mission, two work packages, two attempts and two context capsules so every view
+has rows. **It is simulator-sourced**: it never creates a Candidate, and it is not evidence of
+anything. Treat it as sample data.
+
+### What works today, and what does not
+
+| | Status |
+| --- | --- |
+| Read the ledger from the terminal or the browser | **Works** |
+| Live updates, typed refusals, honest `UNKNOWN` | **Works** |
+| Authenticate, check, and revoke a session | **Works** |
+| Submit a durable coding command | **Accepted and journaled**, then settles `UNKNOWN` — no execution adapter is connected yet |
+| Approve, reject, retry, cancel, or edit from the UI | **Not available.** Neither surface performs these |
+| Talk to the Head | Messages are saved; the Head does not reply yet (`HEAD_RUNTIME_BINDING_REQUIRED`) |
+| Drive a real provider turn | Available through `bullet-runner` with dogfood admission, not yet from the UI |
+
+This is an observation surface with a submission path whose executor is not yet attached. That
+is stated here so the first thing you try is not the one thing that cannot finish.
+
+### Troubleshooting
+
+| What you see | What it means | Do this |
+| --- | --- | --- |
+| `FARMD_REQUEST_FAILED` | `bullet-farmd` is not running or not reachable at the saved address | Start the console (step 1), then `bullet auth status` |
+| `AUTH_REQUIRED` | No saved credentials for this client | Run step 2 |
+| `TUI_TERMINAL_REQUIRED: use --once` | stdin is not a terminal — you piped or redirected | Run `bullet tui` in a real terminal, or `bullet tui --once` for one plain-text snapshot |
+| `NODE_PIN` / `NPM_PIN` | Your Node or npm is not the exact pinned version | `nvm use 22.23.2`, or re-run with `--bullet`/`--farmd` if you only want the terminal UI |
+| `SQLite immediate state parent must be euid-owned exact 0700` | The data directory is group- or world-accessible, usually from a default `umask` | `chmod 700 <data-dir>` |
+| Colours look muddy or wrong | The UI emits 24-bit colour | Use a truecolor terminal, or set `NO_COLOR=1` for a plain monochrome render |
+| Everything is empty | The ledger genuinely has no rows | Seed it with `bullet demo` (step 5) |
+
+## Quick start (build and prove from source)
 
 ```bash
 just fast
