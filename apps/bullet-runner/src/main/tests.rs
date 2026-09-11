@@ -424,23 +424,35 @@ fn the_simulator_is_selected_only_when_it_is_named() {
     );
 
     selected.signed_in_executable = Some(root.path().join("codex"));
-    let adapter =
-        adapter_for(&selected.provider, &selected).expect("codex constructs the signed-in adapter");
-    assert_eq!(adapter.descriptor().provider, "codex");
+    let refusal = adapter_for(&selected.provider, &selected)
+        .err()
+        .expect("uncontained provider must refuse before launch");
+    assert!(
+        refusal.contains("SIGNED_IN_CONTAINMENT_UNAVAILABLE"),
+        "{refusal}"
+    );
 
     selected.provider = "cursor".into();
     selected.model = Some("composer-2".into());
     selected.signed_in_executable = Some(root.path().join("cursor-agent"));
-    let adapter = adapter_for(&selected.provider, &selected)
-        .expect("cursor constructs the signed-in adapter");
-    assert_eq!(adapter.descriptor().provider, "cursor");
+    let refusal = adapter_for(&selected.provider, &selected)
+        .err()
+        .expect("uncontained provider must refuse before launch");
+    assert!(
+        refusal.contains("SIGNED_IN_CONTAINMENT_UNAVAILABLE"),
+        "{refusal}"
+    );
 
     selected.provider = "agy".into();
     selected.model = Some("gemini-2.5".into());
     selected.signed_in_executable = Some(root.path().join("agy"));
-    let adapter =
-        adapter_for(&selected.provider, &selected).expect("agy constructs the signed-in adapter");
-    assert_eq!(adapter.descriptor().provider, "agy");
+    let refusal = adapter_for(&selected.provider, &selected)
+        .err()
+        .expect("uncontained provider must refuse before launch");
+    assert!(
+        refusal.contains("SIGNED_IN_CONTAINMENT_UNAVAILABLE"),
+        "{refusal}"
+    );
 }
 
 #[test]

@@ -450,13 +450,20 @@ run_partition_tests() {
     return 1
   fi
   prepare_junit_store "$profile" "$lane" || return 1
-  rm -f -- "$REPO_ROOT/target/nextest/$profile/junit.xml" \
-    "$REPO_ROOT/.ci-artifacts/junit/$lane.xml"
+  source "$REPO_ROOT/ops/ci/junit-retention.sh"
+  retain_junit_reports "$profile" "$lane" || return 1
   log "$lane tests via nextest profile=$profile selected=$selected"
   set +e
-  cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --profile "$profile" -E "$filter"
-  local code=$?
+  cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --profile "$profile" --run-ignored all -E "$filter"
+  local code=$? sanitation_code=0
   set -e
-  sanitize_junit "$profile" "$lane" || return 1
-  return "$code"
+  sanitize_junit "$profile" "$lane" || sanitation_code=$?
+  if [[ "$sanitation_code" -ne 0 ]]; then
+    printf '[ci] JUNIT_SANITATION_FAILED: lane=%s runner_exit=%s sanitation_exit=%s; raw report retained when present\n' \
+      "$lane" "$code" "$sanitation_code" >&2
+  fi
+  # Keep the primary test failure even if later diagnostic staging also fails.
+  # A successful runner still cannot make failed staging into a passing lane.
+  if [[ "$code" -ne 0 ]]; then return "$code"; fi
+  return "$sanitation_code"
 }

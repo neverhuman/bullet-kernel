@@ -1,9 +1,17 @@
 [package]
 name = "bullet"
+default-run = "bullet"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+
+[[bin]]
+name = "bulletfarm"
+path = "src/bin/bulletfarm.rs"
+# The shared source's unit tests execute once, in the existing bullet target.
+test = false
+bench = false
 
 [lints]
 workspace = true

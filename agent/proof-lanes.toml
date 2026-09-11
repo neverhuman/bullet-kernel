@@ -224,6 +224,19 @@ requires_network = false
 destructive = false
 
 [[lane]]
+name = "operator-tui"
+command = "bash scripts/ci-local.sh operator-tui"
+purpose = "scope=operator-local; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; Linux xbabe2 only with CI/GITHUB_ACTIONS absent; frozen standalone Tuiwright build and complete component suite, explicit tool/Bullet/source hashes and fresh external output, no installed/provider/media qualification"
+command_id = "lane.operator-tui"
+kind = "validation"
+cost = 50
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK", "HLT-016-SUPPLY-CHAIN-DRIFT"]
+required_artifacts = []
+timeout_seconds = 7200
+requires_network = false
+destructive = false
+
+[[lane]]
 name = "gates"
 command = "bash scripts/ci-local.sh gates"
 purpose = "scope=alias; scheduled=false; hosted_required=false; jeryu=not-declared; release_authority=false; release_state=BLOCKED; compatibility alias for required with the identical exit status"

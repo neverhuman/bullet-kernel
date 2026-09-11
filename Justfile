@@ -84,3 +84,11 @@ history-secrets:
 
 portable-refusal:
     bash scripts/ci-local.sh portable-refusal
+
+# Local Linux xbabe2 only, with CI/GITHUB_ACTIONS absent. Inputs:
+# BULLET_TUIWRIGHT_{CARGO,RUSTC,BULLET}_{BIN,SHA256},
+# BULLET_TUIWRIGHT_SOURCE_SHA256 (hash of sorted suite-file sha256sum lines),
+# BULLET_TUIWRIGHT_OUTPUT (new absolute directory below a private 0700 parent).
+# The lane builds --frozen and validates all fresh external artifacts itself.
+operator-tui:
+    bash scripts/ci-local.sh operator-tui

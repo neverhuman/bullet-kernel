@@ -134,10 +134,6 @@ impl AuthState {
             .map_err(store_error)
     }
 
-    pub(crate) fn authorize_read(&self, headers: &HeaderMap) -> Result<(), ApiError> {
-        self.authorize_session(headers).map(|_| ())
-    }
-
     pub(crate) fn authorize_mutation(&self, headers: &HeaderMap) -> Result<(), ApiError> {
         self.require_origin(headers)?;
         let session = self.authorize_session(headers)?;

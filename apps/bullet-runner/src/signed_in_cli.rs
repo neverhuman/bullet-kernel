@@ -1,30 +1,19 @@
-//! Drive one signed-in native CLI without writing enrollment files.
-//!
-//! Claude's enrolled compose stays in `DogfoodClaudeAdapter`. This adapter
-//! execs the operator-supplied Codex, Cursor, or Antigravity binary against
-//! the Runner's clone. It never constructs `SimAdapter`.
+//! Explicit refusal until a signed-in coding containment profile is admitted.
+//! The read-only Claude compose has a separate admission consumer.
 
 use bullet_domain::Observation;
 use bullet_harness_core::{
-    unsupported, Ack, AgentEvent, AgentEventKind, AuthChallenge, CapabilityMatrix, CompactRequest,
-    ContextTransition, EventId, HarnessAdapter, HarnessDescriptor, HarnessError,
-    HarnessEventStream, HarnessResult, InvocationId, ModelSnapshot, PatchProposal,
-    PermissionDecision, PlanDecision, ProbeResult, ProfileRef, PromotionStage, QuotaObservation,
-    ResumeSession, SessionCheckpoint, SessionHandle, StartSession, SteeringMessage, Turn,
-    TurnHandle,
+    unsupported, Ack, AuthChallenge, CapabilityMatrix, CompactRequest, ContextTransition,
+    HarnessAdapter, HarnessDescriptor, HarnessError, HarnessEventStream, HarnessResult,
+    ModelSnapshot, PermissionDecision, PlanDecision, ProbeResult, ProfileRef, PromotionStage,
+    QuotaObservation, ResumeSession, SessionCheckpoint, SessionHandle, StartSession,
+    SteeringMessage, Turn, TurnHandle,
 };
-use chrono::Utc;
-use serde_json::json;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::Mutex;
 
 pub struct SignedInCliAdapter {
     provider: String,
     executable: PathBuf,
-    model: String,
-    bound: Mutex<Option<PathBuf>>,
-    events: Mutex<Vec<AgentEvent>>,
 }
 
 impl SignedInCliAdapter {
@@ -39,42 +28,7 @@ impl SignedInCliAdapter {
             "codex" | "cursor" | "agy" | "antigravity" => {}
             other => return Err(format!("signed-in adapter refuses provider {other}")),
         }
-        Ok(Self {
-            provider: if provider == "antigravity" {
-                "agy".into()
-            } else {
-                provider
-            },
-            executable,
-            model,
-            bound: Mutex::new(None),
-            events: Mutex::new(Vec::new()),
-        })
-    }
-
-    fn argv(&self, prompt: &str) -> Vec<String> {
-        match self.provider.as_str() {
-            "codex" => vec![
-                "exec".into(),
-                "--skip-git-repo-check".into(),
-                "-m".into(),
-                self.model.clone(),
-                prompt.into(),
-            ],
-            "cursor" => vec![
-                "-p".into(),
-                "--output-format".into(),
-                "stream-json".into(),
-                "--trust".into(),
-                prompt.into(),
-            ],
-            _ => vec![
-                "--json".into(),
-                "--model".into(),
-                self.model.clone(),
-                prompt.into(),
-            ],
-        }
+        Err("SIGNED_IN_CONTAINMENT_UNAVAILABLE: admitted process, filesystem, credential and network containment is required".into())
     }
 }
 
@@ -114,22 +68,9 @@ impl HarnessAdapter for SignedInCliAdapter {
         Err(unsupported(&self.provider, "begin_login"))
     }
 
-    async fn start(&self, request: StartSession) -> HarnessResult<SessionHandle> {
-        if !request.workdir.is_dir() {
-            return Err(HarnessError::AdmissionRefused {
-                reason: format!("SIGNED_IN_WORKDIR_ABSENT: {}", request.workdir.display()),
-            });
-        }
-        *self
-            .bound
-            .lock()
-            .map_err(|_| HarnessError::AdmissionRefused {
-                reason: "SIGNED_IN_SESSION_POISONED: start".into(),
-            })? = Some(request.workdir.clone());
-        Ok(SessionHandle {
-            session_id: request.session_id,
-            provider: self.provider.clone(),
-            native_session_id: None,
+    async fn start(&self, _request: StartSession) -> HarnessResult<SessionHandle> {
+        Err(HarnessError::AdmissionRefused {
+            reason: "SIGNED_IN_CONTAINMENT_UNAVAILABLE".into(),
         })
     }
 
@@ -137,74 +78,9 @@ impl HarnessAdapter for SignedInCliAdapter {
         Err(unsupported(&self.provider, "resume"))
     }
 
-    async fn send(&self, session: &SessionHandle, turn: Turn) -> HarnessResult<TurnHandle> {
-        let workdir = self
-            .bound
-            .lock()
-            .map_err(|_| HarnessError::AdmissionRefused {
-                reason: "SIGNED_IN_SESSION_POISONED: send".into(),
-            })?
-            .clone()
-            .ok_or_else(|| HarnessError::AdmissionRefused {
-                reason: "SIGNED_IN_SESSION_UNBOUND: send before start".into(),
-            })?;
-        let executable = self.executable.clone();
-        let args = self.argv(&turn.prompt);
-        let output = tokio::task::spawn_blocking(move || {
-            Command::new(&executable)
-                .args(&args)
-                .current_dir(&workdir)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-        })
-        .await
-        .map_err(|error| HarnessError::AdmissionRefused {
-            reason: format!("SIGNED_IN_DISPATCH_LOST: {error}"),
-        })?
-        .map_err(|error| HarnessError::AdmissionRefused {
-            reason: format!("SIGNED_IN_SPAWN_FAILED: {error}"),
-        })?;
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let invocation = InvocationId::new(session.session_id.as_str());
-        let mut payload = json!({ "exit": output.status.code() });
-        match PatchProposal::extract_from_text(&stdout) {
-            Ok(proposal) => {
-                if let Ok(value) = proposal.authoritative_value() {
-                    payload["proposal"] = value;
-                }
-            }
-            Err(_) if self.provider == "cursor" => {
-                return Err(HarnessError::AdmissionRefused {
-                    reason: "CURSOR_ACP_EVENTS_EMPTY: stream-json without a PatchProposal is not a structured turn".into(),
-                });
-            }
-            Err(_) => {}
-        }
-        *self
-            .events
-            .lock()
-            .map_err(|_| HarnessError::AdmissionRefused {
-                reason: "SIGNED_IN_SESSION_POISONED: events".into(),
-            })? = vec![AgentEvent {
-            event_id: EventId::new(session.session_id.as_str()),
-            session_id: session.session_id.clone(),
-            invocation_id: Some(invocation.clone()),
-            native_session_id: None,
-            provider: self.provider.clone(),
-            model: Some(self.model.clone()),
-            kind: AgentEventKind::TurnCompleted,
-            timestamp: Utc::now(),
-            sequence: 0,
-            causation_id: None,
-            payload,
-            raw_artifact: None,
-        }];
-        Ok(TurnHandle {
-            invocation_id: InvocationId::new(session.session_id.as_str()),
-            exit_code: output.status.code(),
-            timed_out: false,
+    async fn send(&self, _session: &SessionHandle, _turn: Turn) -> HarnessResult<TurnHandle> {
+        Err(HarnessError::AdmissionRefused {
+            reason: "SIGNED_IN_CONTAINMENT_UNAVAILABLE".into(),
         })
     }
 
@@ -245,13 +121,7 @@ impl HarnessAdapter for SignedInCliAdapter {
     }
 
     fn events(&self, _session: &SessionHandle) -> HarnessEventStream {
-        let events = self
-            .events
-            .lock()
-            .ok()
-            .map(|guard| guard.clone())
-            .unwrap_or_default();
-        Box::pin(futures::stream::iter(events))
+        Box::pin(futures::stream::empty())
     }
 }
 
@@ -259,129 +129,55 @@ impl HarnessAdapter for SignedInCliAdapter {
 mod tests {
     use super::*;
     use bullet_harness_core::AgentSessionId;
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::time::Duration;
-
-    fn proposal_json() -> String {
-        format!(
-            r#"{{"schema_version":1,"proposal_id":"cnt_{a}","producing_attempt_id":"atm_{b}","base_checkpoint_id":"ckp_{c}","base_checkpoint_digest":"{d}","operations":[{{"path":"PONG.txt","preimage":{{"kind":"absent"}},"mutation":{{"kind":"write","content_utf8":"PONG\n"}}}}],"gate_ids":["gat_{g}"]}}"#,
-            a = "1".repeat(64),
-            b = "2".repeat(64),
-            c = "3".repeat(64),
-            d = "4".repeat(64),
-            g = "8".repeat(64),
-        )
-    }
-
-    #[test]
-    fn codex_argv_can_emit_a_patch_and_cursor_argv_is_not_plan_mode() {
-        let adapter =
-            SignedInCliAdapter::new("codex".into(), "/usr/bin/true".into(), "gpt-5".into())
-                .unwrap();
-        let argv = adapter.argv("implement");
-        assert!(argv.starts_with(&["exec".into(), "--skip-git-repo-check".into()]));
-        assert!(!argv.iter().any(|a| a == "read-only"));
-        assert!(!argv.contains(&"--sandbox".into()));
-        let cursor =
-            SignedInCliAdapter::new("cursor".into(), "/usr/bin/true".into(), "composer-2".into())
-                .unwrap();
-        let argv = cursor.argv("implement");
-        assert!(argv.contains(&"stream-json".into()));
-        assert!(!argv.iter().any(|a| a == "plan" || a == "text"));
-    }
 
     #[tokio::test]
-    async fn stub_stdout_proposal_is_accepted_and_cursor_garbage_is_typed() {
-        let dir = tempfile::tempdir().unwrap();
-        let stub = dir.path().join("stub");
-        let script = format!("#!/bin/sh\nprintf '%s\\n' '{}'\nexit 1\n", proposal_json());
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o700)
-            .open(&stub)
-            .unwrap()
-            .write_all(script.as_bytes())
-            .unwrap();
-        let adapter =
-            SignedInCliAdapter::new("codex".into(), stub.clone(), "gpt-5".into()).unwrap();
-        adapter
-            .start(StartSession {
-                session_id: AgentSessionId::new("signed-in-stub"),
-                workdir: dir.path().to_path_buf(),
-                artifact_dir: dir.path().to_path_buf(),
-                model: None,
-                structured_schema: None,
-                max_budget_usd: None,
-                wall_timeout: Duration::from_secs(5),
-            })
-            .await
-            .unwrap();
-        let handle = adapter
-            .send(
-                &SessionHandle {
-                    session_id: AgentSessionId::new("signed-in-stub"),
-                    provider: "codex".into(),
-                    native_session_id: None,
-                },
-                Turn {
-                    prompt: "implement".into(),
-                },
+    async fn no_direct_start_or_send_can_bypass_containment_refusal() {
+        for provider in ["codex", "cursor", "agy", "antigravity"] {
+            assert!(SignedInCliAdapter::new(
+                provider.into(),
+                "/absent/provider".into(),
+                "fixture".into()
             )
-            .await
-            .unwrap();
-        assert_eq!(handle.exit_code, Some(1));
-        let events: Vec<_> = futures::StreamExt::collect(adapter.events(&SessionHandle {
-            session_id: AgentSessionId::new("signed-in-stub"),
+            .err()
+            .unwrap()
+            .contains("SIGNED_IN_CONTAINMENT_UNAVAILABLE"));
+        }
+        let adapter = SignedInCliAdapter {
             provider: "codex".into(),
-            native_session_id: None,
-        }))
-        .await;
-        assert!(events[0].payload.get("proposal").is_some());
-        assert!(!events[0].payload.to_string().contains("sim"));
-
-        let garbage = dir.path().join("garbage");
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o700)
-            .open(&garbage)
-            .unwrap()
-            .write_all(b"#!/bin/sh\necho no-proposal\n")
-            .unwrap();
-        let cursor =
-            SignedInCliAdapter::new("cursor".into(), garbage, "composer-2".into()).unwrap();
-        cursor
+            executable: "/absent/provider".into(),
+        };
+        let session_id = AgentSessionId::new("unadmitted");
+        let error = adapter
             .start(StartSession {
-                session_id: AgentSessionId::new("signed-in-cursor-empty"),
-                workdir: dir.path().to_path_buf(),
-                artifact_dir: dir.path().to_path_buf(),
+                session_id: session_id.clone(),
+                workdir: "/absent/work".into(),
+                artifact_dir: "/absent/artifacts".into(),
                 model: None,
                 structured_schema: None,
                 max_budget_usd: None,
-                wall_timeout: Duration::from_secs(5),
+                wall_timeout: std::time::Duration::from_secs(1),
             })
-            .await
-            .unwrap();
-        let error = cursor
-            .send(
-                &SessionHandle {
-                    session_id: AgentSessionId::new("signed-in-cursor-empty"),
-                    provider: "cursor".into(),
-                    native_session_id: None,
-                },
-                Turn {
-                    prompt: "implement".into(),
-                },
-            )
             .await
             .unwrap_err();
-        assert!(
-            error.to_string().contains("CURSOR_ACP_EVENTS_EMPTY"),
-            "{error}"
-        );
+        assert!(error
+            .to_string()
+            .contains("SIGNED_IN_CONTAINMENT_UNAVAILABLE"));
+        let session = SessionHandle {
+            session_id,
+            provider: "codex".into(),
+            native_session_id: None,
+        };
+        assert!(adapter
+            .send(
+                &session,
+                Turn {
+                    prompt: "unadmitted".into()
+                }
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNED_IN_CONTAINMENT_UNAVAILABLE"));
+        assert_eq!(futures::StreamExt::count(adapter.events(&session)).await, 0);
     }
 }

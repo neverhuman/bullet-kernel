@@ -310,9 +310,10 @@ run_lane() {
     audit)    bash ops/ci/audit.sh ;;
     egress)   bash ops/ci/egress.sh ;;
     toolchain-msrv) bash ops/ci/toolchain-msrv.sh ;;
+    operator-tui) bash ops/ci/operator-tui.sh ;;
     gates|all) bash ops/ci/required.sh ;;
     *)
-      echo "usage: $0 {required|fast|lint|contract|security|docs|family|faults|preflight|links|coverage|history-secrets|portable-refusal|audit|egress|nightly|toolchain-msrv|all}" >&2
+      echo "usage: $0 {required|fast|lint|contract|security|docs|family|faults|preflight|links|coverage|history-secrets|portable-refusal|audit|egress|nightly|toolchain-msrv|operator-tui|all}" >&2
       return 2
       ;;
   esac

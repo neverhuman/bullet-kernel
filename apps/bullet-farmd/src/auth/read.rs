@@ -4,7 +4,7 @@ use super::AuthState;
 use crate::api::SharedState;
 use crate::errors::ApiError;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, Method};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use bullet_domain::Digest;
@@ -16,14 +16,38 @@ pub(crate) async fn require_session(
 ) -> Result<Response, ApiError> {
     let operator_read = request.uri().path().starts_with("/api/v1/")
         && matches!(*request.method(), Method::GET | Method::HEAD);
-    if operator_read {
-        state.auth.lock().await.authorize_read(request.headers())?;
-    }
+    let session = if operator_read {
+        let session = state
+            .auth
+            .lock()
+            .await
+            .authorize_session(request.headers())?;
+        if super::single_header(request.headers(), "x-bullet-expected-session")?
+            .is_some_and(|expected| expected != session.session_id)
+        {
+            return Err(ApiError::protocol(
+                StatusCode::FORBIDDEN,
+                "SESSION_CHANGED",
+                "The presented session differs from the session selected by this client.",
+                "Discard the old view and authenticate the current operator before retrying.",
+            ));
+        }
+        Some(session.session_id)
+    } else {
+        None
+    };
     let mut response = next.run(request).await;
     if operator_read {
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    if let Some(session) = session {
+        response.headers_mut().insert(
+            "x-bullet-session-id",
+            HeaderValue::from_str(&session)
+                .map_err(|_| ApiError::Internal("stored session identity is invalid".into()))?,
+        );
     }
     Ok(response)
 }

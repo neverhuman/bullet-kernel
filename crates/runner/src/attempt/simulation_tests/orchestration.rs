@@ -19,6 +19,59 @@ mod fixtures;
 use fixtures::*;
 
 #[tokio::test]
+async fn failed_native_process_preserves_proposal_without_apply_or_success() {
+    for (exit, timed_out) in [(Some(1), false), (None, false), (Some(0), true)] {
+        let (_temp, ledger, client, grant, config, mut workspace, mut info, journal) =
+            cloned_attempt("failed-native-with-proposal").await;
+        let adapter = Arc::new(ScriptedSim::new());
+        adapter.native_outcome(exit, timed_out);
+        adapter.override_proposal(
+            0,
+            proposal(serde_json::json!([
+                {"path":"PONG.txt", "op":"create", "contents":"PONG\n"}
+            ])),
+        );
+        let error = run_cloned_attempt(
+            client,
+            adapter.clone(),
+            journal.clone(),
+            Arc::new(MonotonicClock::new()),
+            &grant,
+            &config,
+            &mut workspace,
+            &mut info,
+        )
+        .await
+        .expect_err("failed native process cannot produce a successful Attempt");
+        assert_eq!(error.reason_code(), "NO_PROPOSAL", "{error}");
+        assert!(!journal.stages().contains(&"patch_applied".into()));
+        assert!(!journal.stages().contains(&"candidate_prepared".into()));
+        assert!(!info.repo_dir.join("PONG.txt").exists());
+        let artifacts = std::fs::read_dir(&info.runtime_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("failed-turn-")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(artifacts.len(), 1);
+        let artifact: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&artifacts[0]).unwrap()).unwrap();
+        assert_eq!(artifact["exit_code"], serde_json::json!(exit));
+        assert_eq!(artifact["timed_out"], timed_out);
+        assert_eq!(
+            artifact["close"][1]["proposal"]["operations"][0]["path"],
+            "PONG.txt"
+        );
+        assert!(adapter.was_terminated());
+        assert_failed_and_requeued(&ledger, &grant.attempt.id, journal.as_ref());
+    }
+}
+
+#[tokio::test]
 async fn provider_start_failure_aborts_heartbeat_and_releases_lease() {
     let (_temp, ledger, client, grant, config, mut workspace, mut info, journal) =
         cloned_attempt("provider-start-failure").await;

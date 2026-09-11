@@ -13,22 +13,22 @@ test_root="$(mktemp -d)"
 cleanup() { rm -rf -- "$test_root"; }
 trap cleanup EXIT
 
-readonly registry_digest=35183b08cb636c370b777f01d1782e6ad442711d165735d8723d011cf073bcac
+readonly registry_digest=876404ed0f8cb86f32846a079ad09ebb7c5184e84dffeb08a3742b1a41991bd4
 readonly policy_digest=3751585d43e598503679f0efa4a516a14698e2eb62778d0e8ec2922409c7ba68
 readonly security_digest=313750deb16b9531b9a758795c2f7acdbbe6c168ad12bf0d75da1424c79b09be
-readonly dispatcher_digest=bffb9db7ae5db2e00b2d3f86408061d8cddeb624ba0f6136749949626ea69182
-readonly doctor_digest=8a780cb8fe41231d752be17b3b1367eb1ef98081d0fb45609c33aff87ad708fa
+readonly dispatcher_digest=e80ddb590b0524216ad1859a25f4ec6d2009753a6d1ac91de6039deee73d214c
+readonly doctor_digest=adb67314f91539da608d43192e540ec3054328ff2a63ee7617ee0761b7a3742b
 
 declare -ar lane_names=(
   required fast lint contract security docs family faults preflight links coverage
-  history-secrets portable-refusal nightly audit egress toolchain-msrv gates all
+  history-secrets portable-refusal nightly audit egress toolchain-msrv operator-tui gates all
 )
 declare -ar lane_scripts=(
   ops/ci/required.sh ops/ci/fast.sh ops/ci/lint.sh ops/ci/contract.sh
   ops/ci/security.sh ops/ci/docs.sh ops/ci/family.sh ops/ci/faults.sh ops/ci/preflight.sh
   ops/ci/links.sh ops/ci/coverage.sh ops/ci/history-secrets.sh
   ops/ci/portable-refusal.sh ops/ci/nightly.sh ops/ci/audit.sh ops/ci/egress.sh
-  ops/ci/toolchain-msrv.sh ops/ci/required.sh ops/ci/required.sh
+  ops/ci/toolchain-msrv.sh ops/ci/operator-tui.sh ops/ci/required.sh ops/ci/required.sh
 )
 declare -ar lane_keys=(
   name command purpose command_id kind cost rules_covered required_artifacts
@@ -292,4 +292,7 @@ rg -q 'hostile.yml' "$test_root/zizmor-scope.out" \
 insert_before_once scripts/ci-local.sh '    fast)     bash ops/ci/fast.sh ;;' '    fast)     true ;;' "$test_root/dispatcher-shadow.sh"
 expect_failure dispatcher-shadow validate_dispatcher "$test_root/dispatcher-shadow.sh"
 
-log "policy metadata passed: exact-byte 19-lane/security/dispatcher subjects; hostile bypasses rejected"
+log "policy metadata passed: exact-byte 20-lane/security/dispatcher subjects; hostile bypasses rejected"
+
+# Local Tuiwright guard/route checks run no qualified terminal suite in CI.
+bash ops/ci/operator-tui-test.sh

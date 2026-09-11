@@ -66,7 +66,7 @@ expect_fixture_refusal() {
 assert_nextest_store_contract() {
   local source="$1"
   rg -Fqx '  source_path="$REPO_ROOT/target/nextest/$profile/junit.xml"' "$source" \
-    && rg -Fq '  rm -f -- "$REPO_ROOT/target/nextest/$profile/junit.xml"' "$source" \
+    && rg -Fqx '  retain_junit_reports "$profile" "$lane" || return 1' "$source" \
     && [[ "$(rg -c '^[[:space:]]*source_path=' "$source")" -eq 1 ]] \
     && ! rg -q 'cargo_target_root' "$source"
 }
@@ -302,4 +302,5 @@ if bash ops/ci/sanitize-junit.sh "$test_root/doctype.xml" "$test_root/rejected.x
   exit 1
 fi
 
-log "JUnit structural sanitizer and secret canary passed"
+bash ops/ci/junit-retention-test.sh
+log "JUnit structural sanitizer, secret canary and predecessor retention passed"

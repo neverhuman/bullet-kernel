@@ -204,7 +204,7 @@ END {
   exit 1
 fi
 
-sync -f "$temporary"
+sync -- "$temporary"
 mv -fT -- "$temporary" "$destination"
-sync -f "$destination_dir"
+sync -- "$destination_dir"
 trap - EXIT

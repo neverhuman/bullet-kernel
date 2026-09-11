@@ -210,6 +210,16 @@ async fn empty_authenticated_sse_opens_without_waiting_for_an_event_or_keepalive
         start(bullet_farmd::api::router_with_bootstrap(&db, BOOTSTRAP, ORIGIN.into()).unwrap())
             .await;
     let cookie = bootstrap(addr).await;
+    let session = request(
+        addr,
+        "GET",
+        "/api/v1/auth/session",
+        &[("Cookie", &cookie)],
+        "",
+    )
+    .await;
+    assert_eq!(status(&session), 200);
+    let session: Value = serde_json::from_str(session.split_once("\r\n\r\n").unwrap().1).unwrap();
     let mut stream = open(
         addr,
         "GET",
@@ -228,9 +238,21 @@ async fn empty_authenticated_sse_opens_without_waiting_for_an_event_or_keepalive
                 break;
             }
         }
-        assert_eq!(status(&received), 200);
-        assert!(!received.contains("data:"));
-        assert!(!received.contains("id:"));
+        let (headers, body) = received.split_once("\r\n\r\n").unwrap();
+        assert_eq!(status(headers), 200);
+        assert_eq!(
+            header(headers, "x-bullet-session-id"),
+            Some(
+                session["session_id"]
+                    .as_str()
+                    .expect("authenticated session id")
+            )
+        );
+        assert_eq!(header(headers, "content-type"), Some("text/event-stream"));
+        assert_eq!(header(headers, "cache-control"), Some("no-store"));
+        // HTTP acknowledgement headers are not SSE event fields.
+        assert!(!body.contains("data:"));
+        assert!(!body.contains("id:"));
     })
     .await
     .expect("empty SSE must flush before the client's header timeout");

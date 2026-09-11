@@ -1,5 +1,7 @@
 //! Bounded provider/apply/gate repair loop.
 
+mod failure;
+
 use super::workspace::WorkspaceSession;
 use super::{check_freeze, AttemptConfig};
 use crate::capsule::Capsule;
@@ -9,7 +11,9 @@ use crate::gitd::{WorkspaceGenerationGuard, WorkspaceInfo};
 use crate::heartbeat::HeartbeatHandle;
 use crate::journal::JournalSink;
 use crate::scope;
-use bullet_harness_core::{AgentEventKind, HarnessAdapter, PatchProposal, SessionHandle, Turn};
+use bullet_harness_core::{
+    AgentEventKind, HarnessAdapter, PatchProposal, SessionHandle, Turn, TurnHandle,
+};
 use futures::StreamExt;
 use serde_json::Value;
 
@@ -46,7 +50,7 @@ pub(super) async fn session_loop(
                 turn.invocation_id, turn.exit_code
             ),
         );
-        let proposal = latest_proposal(adapter, session).await?;
+        let proposal = latest_proposal(adapter, session, &turn, &ws.runtime_dir).await?;
         if let Some(refusal) = pre_apply_refusal(&capsule, &proposal) {
             journal.record(refusal.stage, &refusal.detail);
             spend_repair_round(&mut rounds, config)?;
@@ -172,22 +176,40 @@ pub(super) fn pre_apply_refusal(capsule: &Capsule, proposal: &PatchProposal) -> 
 async fn latest_proposal(
     adapter: &dyn HarnessAdapter,
     session: &SessionHandle,
+    turn: &TurnHandle,
+    runtime: &std::path::Path,
 ) -> Result<PatchProposal, RunnerError> {
-    let events: Vec<_> = adapter.events(session).collect().await;
+    let events: Vec<_> = adapter.events(session).take(4097).collect().await;
+    if events.len() > 4096 {
+        return Err(RunnerError::NoProposal(
+            "provider event limit exceeded".into(),
+        ));
+    }
     let mut last: Option<(AgentEventKind, Value)> = None;
     for event in events {
-        if matches!(
-            event.kind,
-            AgentEventKind::TurnCompleted | AgentEventKind::TurnFailed
-        ) {
+        if event.session_id == session.session_id
+            && event.invocation_id.as_ref() == Some(&turn.invocation_id)
+            && matches!(
+                event.kind,
+                AgentEventKind::TurnCompleted | AgentEventKind::TurnFailed
+            )
+        {
             last = Some((event.kind, event.payload));
         }
+    }
+    if turn.exit_code != Some(0) || turn.timed_out {
+        return Err(failure::preserve(runtime, session, turn, last.as_ref())?);
     }
     let Some((kind, payload)) = last else {
         return Err(RunnerError::NoProposal("no turn close envelope".into()));
     };
     if kind == AgentEventKind::TurnFailed {
-        return Err(RunnerError::NoProposal(format!("turn failed: {payload}")));
+        return Err(failure::preserve(
+            runtime,
+            session,
+            turn,
+            Some(&(kind, payload)),
+        )?);
     }
     let value = payload.get("proposal").cloned().unwrap_or(Value::Null);
     if value.is_null() {

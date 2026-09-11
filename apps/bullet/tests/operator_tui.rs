@@ -214,10 +214,9 @@ fn actual_tui_navigates_refuses_bad_refresh_and_detaches_without_mutation() {
     let output = String::from_utf8_lossy(&console.output);
     assert!(output.contains("DETACHED: durable work continues. Reconnect: bullet tui"));
     assert!(
-        output.contains("--subject 'mis_<redacted>'"),
-        "stale refresh must preserve the selected kind without a 64-hex id"
+        output.contains(&format!("--subject '{}'", fixture::subject())),
+        "stale refresh must preserve the exact selected subject"
     );
-    assert_no_sixty_four_hex(&output);
     assert!(!output.contains("ses_"));
     assert!(!output.contains("csrf_"));
     assert!(fixture.reads.load(Ordering::SeqCst) >= 2);
@@ -275,9 +274,7 @@ fn six_tuis_paint_before_http_and_share_credentials_without_coupled_detach() {
     for (console, _) in &consoles {
         let output = String::from_utf8_lossy(&console.output);
         assert!(output.contains("DETACHED: durable work continues."));
-        assert!(output.contains("--subject 'mis_<redacted>'"));
-        assert_no_sixty_four_hex(&output);
-        assert!(!output.contains(&subject));
+        assert!(output.contains(&format!("--subject '{}'", fixture::subject())));
         assert!(!output.contains("ses_"));
         assert!(!output.contains("csrf_"));
     }
@@ -301,7 +298,6 @@ fn connecting_detach_does_not_wait_for_http_and_preserves_quoted_reconnect_subje
     console.detach();
     let output = String::from_utf8_lossy(&console.output);
     assert!(output.contains("--subject 'unobserved'\\''subject'"));
-    assert_no_sixty_four_hex(&output);
     assert!(!output.contains("RECONNECT_SUBJECT_ABSENT"));
     assert!(!output.contains("Synthetic PTY mission"));
 }
@@ -343,25 +339,64 @@ fn connecting_status_chrome_and_palette_unknown_surfaces_stay_honest() {
     console.until("Synthetic PTY mission");
     console.send(b"J");
     console.until("raw JSON");
-    assert_no_sixty_four_hex(&console.parser.screen().contents());
+    assert!(console
+        .parser
+        .screen()
+        .rows(55, 64)
+        .collect::<String>()
+        .contains(&fixture::subject()));
     console.send(b"?");
     console.until("STOP_UNIMPLEMENTED");
     console.detach();
     let output = String::from_utf8_lossy(&console.output);
     assert!(output.contains("DETACHED: durable work continues."));
-    assert_no_sixty_four_hex(&output);
     assert!(!output.contains("ses_"));
     assert!(!output.contains("csrf_"));
 }
 
-fn assert_no_sixty_four_hex(text: &str) {
-    let mut n = 0;
-    for c in text.chars() {
-        if c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_ascii_lowercase()) {
-            n += 1;
-            assert!(n < 64, "TUI paint leaked a 64-hex ledger id");
-        } else {
-            n = 0;
-        }
-    }
+#[test]
+fn submissions_keep_their_own_identity_and_never_become_execution_rows() {
+    let fixture = fixture::Fixture::start();
+    let subject = format!("cmd_{}", "2".repeat(64));
+    let (mut console, _) = Console::start(fixture.directory.path(), Some(&subject));
+    console.until("Submissions");
+    console.until("submissions snapshot 9");
+    console.until("run_coding submission");
+    console.send(b"J");
+    console.until("raw JSON");
+    let detail = console.parser.screen().rows(55, 64).collect::<String>();
+    assert!(detail.contains(&subject), "{detail}");
+    assert!(detail.contains(&"3".repeat(64)), "{detail}");
+    console.send(b"\x0b");
+    console.until("Navigate");
+    console.send(b"j\r");
+    console.until("┌Tasks");
+    assert!(!console.parser.screen().contents().contains("run_coding"));
+    console.send(b"\x0b");
+    console.until("Navigate");
+    console.send(b"jj\r");
+    console.until("Session Supervisor");
+    assert!(!console.parser.screen().contents().contains("run_coding"));
+    console.detach();
+}
+
+#[test]
+fn reconnect_submission_survives_unavailable_command_snapshot() {
+    let fixture = fixture::Fixture::start();
+    fixture.command_refusal.store(500, Ordering::SeqCst);
+    let subject = format!("cmd_{}", "2".repeat(64));
+    let (mut detached, _) = Console::start(fixture.directory.path(), Some(&subject));
+    detached.until("Synthetic PTY mission");
+    detached.detach();
+    let output = String::from_utf8_lossy(&detached.output);
+    assert!(output.contains(&format!("--subject '{subject}'")));
+    assert!(!output.contains("RECONNECT_SUBJECT_ABSENT"));
+    let (mut recovered, _) = Console::start(fixture.directory.path(), Some(&subject));
+    recovered.until("Synthetic PTY mission");
+    fixture.command_refusal.store(0, Ordering::SeqCst);
+    recovered.send(b"r");
+    recovered.until("run_coding submission");
+    recovered.until("submissions snapshot 9");
+    recovered.detach();
+    assert!(String::from_utf8_lossy(&recovered.output).contains(&format!("--subject '{subject}'")));
 }

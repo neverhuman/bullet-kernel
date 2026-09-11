@@ -23,6 +23,7 @@ pub(super) struct ScriptedSim {
     terminate_failure: Mutex<Option<String>>,
     terminate_acknowledged: AtomicBool,
     terminated: AtomicBool,
+    native_outcome: Mutex<Option<(Option<i32>, bool)>>,
 }
 
 impl ScriptedSim {
@@ -36,6 +37,7 @@ impl ScriptedSim {
             terminate_failure: Mutex::new(None),
             terminate_acknowledged: AtomicBool::new(true),
             terminated: AtomicBool::new(false),
+            native_outcome: Mutex::new(None),
         }
     }
 
@@ -56,6 +58,10 @@ impl ScriptedSim {
 
     pub(super) fn fail_start(&self, reason: &str) {
         *self.start_failure.lock().expect("start failure") = Some(reason.to_string());
+    }
+
+    pub(super) fn native_outcome(&self, exit: Option<i32>, timed_out: bool) {
+        *self.native_outcome.lock().unwrap() = Some((exit, timed_out));
     }
 
     pub(super) fn fail_terminate(&self, reason: &str) {
@@ -116,7 +122,12 @@ impl HarnessAdapter for ScriptedSim {
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
         }
-        self.inner.send(session, turn).await
+        let mut handle = self.inner.send(session, turn).await?;
+        if let Some((exit, timed_out)) = *self.native_outcome.lock().unwrap() {
+            handle.exit_code = exit;
+            handle.timed_out = timed_out;
+        }
+        Ok(handle)
     }
 
     async fn steer(&self, session: &SessionHandle, message: SteeringMessage) -> HarnessResult<Ack> {

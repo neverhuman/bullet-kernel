@@ -1,6 +1,6 @@
 # bullet-kernel
 
-[![CI](https://img.shields.io/badge/ci-local%20required-green.svg)](docs/testing.md)
+[Required CI lanes and evidence limits](docs/testing.md)
 [![Jankurai](https://img.shields.io/badge/jankurai-audit-blue.svg)](docs/testing.md)
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
@@ -29,8 +29,8 @@ Evidence classes follow
 | `crates/mcp-mock`, `crates/test-simulation` | in-process mocks and harness tapes for the contract lane |
 | `apps/bullet-farmd` | loopback-only HTTP + SSE daemon; routes in the table below |
 | `apps/bullet-mcpd` | official-SDK stdio MCP adapter for fixed read-only farmd projections; no command or authority surface; see [`docs/mcp.md`](docs/mcp.md) |
-| `apps/bullet` | CLI: authenticated `auth`, `coding`, remote `mission` and read-only `tui`; advanced `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; command details are in [`docs/cli.md`](docs/cli.md) |
-| `apps/bullet-runner` | attempt runner with explicit peer/recovery and Candidate inputs; missing lease admission refuses. `--provider sim` is the deterministic simulator; `--provider claude` drives a real contained turn through the dogfood admission and refuses by name when any input is missing, never falling back to the simulator; `codex` and `cursor` construct a signed-in adapter, `start` succeeds when the workdir exists, and a missing structured proposal is a typed send refusal, never a simulator fallback |
+| `apps/bullet` | equivalent `bullet` and `bulletfarm` dispatchers: authenticated `auth`, `coding`, remote `mission` and read-only `tui` with separate Submissions; advanced `farm init\|backup\|reap\|restore`, `demo`, `demo-synthetic`, `mission materialize\|status`, `transaction --json`, `contracts generate\|check`, `authority keygen\|mint-launch-grant`, `provider live-conformance`, `run show\|print-preimages`, `dogfood read-only`; command details are in [`docs/cli.md`](docs/cli.md) |
+| `apps/bullet-runner` | attempt runner with explicit peer/recovery and Candidate inputs; missing lease admission refuses. `--provider sim` is the deterministic simulator; `--provider claude` selects the contained read-only dogfood path and refuses missing admission. The generic signed-in path refuses before child launch with `SIGNED_IN_CONTAINMENT_UNAVAILABLE`; writable provider containment remains unqualified. Nonzero, unknown or timed-out runs preserve failed proposal artifacts without successful Attempt/Candidate promotion. |
 | `apps/bullet-verifier` | product verifier boundary; always returns the typed `VERIFICATION_INTENT_ADMISSION_UNAVAILABLE` refusal without reading a job. The default-off `bullet-verifier-fixture` accepts unsigned fixture JSON only with `fixture-executor`; every fixture outcome is component-only, unsigned, non-independent, and transaction-gate-ineligible |
 | `apps/bullet-effects` | no-argument component demo over `LocalBareForge`; `serve <durable-queue-dir>` processes one UNKNOWN job only to `QUARANTINED`, never fabricated forge success |
 

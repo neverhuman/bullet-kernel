@@ -407,8 +407,9 @@ awk '
 cmp -s "$test_root/receipt-expected" "$test_root/receipt-group-actual" \
   || { refuse NEXTEST_RECEIPT_GROUP_EXPANSION_DRIFT 'receipt group must contain exactly five reviewed identities'; exit 1; }
 
-cargo nextest run --locked --workspace "${NEXTEST_FEATURES[@]}" --profile fast \
-  --run-ignored all -E "$receipt_filter"
+# This shares the fast profile's raw output path. Retain its predecessor and
+# publish under a distinct lane instead of overwriting the full fast report.
+run_partition_tests lint-receipt-group fast 5 "$receipt_filter"
 
 rg -Fxq 'bash ops/ci/nextest-groups-test.sh' ops/ci/lint.sh \
   || { refuse NEXTEST_SCHEMA_GROUP_ROUTING_MISSING ops/ci/lint.sh; exit 1; }

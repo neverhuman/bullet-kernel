@@ -1,0 +1,24 @@
+[package]
+name = "bullet-tuiwright-qualification"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+# Deliberately separate from the hosted portable workspace.
+[workspace]
+
+[dependencies]
+anyhow = "=1.0.102"
+nix = { version = "=0.28.0", default-features = false, features = ["signal"] }
+# Lifecycle custody is reviewed against this exact private-Child implementation.
+portable-pty = "=0.9.0"
+rustix = { version = "=1.1.4", features = ["fs", "process", "net", "termios"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+tempfile = "=3.27.0"
+tuiwright = { git = "https://github.com/neverhuman/jankurai", rev = "5e85a4de2ce59a8d1fc7865520665af58e9e6727", default-features = false }
+
+[lints.rust]
+unsafe_code = "forbid"

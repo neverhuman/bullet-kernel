@@ -29,11 +29,35 @@ case "$lane" in
   audit)    tools=(bash dirname git jankurai jq mkdir) ;;
   egress)   tools=(bash cargo cargo-nextest cat curl dirname git jq kill nft nsenter rustc slirp4netns unshare) ;;
   toolchain-msrv) tools=(awk b3sum bash cargo date dirname git grep jq rustup tee tr wc) ;;
+  operator-tui) tools=(awk bash chmod cmp cp cut dirname env find id jq mkdir od realpath sha256sum sort stat tr uname wc xargs) ;;
   *)
-    echo "ci-doctor: expected required|fast|lint|contract|security|docs|family|faults|preflight|links|coverage|history-secrets|portable-refusal|nightly|audit|egress|toolchain-msrv|gates|all" >&2
+    echo "ci-doctor: expected required|fast|lint|contract|security|docs|family|faults|preflight|links|coverage|history-secrets|portable-refusal|nightly|audit|egress|toolchain-msrv|operator-tui|gates|all" >&2
     exit 2
     ;;
 esac
+
+# This is a local qualification route; checking tool presence is not an
+# admission packet and never executes its selected compiler or Bullet binary.
+if [[ "$lane" == operator-tui ]]; then
+  if [[ ${CI+x} || ${GITHUB_ACTIONS+x} || "$(uname -s)" != Linux \
+    || "$(</proc/sys/kernel/hostname)" != xbabe2 ]]; then
+    printf 'ci-doctor: OPERATOR_TUI_HOST_NOT_ADMITTED (Linux xbabe2, CI/GITHUB_ACTIONS absent)\n' >&2
+    exit 78
+  fi
+  for subject in CARGO RUSTC BULLET; do
+    path_name="BULLET_TUIWRIGHT_${subject}_BIN"
+    sha_name="BULLET_TUIWRIGHT_${subject}_SHA256"
+    [[ "${!path_name:-}" == /* && -x "${!path_name}" && "${!sha_name:-}" =~ ^[0-9a-f]{64}$ ]] || {
+      printf 'ci-doctor: exact %s and %s required for operator-tui\n' "$path_name" "$sha_name" >&2
+      exit 1
+    }
+  done
+  [[ "${BULLET_TUIWRIGHT_SOURCE_SHA256:-}" =~ ^[0-9a-f]{64}$ \
+    && "${BULLET_TUIWRIGHT_OUTPUT:-}" == /* && ! -e "$BULLET_TUIWRIGHT_OUTPUT" ]] || {
+    printf 'ci-doctor: require admitted BULLET_TUIWRIGHT_SOURCE_SHA256 and fresh absolute BULLET_TUIWRIGHT_OUTPUT\n' >&2
+    exit 1
+  }
+fi
 
 # Proof custody runs before the selected lane and needs these on every path.
 tools+=(find id wc)

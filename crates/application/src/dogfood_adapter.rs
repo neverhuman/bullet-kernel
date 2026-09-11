@@ -180,23 +180,22 @@ impl HarnessAdapter for DogfoodClaudeAdapter {
             }
             ComposedTurn::Dispatched(dispatched) => dispatched,
         };
-        let handle = TurnHandle {
-            invocation_id: InvocationId::new(session.session_id.as_str()),
-            exit_code: dispatched.outcome.live.exit_code,
-            timed_out: dispatched.outcome.live.timed_out,
-        };
-        *self
-            .turn
-            .lock()
-            .map_err(|_| unsupported(PROVIDER, "turn state"))? = Some(CompletedTurn {
-            events: dispatched.outcome.live.events.clone(),
-        });
         // The same create-once proposal and receipt the CLI writes. An
         // operator who passed `--dogfood-receipt` and got a real, billed turn
         // should hold the evidence for it no matter which surface drove it;
         // without this the Runner spent real money and left nothing behind.
         write_dogfood_evidence(&options_for_evidence, &dispatched)
             .map_err(|error| Self::refuse(&error))?;
+        let (invocation_id, events) = bind_events(session, &dispatched.outcome.live.events)?;
+        let handle = TurnHandle {
+            invocation_id,
+            exit_code: dispatched.outcome.live.exit_code,
+            timed_out: dispatched.outcome.live.timed_out,
+        };
+        *self
+            .turn
+            .lock()
+            .map_err(|_| unsupported(PROVIDER, "turn state"))? = Some(CompletedTurn { events });
         Ok(handle)
     }
 
@@ -248,10 +247,96 @@ impl HarnessAdapter for DogfoodClaudeAdapter {
     }
 }
 
+fn bind_events(
+    session: &SessionHandle,
+    original: &[AgentEvent],
+) -> HarnessResult<(InvocationId, Vec<AgentEvent>)> {
+    let invocation = original
+        .iter()
+        .find_map(|event| event.invocation_id.clone())
+        .unwrap_or_else(|| InvocationId::new(session.session_id.as_str()));
+    let mut events = original.to_vec();
+    for event in &mut events {
+        if event.provider != PROVIDER
+            || event
+                .invocation_id
+                .as_ref()
+                .is_some_and(|id| id != &invocation)
+        {
+            return Err(HarnessError::AdmissionRefused {
+                reason: "DOGFOOD_EVENT_SUBJECT_MISMATCH".into(),
+            });
+        }
+        // The raw compose events and native provenance remain in the original
+        // evidence. This projection binds their enclosing Bullet session only.
+        let payload =
+            event
+                .payload
+                .as_object_mut()
+                .ok_or_else(|| HarnessError::AdmissionRefused {
+                    reason: "DOGFOOD_EVENT_PAYLOAD_INVALID".into(),
+                })?;
+        if payload.contains_key("bullet_compose_session_id") {
+            return Err(HarnessError::AdmissionRefused {
+                reason: "DOGFOOD_EVENT_SUBJECT_COLLISION".into(),
+            });
+        }
+        payload.insert(
+            "bullet_compose_session_id".into(),
+            serde_json::json!(event.session_id),
+        );
+        event.session_id = session.session_id.clone();
+    }
+    Ok((invocation, events))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn compose_events_bind_to_runner_session_without_changing_native_evidence() {
+        use bullet_harness_core::{AgentEventKind, AgentSessionId, EventId};
+        let session = SessionHandle {
+            session_id: AgentSessionId::new("runner-session"),
+            provider: "claude".into(),
+            native_session_id: None,
+        };
+        let original = vec![AgentEvent {
+            event_id: EventId::new("compose-event"),
+            session_id: AgentSessionId::new("compose-session"),
+            invocation_id: Some(InvocationId::new("native-invocation")),
+            native_session_id: Some("native-session".into()),
+            provider: "claude".into(),
+            model: None,
+            kind: AgentEventKind::TurnCompleted,
+            timestamp: chrono::Utc::now(),
+            sequence: 0,
+            causation_id: None,
+            payload: serde_json::json!({"proposal":{"kept":true}}),
+            raw_artifact: None,
+        }];
+        let before = serde_json::to_value(&original).unwrap();
+        let (invocation, events) = bind_events(&session, &original).unwrap();
+        assert_eq!(events[0].session_id, session.session_id);
+        assert_eq!(events[0].invocation_id.as_ref(), Some(&invocation));
+        assert_eq!(events[0].native_session_id, original[0].native_session_id);
+        assert_eq!(
+            events[0].payload["bullet_compose_session_id"],
+            "compose-session"
+        );
+        assert_eq!(
+            events[0].payload["proposal"],
+            original[0].payload["proposal"]
+        );
+        assert_eq!(serde_json::to_value(&original).unwrap(), before);
+        let mut mismatched = original.clone();
+        let mut other = original[0].clone();
+        other.invocation_id = Some(InvocationId::new("other-turn"));
+        mismatched.push(other);
+        assert!(bind_events(&session, &mismatched).is_err());
+    }
 
     fn start_session(workdir: PathBuf) -> StartSession {
         StartSession {

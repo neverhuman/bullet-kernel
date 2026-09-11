@@ -67,17 +67,10 @@ pub(crate) fn operator_snapshot(
     )?)
 }
 
-#[derive(Clone, serde::Serialize)]
-pub(crate) struct CodingCommand {
-    pub(crate) id: String,
-    pub(crate) status: String,
-    pub(crate) kind: String,
-}
-
 #[cfg(unix)]
 pub(crate) fn coding_commands(
     credentials: &crate::auth::store::Credentials,
-) -> Result<Vec<CodingCommand>, String> {
+) -> Result<models::CommandDiscoverySnapshot, String> {
     let response = crate::coding::http::request(
         &credentials.farmd,
         "GET",
@@ -88,23 +81,29 @@ pub(crate) fn coding_commands(
         ],
         None,
     )?;
+    command_response(response)
+}
+
+pub(crate) fn command_response(
+    response: crate::coding::http::HttpResponse,
+) -> Result<models::CommandDiscoverySnapshot, String> {
     if response.status != 200 {
         return Err(format!("FARMD_COMMANDS_REFUSED: HTTP {}", response.status));
     }
-    let commands = response.body["data"]["commands"]
-        .as_array()
-        .ok_or("FARMD_COMMANDS_INVALID")?;
-    Ok(commands
-        .iter()
-        .filter(|command| command["kind"] == "run_coding")
-        .filter_map(|command| {
-            Some(CodingCommand {
-                id: command["id"].as_str()?.to_owned(),
-                status: command["status"].as_str()?.to_owned(),
-                kind: command["kind"].as_str()?.to_owned(),
-            })
-        })
-        .collect())
+    let snapshot: models::CommandDiscoverySnapshot = decode(&response.body)?;
+    let mut ids = std::collections::BTreeSet::new();
+    if response.sequence != Some(snapshot.as_of_sequence)
+        || snapshot.source != "bullet-kernel/sqlite-ledger"
+        || snapshot.data.commands.len() > 100
+        || snapshot
+            .data
+            .commands
+            .iter()
+            .any(|command| !ids.insert(&command.id))
+    {
+        return Err("FARMD_COMMANDS_INCOMPATIBLE".into());
+    }
+    Ok(snapshot)
 }
 
 /// Escape terminal controls and directional overrides without changing ordinary Unicode.

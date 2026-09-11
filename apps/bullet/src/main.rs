@@ -1,4 +1,4 @@
-//! Bullet Farm CLI.
+// Bullet Farm CLI, shared by the bullet and bulletfarm executable targets.
 
 mod auth;
 mod authority;
