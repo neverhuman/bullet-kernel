@@ -41,53 +41,86 @@ fn private_temp() -> tempfile::TempDir {
 
 #[test]
 fn empty_journal_discovery_uses_authenticated_get_and_preserves_continuation() {
-    let temp = private_temp();
-    let mut session = session(temp.path());
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    session.credentials.farmd = format!("http://{}", listener.local_addr().unwrap());
-    session.credentials.origin = session.farmd.clone();
-    let expected_cookie = session.cookie.clone();
-    let expected_origin = session.origin.clone();
-    let server = std::thread::spawn(move || {
-        listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let mut socket = loop {
-            match listener.accept() {
-                Ok((socket, _)) => break socket,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
-                Err(error) => panic!("accept failed: {error}"),
+    for acknowledgement in [None, Some("b"), Some("c")] {
+        let temp = private_temp();
+        let mut session = session(temp.path());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        session.credentials.farmd = format!("http://{}", listener.local_addr().unwrap());
+        session.credentials.origin = session.farmd.clone();
+        let expected_cookie = session.cookie.clone();
+        let expected_origin = session.origin.clone();
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            for path in ["/api/v1/auth/session", "/api/v1/commands?after=1&limit=1"] {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let mut socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
+                        Err(error) => panic!("accept failed: {error}"),
+                    }
+                    assert!(Instant::now() < deadline, "caller did not reach {path}");
+                    std::thread::sleep(Duration::from_millis(5));
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                while !bytes.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    bytes.push(byte[0]);
+                    assert!(bytes.len() < 4096);
+                }
+                let text = String::from_utf8(bytes).unwrap();
+                assert!(text.starts_with(&format!("GET {path} HTTP/1.1\r\n")));
+                assert!(text.contains(&format!("cookie: {expected_cookie}\r\n")));
+                assert!(text.contains(&format!("origin: {expected_origin}\r\n")));
+                assert!(!text.contains("csrf"));
+                let sid = format!("sid_{}", "c".repeat(64));
+                let discovery = path == "/api/v1/auth/session";
+                let expected = if discovery {
+                    vec![]
+                } else {
+                    vec![format!("x-bullet-expected-session: {sid}")]
+                };
+                assert_eq!(
+                    text.lines()
+                        .filter(|line| line.starts_with("x-bullet-expected-session:"))
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                let (body, ack) = if discovery {
+                    (
+                        json!({"status":"AUTHENTICATED","operator_id":format!("opr_{}","d".repeat(64)),
+                        "session_id":sid,"issued_at":"2026-09-10T00:00:00Z","expires_at":"2026-09-10T08:00:00Z"}),
+                        Some("c"),
+                    )
+                } else {
+                    (page(), acknowledgement)
+                };
+                let ack = ack
+                    .map(|suffix| format!("x-bullet-session-id: sid_{}\r\n", suffix.repeat(64)))
+                    .unwrap_or_default();
+                let body = body.to_string();
+                write!(socket,"HTTP/1.1 200 OK\r\n{ack}Content-Type: application/json\r\nx-bullet-as-of-sequence: 5\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
             }
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(5));
-        };
-        socket
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        socket
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let mut bytes = Vec::new();
-        while !bytes.ends_with(b"\r\n\r\n") {
-            let mut byte = [0];
-            socket.read_exact(&mut byte).unwrap();
-            bytes.push(byte[0]);
-            assert!(bytes.len() < 4096);
+        });
+        let result = list(&session, 1, 1);
+        server.join().unwrap();
+        match acknowledgement {
+            Some("c") => assert_eq!(result.unwrap(), page()),
+            None => assert_eq!(result.unwrap_err(), "FARMD_SESSION_ACK_MISSING"),
+            _ => assert_eq!(result.unwrap_err(), "FARMD_SESSION_ACK_MISMATCH"),
         }
-        let text = String::from_utf8(bytes).unwrap();
-        assert!(text.starts_with("GET /api/v1/commands?after=1&limit=1 HTTP/1.1\r\n"));
-        assert!(text.contains(&format!("cookie: {expected_cookie}\r\n")));
-        assert!(text.contains(&format!("origin: {expected_origin}\r\n")));
-        assert!(!text.contains("csrf"));
-        let body = page().to_string();
-        write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nx-bullet-as-of-sequence: 5\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
-    });
-    let result = list(&session, 1, 1);
-    server.join().unwrap();
-    assert_eq!(result.unwrap(), page());
-    assert!(!session
-        .directory
-        .join(format!("cmd_{}.json", "1".repeat(64)))
-        .exists());
+        assert!(!session
+            .directory
+            .join(format!("cmd_{}.json", "1".repeat(64)))
+            .exists());
+    }
 }
 
 #[test]

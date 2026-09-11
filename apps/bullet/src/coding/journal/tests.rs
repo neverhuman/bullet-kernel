@@ -45,36 +45,66 @@ fn status_reconciles_the_saved_request_and_refuses_same_id_foreign_payloads() {
             });
         }
         let expected_path = format!("GET /api/v1/commands/{} HTTP/1.1\r\n", request.id());
+        let expected_cookie = session.cookie.clone();
+        let expected_origin = session.origin.clone();
         let server = std::thread::spawn(move || {
             listener.set_nonblocking(true).unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(3);
-            let mut socket = loop {
-                match listener.accept() {
-                    Ok((socket, _)) => break socket,
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
-                    Err(e) => panic!("accept failed: {e}"),
+            for selected in [
+                "GET /api/v1/auth/session HTTP/1.1\r\n",
+                expected_path.as_str(),
+            ] {
+                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                let mut socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
+                        Err(e) => panic!("accept failed: {e}"),
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "caller did not reach {selected}"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                while !bytes.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    bytes.push(byte[0]);
+                    assert!(bytes.len() < 16_384);
                 }
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(5));
-            };
-            socket
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            socket
-                .set_write_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut bytes = Vec::new();
-            while !bytes.ends_with(b"\r\n\r\n") {
-                let mut byte = [0];
-                socket.read_exact(&mut byte).unwrap();
-                bytes.push(byte[0]);
-                assert!(bytes.len() < 16_384);
+                let text = String::from_utf8(bytes).unwrap();
+                assert!(text.starts_with(selected));
+                assert!(text.contains(&format!("cookie: {expected_cookie}\r\n")));
+                assert!(text.contains(&format!("origin: {expected_origin}\r\n")));
+                assert!(!text.contains("csrf"));
+                let sid = format!("sid_{}", "c".repeat(64));
+                let discovery = selected.starts_with("GET /api/v1/auth/session ");
+                let expected = if discovery {
+                    vec![]
+                } else {
+                    vec![format!("x-bullet-expected-session: {sid}")]
+                };
+                assert_eq!(
+                    text.lines()
+                        .filter(|line| line.starts_with("x-bullet-expected-session:"))
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                let response = if discovery {
+                    serde_json::json!({"status":"AUTHENTICATED","operator_id":format!("opr_{}","d".repeat(64)),
+                        "session_id":sid,"issued_at":"2026-09-10T00:00:00Z","expires_at":"2026-09-10T08:00:00Z"})
+                } else {
+                    body.clone()
+                }.to_string();
+                write!(socket,"HTTP/1.1 200 OK\r\nx-bullet-session-id: {sid}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
             }
-            assert!(String::from_utf8(bytes)
-                .unwrap()
-                .starts_with(&expected_path));
-            let body = body.to_string();
-            write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
         });
         let result = super::super::status(&session, request.id().as_str());
         server.join().unwrap();
