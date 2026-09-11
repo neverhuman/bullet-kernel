@@ -330,7 +330,9 @@ fn connecting_status_chrome_and_palette_unknown_surfaces_stay_honest() {
     console.until("refresh pending");
     console.send(b"\x0b");
     console.until("no ledger subject");
-    console.send(b"j".repeat(8).as_slice());
+    // Step past every navigable view into UNKNOWN_SURFACES: this case asserts an
+    // unknown surface is inert, so the count must track View::ALL (now 10).
+    console.send(b"j".repeat(10).as_slice());
     console.send(b"\r");
     console.until("Mission Graph");
     assert!(!console

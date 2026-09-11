@@ -75,7 +75,11 @@ impl Fixture {
                 let request = String::from_utf8(bytes).unwrap();
                 let snapshot_get =
                     request.starts_with("GET /api/v1/operator-snapshot HTTP/1.1\r\n");
-                let commands_get = request.starts_with("GET /api/v1/commands HTTP/1.1\r\n");
+                // The command list is paginated, so the TUI legitimately reads
+                // `/api/v1/commands?after=&limit=`. Admit the query form: this
+                // allow-list exists to refuse mutations, not to pin a bare path.
+                let commands_get = request.starts_with("GET /api/v1/commands HTTP/1.1\r\n")
+                    || request.starts_with("GET /api/v1/commands?");
                 assert!(
                     snapshot_get || commands_get,
                     "TUI must only read the snapshot or command list, including detach"

@@ -38,8 +38,15 @@ pub(crate) fn run(command: CodingCommands) -> ExitCode {
             command_id,
             request_digest,
             idempotency_key,
+            env_file,
             json,
-        } => print_harness_bind(command_id, request_digest, idempotency_key, json),
+        } => print_harness_bind(
+            command_id,
+            request_digest,
+            idempotency_key,
+            env_file.as_deref(),
+            json,
+        ),
         CodingCommands::List {
             connection,
             after,
@@ -121,6 +128,7 @@ pub(crate) fn run(command: CodingCommands) -> ExitCode {
             connection,
             command,
             interval_ms,
+            max_idle,
             json,
         } => {
             let session = match connection.load() {
@@ -131,15 +139,29 @@ pub(crate) fn run(command: CodingCommands) -> ExitCode {
                 Ok(value) => value,
                 Err(error) => return fail(error),
             };
+            let max_idle = match admit_max_idle(max_idle) {
+                Ok(value) => value,
+                Err(error) => return fail(error),
+            };
+            let mut errors = 0_u64;
             loop {
                 match load_board(&session, command.as_deref()) {
                     Ok(board) => {
+                        errors = 0;
                         if !json && render::color_wanted(false) {
                             print!("{}", render::screen_home(true));
                         }
                         print_board(&board, json);
                     }
-                    Err(error) => eprintln!("bullet: {}", crate::client::terminal_text(&error)),
+                    Err(error) => {
+                        errors += 1;
+                        eprintln!("bullet: {}", crate::client::terminal_text(&error));
+                        if errors >= max_idle {
+                            return fail(format!(
+                                "WATCH_POLL_FAILED: {errors} consecutive errors"
+                            ));
+                        }
+                    }
                 }
                 thread::sleep(Duration::from_millis(interval));
             }
@@ -254,10 +276,16 @@ fn print_harness_bind(
     command_id: String,
     request_digest: String,
     idempotency_key: String,
+    env_file: Option<&std::path::Path>,
     json_only: bool,
 ) -> ExitCode {
     match harness::produce(&command_id, &request_digest, &idempotency_key) {
         Ok(produced) => {
+            if let Some(path) = env_file {
+                if let Err(error) = harness::write_env_file(path, &produced) {
+                    return fail(error);
+                }
+            }
             if json_only {
                 print_json(&produced.json().to_string());
             } else {
@@ -393,6 +421,13 @@ fn admit_interval(interval_ms: u64) -> Result<u64, String> {
     Ok(interval_ms)
 }
 
+fn admit_max_idle(max_idle: u64) -> Result<u64, String> {
+    if max_idle == 0 {
+        return Err("WATCH_MAX_IDLE_INVALID: consecutive poll errors must be >= 1".into());
+    }
+    Ok(max_idle)
+}
+
 fn random_hex(bytes: usize) -> Result<String, String> {
     let mut buffer = vec![0_u8; bytes];
     std::fs::File::open("/dev/urandom")
@@ -443,6 +478,10 @@ mod tests {
             .unwrap_err()
             .contains("WATCH_INTERVAL_INVALID"));
         assert_eq!(admit_interval(1000).unwrap(), 1000);
+        assert!(admit_max_idle(0)
+            .unwrap_err()
+            .contains("WATCH_MAX_IDLE_INVALID"));
+        assert_eq!(admit_max_idle(5).unwrap(), 5);
     }
 
     #[test]

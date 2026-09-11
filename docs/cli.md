@@ -2,10 +2,10 @@
 
 Status: current source components; not an installed or release-qualified operator workflow
 Owner: Bullet Farm maintainers
-Last reviewed: 2026-09-11 against source `965392cc`.
+Last reviewed: 2026-09-11 against source `45a6eb37`.
 Source of truth: `apps/bullet/src/{main,auth,client,coding,mission,tui,transaction,authority,provider,maintenance,contracts}.rs`,
 their supporting modules, `apps/bullet/src/authority/mint.rs`, and the process-bin sources below.
-<!-- bullet-doc-review:v1 subject=965392ccdcad315814eeb96ce5fa192b089b4409 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/args.rs,apps/bullet/src/coding/harness.rs,apps/bullet/src/coding/task.rs,apps/bullet-farmd/src/commands/coding.rs,crates/application/src/coding_tasks.rs,crates/application/src/coding_tasks/validation.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
+<!-- bullet-doc-review:v1 subject=45a6eb379144ad411bcb65c999dc5a5710edfb13 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/args.rs,apps/bullet/src/coding/harness.rs,apps/bullet/src/coding/task.rs,apps/bullet-farmd/src/commands/coding.rs,crates/application/src/coding_tasks.rs,crates/application/src/coding_tasks/validation.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
 
 `auth`, `coding`, remote `mission` reads and `tui` consume the loopback daemon. The local ledger helpers
 and guarded provider qualification paths remain separate. The operator controls
@@ -66,9 +66,9 @@ not stop another.
 | `coding task <id>` | read accepted task/runtime selection, server task/run IDs and exact queue blockers from one authenticated snapshot; validate its payload digest even without a local journal |
 | `coding status <id>` | GET the same command subject using saved credentials; correlate kind and payload digest with its local journal when present |
 | `coding board` | fleet, sessions and outbox from one authenticated `/api/v1/operator-snapshot`; separate public health and optional `--command` observations. Empty fleet is zero lease rows. `--json` emits the observed projection objects. |
-| `coding watch` | poll the same board; `--interval-ms` must be ≥ 1 (`WATCH_INTERVAL_INVALID` otherwise). Not a coordinator fleet. |
+| `coding watch` | poll the same board; `--interval-ms` must be ≥ 1 (`WATCH_INTERVAL_INVALID` otherwise). `--max-idle` (default 5) exits after that many consecutive poll errors (`WATCH_POLL_FAILED` / `WATCH_MAX_IDLE_INVALID`). Not a coordinator fleet. |
 | `coding harness-check` | report `BULLET_HARNESS_*` PRESENT/ABSENT without spawning a provider. Exit 2 when unbound (`COMMAND_CODING_HARNESS_UNBOUND`). Optional `--command-id` / `--request-digest` / `--idempotency-key` overlay the three ledger producers (same seed as the command worker). |
-| `coding harness-bind` | print `BULLET_HARNESS_WORK_PACKAGE_ID`, `BULLET_HARNESS_CANDIDATE_REQUEST_DIGEST`, and `BULLET_HARNESS_IDEMPOTENCY_KEY` from an admitted v2 command id, request digest, and idempotency key. Does not spawn a provider. |
+| `coding harness-bind` | print `BULLET_HARNESS_WORK_PACKAGE_ID`, `BULLET_HARNESS_CANDIDATE_REQUEST_DIGEST`, and `BULLET_HARNESS_IDEMPOTENCY_KEY` from an admitted v2 command id, request digest, and idempotency key. Optional `--env-file` merges those three names into an absolute 0600 file so `worker-loop.sh` can load them with the session bindings. Does not spawn a provider. |
 | `coding stop` | typed `STOP_UNIMPLEMENTED` and exit 2; does not SIGKILL a provider |
 
 `talk`, `ask`, `head`, `setup`, and `serve` are not CLI commands. Native Head,
@@ -123,19 +123,22 @@ These reads do not open a local ledger. For legacy component inspection, supply
 
 The TUI uses Ctrl+K for a jump list of Portal surface titles (six unknown
 surfaces stay `no ledger subject` and do not invent a view), Tab for panes,
-arrows or j/k for selection, Enter for details, Escape for back, `?` for help,
-`r` for one snapshot refresh, and `J` to toggle raw JSON in the detail pane.
-Ctrl+C detaches and prints a reconnect command; it does not cancel work
-(`STOP_UNIMPLEMENTED`). The status line is text-first: `HOLD`, `LIVE n` from
-snapshot lease liveness, `UNBOUND`, `HEAD_RUNTIME_BINDING_REQUIRED`,
-`CONNECTING` / `OBSERVED` / `STALE`, and `refresh pending` while a GET waits.
-Empty views say zero rows, not a green fleet. Selection stays bound to a subject
-across updates. Failed or regressing snapshots retain previous data with typed
-`STALE` / `FARMD_SNAPSHOT_REGRESSED` / `UNKNOWN`. `NO_COLOR` preserves every
-label without color; `--once`, redirected output and `TERM=dumb` use a plain
-snapshot. Current TUI updates are polled GETs. Native controls, exact queue
-blockers and approval mutations remain separate unfinished backend/UI
-obligations.
+arrows or j/k for selection, Enter for details, Escape to pop one view, `?` for
+help, `r` for one snapshot refresh, `n`/`p` to page Submissions, and `J` to
+toggle raw JSON in the detail pane. Outbox, ready-queue, and fleet rows come
+from the same operator snapshot. Human rows abbreviate 64-hex ids; raw JSON
+keeps the exact id. The status line adds `harness BOUND|UNBOUND` from the same
+env probe as `coding harness-check` and does not spawn a provider. The TUI does
+not submit or stop work: use `bullet coding submit` or Portal Control Tower;
+stop remains `STOP_UNIMPLEMENTED`. Ctrl+C detaches and prints a reconnect
+command. The status line is text-first: `HOLD`, `LIVE n` from snapshot lease
+liveness, `UNBOUND`, `HEAD_RUNTIME_BINDING_REQUIRED`, `CONNECTING` / `OBSERVED`
+/ `STALE`, and `refresh pending` while a GET waits. Empty views say zero rows,
+not a green fleet. Selection stays bound to a subject across updates. Failed or
+regressing snapshots retain previous data with typed `STALE` /
+`FARMD_SNAPSHOT_REGRESSED` / `UNKNOWN`. `NO_COLOR` preserves every label
+without color; `--once`, redirected output and `TERM=dumb` use a plain
+snapshot. Current TUI updates are polled GETs.
 
 ## Durable conversation API
 

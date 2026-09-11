@@ -88,6 +88,9 @@ pub(crate) enum CodingCommands {
         command: Option<String>,
         #[arg(long, default_value_t = 1000)]
         interval_ms: u64,
+        /// Consecutive poll errors before the client exits. Zero is refused.
+        #[arg(long, default_value_t = 5)]
+        max_idle: u64,
         #[arg(long)]
         json: bool,
     },
@@ -111,6 +114,9 @@ pub(crate) enum CodingCommands {
         request_digest: String,
         #[arg(long)]
         idempotency_key: String,
+        /// Merge the three ledger identities into this 0600 env file.
+        #[arg(long)]
+        env_file: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },

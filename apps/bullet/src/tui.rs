@@ -44,8 +44,8 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         || std::env::var("TERM").as_deref() == Ok("dumb")
     {
         state.update(crate::client::operator_snapshot(&credentials));
-        if let Ok(coding) = crate::client::coding_commands(&credentials) {
-            state.set_coding(coding);
+        if let Ok((coding, next_after)) = crate::client::coding_commands(&credentials, 0) {
+            state.set_coding(coding, next_after);
         }
         if let Some(subject) = reconnect {
             state.reconnect(&subject);
@@ -56,14 +56,15 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     if !std::io::stdin().is_terminal() {
         return Err("TUI_TERMINAL_REQUIRED: use --once".into());
     }
-    let (request_tx, request_rx) = mpsc::sync_channel::<()>(1);
+    let (request_tx, request_rx) = mpsc::sync_channel::<u64>(1);
     let (response_tx, response_rx) = mpsc::sync_channel(1);
     // This thread only performs GETs; dropping the client never cancels farm work.
     std::thread::spawn(move || {
-        while request_rx.recv().is_ok() {
+        while let Ok(after) = request_rx.recv() {
             let snapshot = crate::client::operator_snapshot(&credentials);
-            let coding = crate::client::coding_commands(&credentials).unwrap_or_default();
-            if response_tx.send((snapshot, coding)).is_err() {
+            let (coding, next_after) = crate::client::coding_commands(&credentials, after)
+                .unwrap_or_else(|_| (Vec::new(), None));
+            if response_tx.send((snapshot, coding, next_after)).is_err() {
                 break;
             }
         }
@@ -76,17 +77,17 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         .draw(|frame| ui::draw(frame, &mut state, color))
         .map_err(|_| "TUI_DRAW_FAILED")?;
     request_tx
-        .try_send(())
+        .try_send(state.coding_after)
         .map_err(|_| "TUI_REFRESH_UNAVAILABLE")?;
     let mut next_refresh = Instant::now() + Duration::from_secs(2);
     let mut pending = true;
     state.refresh_pending = true;
     loop {
-        if let Ok((snapshot, coding)) = response_rx.try_recv() {
+        if let Ok((snapshot, coding, next_after)) = response_rx.try_recv() {
             pending = false;
             state.refresh_pending = false;
             state.update(snapshot);
-            state.set_coding(coding);
+            state.set_coding(coding, next_after);
             if state.snapshot.is_some() {
                 if let Some(subject) = reconnect.take() {
                     state.reconnect(&subject);
@@ -95,7 +96,7 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         }
         if !pending && Instant::now() >= next_refresh {
             request_tx
-                .try_send(())
+                .try_send(state.coding_after)
                 .map_err(|_| "TUI_REFRESH_UNAVAILABLE")?;
             pending = true;
             state.refresh_pending = true;
@@ -131,6 +132,12 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
             KeyCode::Down | KeyCode::Char('j') => state.step(1),
             KeyCode::Enter => state.enter(),
             KeyCode::Char('r') if !pending => next_refresh = Instant::now(),
+            KeyCode::Char('n') | KeyCode::Char(']') if !pending && state.page_coding(true) => {
+                next_refresh = Instant::now();
+            }
+            KeyCode::Char('p') | KeyCode::Char('[') if !pending && state.page_coding(false) => {
+                next_refresh = Instant::now();
+            }
             _ => (),
         }
     }
