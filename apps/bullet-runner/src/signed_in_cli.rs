@@ -8,9 +8,10 @@ use bullet_domain::Observation;
 use bullet_harness_core::{
     unsupported, Ack, AgentEvent, AgentEventKind, AuthChallenge, CapabilityMatrix, CompactRequest,
     ContextTransition, EventId, HarnessAdapter, HarnessDescriptor, HarnessError,
-    HarnessEventStream, HarnessResult, InvocationId, ModelSnapshot, PermissionDecision,
-    PlanDecision, ProbeResult, ProfileRef, PromotionStage, QuotaObservation, ResumeSession,
-    SessionCheckpoint, SessionHandle, StartSession, SteeringMessage, Turn, TurnHandle,
+    HarnessEventStream, HarnessResult, InvocationId, ModelSnapshot, PatchProposal,
+    PermissionDecision, PlanDecision, ProbeResult, ProfileRef, PromotionStage, QuotaObservation,
+    ResumeSession, SessionCheckpoint, SessionHandle, StartSession, SteeringMessage, Turn,
+    TurnHandle,
 };
 use chrono::Utc;
 use serde_json::json;
@@ -56,8 +57,6 @@ impl SignedInCliAdapter {
             "codex" => vec![
                 "exec".into(),
                 "--skip-git-repo-check".into(),
-                "--sandbox".into(),
-                "read-only".into(),
                 "-m".into(),
                 self.model.clone(),
                 prompt.into(),
@@ -65,9 +64,7 @@ impl SignedInCliAdapter {
             "cursor" => vec![
                 "-p".into(),
                 "--output-format".into(),
-                "text".into(),
-                "--mode".into(),
-                "plan".into(),
+                "stream-json".into(),
                 "--trust".into(),
                 prompt.into(),
             ],
@@ -171,6 +168,20 @@ impl HarnessAdapter for SignedInCliAdapter {
         })?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let invocation = InvocationId::new(session.session_id.as_str());
+        let mut payload = json!({ "exit": output.status.code() });
+        match PatchProposal::extract_from_text(&stdout) {
+            Ok(proposal) => {
+                if let Ok(value) = proposal.authoritative_value() {
+                    payload["proposal"] = value;
+                }
+            }
+            Err(_) if self.provider == "cursor" => {
+                return Err(HarnessError::AdmissionRefused {
+                    reason: "CURSOR_ACP_EVENTS_EMPTY: stream-json without a PatchProposal is not a structured turn".into(),
+                });
+            }
+            Err(_) => {}
+        }
         *self
             .events
             .lock()
@@ -187,7 +198,7 @@ impl HarnessAdapter for SignedInCliAdapter {
             timestamp: Utc::now(),
             sequence: 0,
             causation_id: None,
-            payload: json!({ "stdout": stdout, "exit": output.status.code() }),
+            payload,
             raw_artifact: None,
         }];
         Ok(TurnHandle {
@@ -241,5 +252,136 @@ impl HarnessAdapter for SignedInCliAdapter {
             .map(|guard| guard.clone())
             .unwrap_or_default();
         Box::pin(futures::stream::iter(events))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bullet_harness_core::AgentSessionId;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::time::Duration;
+
+    fn proposal_json() -> String {
+        format!(
+            r#"{{"schema_version":1,"proposal_id":"cnt_{a}","producing_attempt_id":"atm_{b}","base_checkpoint_id":"ckp_{c}","base_checkpoint_digest":"{d}","operations":[{{"path":"PONG.txt","preimage":{{"kind":"absent"}},"mutation":{{"kind":"write","content_utf8":"PONG\n"}}}}],"gate_ids":["gat_{g}"]}}"#,
+            a = "1".repeat(64),
+            b = "2".repeat(64),
+            c = "3".repeat(64),
+            d = "4".repeat(64),
+            g = "8".repeat(64),
+        )
+    }
+
+    #[test]
+    fn codex_argv_can_emit_a_patch_and_cursor_argv_is_not_plan_mode() {
+        let adapter =
+            SignedInCliAdapter::new("codex".into(), "/usr/bin/true".into(), "gpt-5".into())
+                .unwrap();
+        let argv = adapter.argv("implement");
+        assert!(argv.starts_with(&["exec".into(), "--skip-git-repo-check".into()]));
+        assert!(!argv.iter().any(|a| a == "read-only"));
+        assert!(!argv.contains(&"--sandbox".into()));
+        let cursor =
+            SignedInCliAdapter::new("cursor".into(), "/usr/bin/true".into(), "composer-2".into())
+                .unwrap();
+        let argv = cursor.argv("implement");
+        assert!(argv.contains(&"stream-json".into()));
+        assert!(!argv.iter().any(|a| a == "plan" || a == "text"));
+    }
+
+    #[tokio::test]
+    async fn stub_stdout_proposal_is_accepted_and_cursor_garbage_is_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let stub = dir.path().join("stub");
+        let script = format!("#!/bin/sh\nprintf '%s\\n' '{}'\nexit 1\n", proposal_json());
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o700)
+            .open(&stub)
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        let adapter =
+            SignedInCliAdapter::new("codex".into(), stub.clone(), "gpt-5".into()).unwrap();
+        adapter
+            .start(StartSession {
+                session_id: AgentSessionId::new("signed-in-stub"),
+                workdir: dir.path().to_path_buf(),
+                artifact_dir: dir.path().to_path_buf(),
+                model: None,
+                structured_schema: None,
+                max_budget_usd: None,
+                wall_timeout: Duration::from_secs(5),
+            })
+            .await
+            .unwrap();
+        let handle = adapter
+            .send(
+                &SessionHandle {
+                    session_id: AgentSessionId::new("signed-in-stub"),
+                    provider: "codex".into(),
+                    native_session_id: None,
+                },
+                Turn {
+                    prompt: "implement".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(handle.exit_code, Some(1));
+        let events: Vec<_> = futures::StreamExt::collect(adapter.events(&SessionHandle {
+            session_id: AgentSessionId::new("signed-in-stub"),
+            provider: "codex".into(),
+            native_session_id: None,
+        }))
+        .await;
+        assert!(events[0].payload.get("proposal").is_some());
+        assert!(!events[0].payload.to_string().contains("sim"));
+
+        let garbage = dir.path().join("garbage");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o700)
+            .open(&garbage)
+            .unwrap()
+            .write_all(b"#!/bin/sh\necho no-proposal\n")
+            .unwrap();
+        let cursor =
+            SignedInCliAdapter::new("cursor".into(), garbage, "composer-2".into()).unwrap();
+        cursor
+            .start(StartSession {
+                session_id: AgentSessionId::new("signed-in-cursor-empty"),
+                workdir: dir.path().to_path_buf(),
+                artifact_dir: dir.path().to_path_buf(),
+                model: None,
+                structured_schema: None,
+                max_budget_usd: None,
+                wall_timeout: Duration::from_secs(5),
+            })
+            .await
+            .unwrap();
+        let error = cursor
+            .send(
+                &SessionHandle {
+                    session_id: AgentSessionId::new("signed-in-cursor-empty"),
+                    provider: "cursor".into(),
+                    native_session_id: None,
+                },
+                Turn {
+                    prompt: "implement".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("CURSOR_ACP_EVENTS_EMPTY"),
+            "{error}"
+        );
     }
 }

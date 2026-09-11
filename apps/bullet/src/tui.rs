@@ -44,6 +44,9 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         || std::env::var("TERM").as_deref() == Ok("dumb")
     {
         state.update(crate::client::operator_snapshot(&credentials));
+        if let Ok(coding) = crate::client::coding_commands(&credentials) {
+            state.set_coding(coding);
+        }
         if let Some(subject) = reconnect {
             state.reconnect(&subject);
         }
@@ -58,10 +61,9 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     // This thread only performs GETs; dropping the client never cancels farm work.
     std::thread::spawn(move || {
         while request_rx.recv().is_ok() {
-            if response_tx
-                .send(crate::client::operator_snapshot(&credentials))
-                .is_err()
-            {
+            let snapshot = crate::client::operator_snapshot(&credentials);
+            let coding = crate::client::coding_commands(&credentials).unwrap_or_default();
+            if response_tx.send((snapshot, coding)).is_err() {
                 break;
             }
         }
@@ -80,10 +82,11 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     let mut pending = true;
     state.refresh_pending = true;
     loop {
-        if let Ok(snapshot) = response_rx.try_recv() {
+        if let Ok((snapshot, coding)) = response_rx.try_recv() {
             pending = false;
             state.refresh_pending = false;
             state.update(snapshot);
+            state.set_coding(coding);
             if state.snapshot.is_some() {
                 if let Some(subject) = reconnect.take() {
                     state.reconnect(&subject);
@@ -138,6 +141,7 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         .as_deref()
         .or(reconnect.as_deref())
         .map(crate::client::terminal_text)
+        .map(|text| model::redact_ledger_hex(&text))
         .unwrap_or_default()
         .replace('\'', "'\\''");
     let path = reconnect_state_dir(&directory);

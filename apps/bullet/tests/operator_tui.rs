@@ -214,9 +214,10 @@ fn actual_tui_navigates_refuses_bad_refresh_and_detaches_without_mutation() {
     let output = String::from_utf8_lossy(&console.output);
     assert!(output.contains("DETACHED: durable work continues. Reconnect: bullet tui"));
     assert!(
-        output.contains(&format!("--subject '{}'", fixture::subject())),
-        "stale refresh must preserve the selected subject"
+        output.contains("--subject 'mis_<redacted>'"),
+        "stale refresh must preserve the selected kind without a 64-hex id"
     );
+    assert_no_sixty_four_hex(&output);
     assert!(!output.contains("ses_"));
     assert!(!output.contains("csrf_"));
     assert!(fixture.reads.load(Ordering::SeqCst) >= 2);
@@ -274,7 +275,9 @@ fn six_tuis_paint_before_http_and_share_credentials_without_coupled_detach() {
     for (console, _) in &consoles {
         let output = String::from_utf8_lossy(&console.output);
         assert!(output.contains("DETACHED: durable work continues."));
-        assert!(output.contains(&format!("--subject '{subject}'")));
+        assert!(output.contains("--subject 'mis_<redacted>'"));
+        assert_no_sixty_four_hex(&output);
+        assert!(!output.contains(&subject));
         assert!(!output.contains("ses_"));
         assert!(!output.contains("csrf_"));
     }
@@ -298,6 +301,7 @@ fn connecting_detach_does_not_wait_for_http_and_preserves_quoted_reconnect_subje
     console.detach();
     let output = String::from_utf8_lossy(&console.output);
     assert!(output.contains("--subject 'unobserved'\\''subject'"));
+    assert_no_sixty_four_hex(&output);
     assert!(!output.contains("RECONNECT_SUBJECT_ABSENT"));
     assert!(!output.contains("Synthetic PTY mission"));
 }
@@ -339,11 +343,25 @@ fn connecting_status_chrome_and_palette_unknown_surfaces_stay_honest() {
     console.until("Synthetic PTY mission");
     console.send(b"J");
     console.until("raw JSON");
+    assert_no_sixty_four_hex(&console.parser.screen().contents());
     console.send(b"?");
     console.until("STOP_UNIMPLEMENTED");
     console.detach();
     let output = String::from_utf8_lossy(&console.output);
     assert!(output.contains("DETACHED: durable work continues."));
+    assert_no_sixty_four_hex(&output);
     assert!(!output.contains("ses_"));
     assert!(!output.contains("csrf_"));
+}
+
+fn assert_no_sixty_four_hex(text: &str) {
+    let mut n = 0;
+    for c in text.chars() {
+        if c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_ascii_lowercase()) {
+            n += 1;
+            assert!(n < 64, "TUI paint leaked a 64-hex ledger id");
+        } else {
+            n = 0;
+        }
+    }
 }

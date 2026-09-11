@@ -13,11 +13,11 @@ that aggregator fail.
 
 | Partition | Selected | Meaning |
 | --- | ---: | --- |
-| standalone | 1251 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
+| standalone | 1257 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
 | egress | 3 | the exact host-dependent namespace/nftables/CONNECT-proxy identities; only the capability-admitted `egress` lane executes them |
 | contract | 34 | four offline provider protocol binaries plus `bullet-test-simulation` |
 | family | 9 | five `transaction_demo` identities plus `heartbeat_stale`, `kill_retry`, `loop_sim`, and `synthetic_e2e` |
-| total | 1297 | exact union of the four disjoint partitions above |
+| total | 1303 | exact union of the four disjoint partitions above |
 
 `ops/ci/inventory-test.sh` independently lists all four partitions, requires
 every set to be nonzero, checks pairwise disjointness and exact union,
@@ -38,7 +38,10 @@ and actual CLI/TUI child-process checks. The task CLI also runs against the real
 through login, restart, exact retry and empty-cache discovery. These tests use
 disposable local identities and explicitly synthetic task data; they do not
 establish installed provider execution or release eligibility. Inventory
-enumeration alone is not a successful test execution.
+enumeration alone is not a successful test execution. The September 11
+closeout inventory, hashed from a real nextest JSON, adds six standalone
+identities (v2 binding credential forward, ledger D1, HTTP then real-runner
+stub D1, hex-safe TUI paint, Codex argv, Cursor typed empty-stream refusal).
 
 `apps/bullet/tests/operator_tui.rs` holds a synthetic HTTP response until six
 separate CLI processes sharing one private credential directory have rendered
@@ -179,7 +182,7 @@ provider conformance.
 
 | Lane | Scope |
 | --- | --- |
-| `fast` | exactly 1251 standalone nextest identities, all executed with zero skipped |
+| `fast` | exactly 1257 standalone nextest identities, all executed with zero skipped |
 | `lint` | rustfmt, all-target Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow policy, inventory/observation/nightly meta-tests |
 | `contract` | exactly 34 offline provider-contract and simulation tests |
 | `security` | current-tree gitleaks 8.21.2; full cargo-deny 0.19.8 advisories/bans/licenses/sources with independently proved RustSec freshness; zizmor 1.25.2 |

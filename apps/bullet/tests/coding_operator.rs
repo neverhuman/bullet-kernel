@@ -135,9 +135,14 @@ async fn cli_task_submission_retry_and_discovery_share_the_daemons_durable_subje
     assert_eq!(original["data"]["task"], task);
     assert_eq!(original["data"]["command"], submitted);
     assert_eq!(original["data"]["selection"]["effort"], "high");
-    assert_eq!(
-        original["data"]["blockers"][0]["code"],
-        "CODING_BINDING_ADMISSION_UNAVAILABLE"
+    assert!(
+        original["data"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|blocker| blocker["code"] != "CODING_BINDING_ADMISSION_UNAVAILABLE"),
+        "admitted v2 tasks bind nonce and quota: {}",
+        original["data"]["blockers"]
     );
     let ledger = SqliteLedger::open(&database).unwrap();
     let counts = (

@@ -1,4 +1,4 @@
-use crate::client::{models::OperatorSnapshot, terminal_text};
+use crate::client::{models::OperatorSnapshot, terminal_text, CodingCommand};
 use serde::Serialize;
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -52,21 +52,46 @@ pub(super) struct Row {
     pub(super) human: String,
     pub(super) raw: String,
 }
+/// Replace each 64-hex run so TUI paint, `--once`, and detach never leak ledger ids.
+pub(super) fn redact_ledger_hex(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut hex = String::new();
+    let flush = |out: &mut String, hex: &mut String| {
+        if hex.len() == 64 {
+            out.push_str("<redacted>");
+        } else {
+            out.push_str(hex);
+        }
+        hex.clear();
+    };
+    for c in text.chars() {
+        if c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_ascii_lowercase()) {
+            hex.push(c);
+        } else {
+            flush(&mut out, &mut hex);
+            out.push(c);
+        }
+    }
+    flush(&mut out, &mut hex);
+    out
+}
+
 fn row(value: &impl Serialize, id: &str, label: String, human: String) -> Row {
     Row {
         id: id.into(),
-        label: terminal_text(&label),
-        human: human
+        label: terminal_text(&redact_ledger_hex(&label)),
+        human: redact_ledger_hex(&human)
             .lines()
             .map(terminal_text)
             .collect::<Vec<_>>()
             .join("\n"),
-        raw: serde_json::to_string_pretty(value)
-            .unwrap_or_else(|_| "ENCODING_UNAVAILABLE".into())
-            .lines()
-            .map(terminal_text)
-            .collect::<Vec<_>>()
-            .join("\n"),
+        raw: redact_ledger_hex(
+            &serde_json::to_string_pretty(value).unwrap_or_else(|_| "ENCODING_UNAVAILABLE".into()),
+        )
+        .lines()
+        .map(terminal_text)
+        .collect::<Vec<_>>()
+        .join("\n"),
     }
 }
 
@@ -81,6 +106,7 @@ fn field_lines(pairs: &[(&str, String)]) -> String {
 #[derive(Default)]
 pub(super) struct Model {
     pub(super) snapshot: Option<OperatorSnapshot>,
+    pub(super) coding: Vec<CodingCommand>,
     pub(super) error: Option<String>,
     pub(super) view: View,
     pub(super) rows: Vec<Row>,
@@ -114,6 +140,12 @@ impl Model {
                 self.rebuild();
             }
             Err(error) => self.error = Some(error),
+        }
+    }
+    pub(super) fn set_coding(&mut self, commands: Vec<CodingCommand>) {
+        self.coding = commands;
+        if self.snapshot.is_some() {
+            self.rebuild();
         }
     }
     pub(super) fn selected(&self) -> Option<usize> {
@@ -185,69 +217,87 @@ impl Model {
         let observed = snapshot.observed_at.clone();
         let data = &snapshot.data;
         let rows = match self.view {
-            View::Missions => data
-                .missions
-                .iter()
-                .map(|v| {
-                    row(
-                        v,
-                        &v.id,
-                        format!("[{}] {}", v.state, v.title),
-                        field_lines(&[
-                            ("id", v.id.clone()),
-                            ("state", v.state.clone()),
-                            ("title", v.title.clone()),
-                            ("objective", v.objective.clone()),
-                            ("as_of_sequence", as_of.clone()),
-                            ("observed_at", observed.clone()),
-                        ]),
-                    )
-                })
-                .collect(),
-            View::Tasks => data
-                .graphs
-                .iter()
-                .filter(|g| self.mission.as_ref().is_none_or(|id| id == &g.mission.id))
-                .flat_map(|g| &g.packages)
-                .map(|v| {
-                    row(
-                        v,
-                        &v.id,
-                        format!("[{}] {}", v.state, v.title),
-                        field_lines(&[
-                            ("id", v.id.clone()),
-                            ("state", v.state.clone()),
-                            ("title", v.title.clone()),
-                            ("mission_id", v.mission_id.clone()),
-                            ("task_class", v.task_class.clone()),
-                            ("as_of_sequence", as_of.clone()),
-                            ("observed_at", observed.clone()),
-                        ]),
-                    )
-                })
-                .collect(),
-            View::Attempts => data
-                .sessions
-                .attempts
-                .iter()
-                .filter(|v| self.task.as_ref().is_none_or(|id| id == &v.work_package_id))
-                .map(|v| {
-                    row(
-                        v,
-                        &v.id,
-                        format!("[{} / lease {}] {}", v.state, v.lease, v.id),
-                        field_lines(&[
-                            ("id", v.id.clone()),
-                            ("state", v.state.clone()),
-                            ("lease", v.lease.clone()),
-                            ("work_package_id", v.work_package_id.clone()),
-                            ("fence", v.fence.to_string()),
-                            ("as_of_sequence", as_of.clone()),
-                            ("observed_at", observed.clone()),
-                        ]),
-                    )
-                })
-                .collect(),
+            View::Missions => {
+                let mut rows: Vec<Row> = data
+                    .missions
+                    .iter()
+                    .map(|v| {
+                        row(
+                            v,
+                            &v.id,
+                            format!("[{}] {}", v.state, v.title),
+                            field_lines(&[
+                                ("id", v.id.clone()),
+                                ("state", v.state.clone()),
+                                ("title", v.title.clone()),
+                                ("objective", v.objective.clone()),
+                                ("as_of_sequence", as_of.clone()),
+                                ("observed_at", observed.clone()),
+                            ]),
+                        )
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    rows.extend(self.coding_rows(&as_of, &observed, "mission"));
+                }
+                rows
+            }
+            View::Tasks => {
+                let mut rows: Vec<Row> = data
+                    .graphs
+                    .iter()
+                    .filter(|g| self.mission.as_ref().is_none_or(|id| id == &g.mission.id))
+                    .flat_map(|g| &g.packages)
+                    .map(|v| {
+                        row(
+                            v,
+                            &v.id,
+                            format!("[{}] {}", v.state, v.title),
+                            field_lines(&[
+                                ("id", v.id.clone()),
+                                ("state", v.state.clone()),
+                                ("title", v.title.clone()),
+                                ("mission_id", v.mission_id.clone()),
+                                ("task_class", v.task_class.clone()),
+                                ("as_of_sequence", as_of.clone()),
+                                ("observed_at", observed.clone()),
+                            ]),
+                        )
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    rows.extend(self.coding_rows(&as_of, &observed, "task"));
+                }
+                rows
+            }
+            View::Attempts => {
+                let mut rows: Vec<Row> = data
+                    .sessions
+                    .attempts
+                    .iter()
+                    .filter(|v| self.task.as_ref().is_none_or(|id| id == &v.work_package_id))
+                    .map(|v| {
+                        row(
+                            v,
+                            &v.id,
+                            format!("[{} / lease {}] {}", v.state, v.lease, v.id),
+                            field_lines(&[
+                                ("id", v.id.clone()),
+                                ("state", v.state.clone()),
+                                ("lease", v.lease.clone()),
+                                ("work_package_id", v.work_package_id.clone()),
+                                ("fence", v.fence.to_string()),
+                                ("as_of_sequence", as_of.clone()),
+                                ("observed_at", observed.clone()),
+                            ]),
+                        )
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    rows.extend(self.coding_rows(&as_of, &observed, "attempt"));
+                }
+                rows
+            }
             View::Review => data
                 .merge_rail
                 .candidates
@@ -311,6 +361,29 @@ impl Model {
                 .collect(),
         };
         self.replace_rows(rows);
+    }
+    fn coding_rows(&self, as_of: &str, observed: &str, surface: &str) -> Vec<Row> {
+        self.coding
+            .iter()
+            .map(|command| {
+                let label = match surface {
+                    "attempt" => format!("[{} / lease UNBOUND] coding attempt", command.status),
+                    _ => format!("[{}] coding {}", command.status, surface),
+                };
+                row(
+                    command,
+                    &command.id,
+                    label,
+                    field_lines(&[
+                        ("kind", command.kind.clone()),
+                        ("status", command.status.clone()),
+                        ("surface", surface.into()),
+                        ("as_of_sequence", as_of.into()),
+                        ("observed_at", observed.into()),
+                    ]),
+                )
+            })
+            .collect()
     }
     fn replace_rows(&mut self, rows: Vec<Row>) {
         self.rows = rows;
@@ -396,7 +469,11 @@ impl Model {
         if let Some(error) = &self.error {
             lines.push(format!("STALE / UNKNOWN: {}", terminal_text(error)));
         }
-        lines.extend(self.rows.iter().map(|r| format!("{} {}", r.id, r.label)));
+        lines.extend(
+            self.rows
+                .iter()
+                .map(|r| format!("{} {}", redact_ledger_hex(&r.id), r.label)),
+        );
         if self.rows.is_empty() {
             lines.push("zero rows, not a green fleet; unavailable subjects remain unknown.".into());
         }
@@ -441,6 +518,32 @@ mod tests {
         assert!(model
             .selected_detail()
             .contains("Waiting for an authenticated snapshot"));
+    }
+
+    #[test]
+    fn painted_surfaces_redact_sixty_four_hex() {
+        let hex = "ab".repeat(32);
+        let id = format!("cmd_{hex}");
+        let painted = row(
+            &serde_json::json!({"id": id, "status": "PENDING"}),
+            &id,
+            format!("label {id}"),
+            format!("human {id}"),
+        );
+        assert_eq!(painted.id, id);
+        assert!(!painted.label.contains(&hex));
+        assert!(!painted.human.contains(&hex));
+        assert!(!painted.raw.contains(&hex));
+        assert!(painted.raw.contains("cmd_<redacted>"));
+        let mut model = Model::default();
+        model.replace_rows(vec![painted]);
+        let text = model.plain();
+        assert!(!text.contains(&hex));
+        assert!(text.contains("cmd_<redacted>"));
+        assert_eq!(
+            redact_ledger_hex("unobserved'subject"),
+            "unobserved'subject"
+        );
     }
 
     #[test]

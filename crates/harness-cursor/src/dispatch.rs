@@ -43,6 +43,12 @@ pub fn dispatch_live_turn(
 
     let capture = capture_turn(factory, &prepared, &request.canaries)?;
     let events = Vec::new();
+    if events.is_empty() {
+        return Err(HarnessError::AdmissionRefused {
+            reason: "CURSOR_ACP_EVENTS_EMPTY: stream-json text ping is not a structured turn"
+                .into(),
+        });
+    }
     let events_blake3 = scan_events(&events, &request.canaries)?;
 
     Ok(LiveTurnOutcome {

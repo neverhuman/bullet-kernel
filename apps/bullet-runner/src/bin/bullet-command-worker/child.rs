@@ -3,7 +3,7 @@
 use super::claim_fd::SealedClaim;
 use super::error::{WorkerContext, WorkerError};
 use super::manifest::AdmittedManifest;
-use bullet_application::{CommandDispatchClaim, RunCodingPayload, RUN_CODING_KIND, RUN_DEMO_KIND};
+use bullet_application::{CommandDispatchClaim, RUN_CODING_KIND, RUN_DEMO_KIND};
 use std::io::Read;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
@@ -92,9 +92,8 @@ fn run_coding(
     receipt: &Path,
     deadline: Duration,
 ) -> Result<ChildOutput, WorkerError> {
-    let payload = RunCodingPayload::parse(&claim.request.payload)
-        .map_err(|error| WorkerError::input("COMMAND_CODING_PAYLOAD_INVALID", error.to_string()))?;
-    let mut args = coding::coding_runner_args(&payload)?;
+    let launch = coding::CodingLaunch::from_claim(claim)?;
+    let mut args = coding::coding_runner_args(&launch)?;
     args.extend([
         "--data-dir".into(),
         run_root.join("runner-journal").display().to_string(),
@@ -125,7 +124,7 @@ fn run_coding(
         .spawn()
         .worker("COMMAND_CHILD_SPAWN_FAILED", "spawn exact coding runner")?;
     let output = ProcessGuard::new(child).wait_with_output(deadline)?;
-    coding::write_coding_observation(receipt, claim.command_id.as_str(), &payload, &output)?;
+    coding::write_coding_observation(receipt, claim.command_id.as_str(), &launch, &output)?;
     Ok(output)
 }
 

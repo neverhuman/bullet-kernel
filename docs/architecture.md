@@ -68,9 +68,10 @@ Public `POST /api/v1/commands` returns the command's current durable phase.
 Exact owned retries retain their original subject; they do not create another
 command. `run_coding` task intent persists the accepted repository/base, scope,
 criteria, gates, dependencies, limits, and server-derived task revision and run
-tracking identities. These allocate no Runner, reservation or authority grant;
-the task reports
-`CODING_BINDING_ADMISSION_UNAVAILABLE` until execution authority is available.
+tracking identities. Admission binds a request-digest nonce and quota
+reservation so an admitted task may enter command dispatch. The observation
+reports `CODING_BINDING_ADMISSION_UNAVAILABLE` only when that binding is
+missing. Intent still allocates no Runner lease or live provider grant.
 The retired HTTP worker reconciler (`POST /internal/v1/commands/{id}/reconcile`)
 authenticates and then returns `410 WORKLOAD_API_UDS_REQUIRED`; workload mutation
 uses the separate internal Unix-socket boundary. Durable store and corruption

@@ -4,8 +4,10 @@ mod http;
 mod support;
 use bullet_adapters::SqliteLedger;
 use bullet_application::coding_tasks::{coding_run_id, RunCodingTaskPayload};
-use bullet_application::{CommandRequest, Ledger};
-use bullet_domain::RunnerId;
+use bullet_application::{
+    CommandDispatchStore, CommandRequest, ComponentCommandCompletionV1, Ledger,
+};
+use bullet_domain::{Digest, RunnerId};
 use http::*;
 use serde_json::{json, Value};
 use tokio::time::{timeout, Duration};
@@ -87,9 +89,14 @@ async fn coding_reads_and_submission_enforce_session_origin_csrf_and_closed_inte
         snapshot["data"]["task"],
         serde_json::from_str::<Value>(&body).unwrap()["payload"]["task"]
     );
-    assert_eq!(
-        snapshot["data"]["blockers"][0]["code"],
-        "CODING_BINDING_ADMISSION_UNAVAILABLE"
+    assert!(
+        snapshot["data"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|blocker| blocker["code"] != "CODING_BINDING_ADMISSION_UNAVAILABLE"),
+        "admitted v2 tasks bind nonce and quota: {}",
+        snapshot["data"]["blockers"]
     );
     let demo = request(
         server.addr,
@@ -209,5 +216,231 @@ async fn task_response_loss_restart_discovery_and_exact_retry_keep_server_subjec
     assert_eq!(snapshot["as_of_sequence"], discovery["as_of_sequence"]);
     assert_eq!(snapshot["data"]["task"], decoded["payload"]["task"]);
     assert_eq!(effects(&SqliteLedger::open(&path).unwrap()), before);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn v2_http_dispatch_settles_one_failure_and_refuses_a_second_spawn() {
+    let dir = support::private_tempdir();
+    let path = dir.path().join("coding.sqlite");
+    let server = Server::start(&path, Some(BOOT)).await;
+    let (cookie, csrf) = bootstrap(server.addr).await;
+    let headers = [
+        ("Cookie", cookie.as_str()),
+        ("Origin", ORIGIN),
+        ("X-Bullet-CSRF", csrf.as_str()),
+    ];
+    let body = coding("stack-d1");
+    let accepted = request(server.addr, "POST", "/api/v1/commands", &headers, &body).await;
+    assert_eq!(status(&accepted), 202);
+    let id = http::body(&accepted)["id"].as_str().unwrap().to_owned();
+    let mut ledger = SqliteLedger::open(&path).unwrap();
+    let runner = RunnerId::from_seed("d1-fake-worker");
+    let claim = ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:00.000Z")
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.command_id.as_str(), id);
+    assert!(
+        bullet_application::coding_tasks::task_payload(&claim.request)
+            .unwrap()
+            .is_some()
+    );
+    let receipt =
+        ComponentCommandCompletionV1::new(&claim, Digest::of(b"d1-fake-failure")).unwrap();
+    ledger
+        .settle_component_command_dispatch(
+            &claim.claim_id,
+            &runner,
+            1,
+            &receipt,
+            "2026-09-11T00:00:01.000Z",
+        )
+        .unwrap();
+    assert!(ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:02.000Z")
+        .unwrap()
+        .is_none());
+    let retry = request(server.addr, "POST", "/api/v1/commands", &headers, &body).await;
+    assert_eq!(status(&retry), 202);
+    assert_eq!(http::body(&retry)["id"], id);
+    assert_eq!(http::body(&retry)["status"], "UNKNOWN");
+    assert!(ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:03.000Z")
+        .unwrap()
+        .is_none());
+    let snapshot = check_snapshot(
+        &request(
+            server.addr,
+            "GET",
+            &format!("/api/v1/commands/{id}/coding"),
+            &headers,
+            "",
+        )
+        .await,
+    );
+    assert_ne!(snapshot["data"]["command"]["status"], "VERIFIED");
+    assert_eq!(snapshot["data"]["command"]["id"], id);
+    server.stop().await;
+}
+
+fn runner_bin() -> std::path::PathBuf {
+    let farmd = std::path::PathBuf::from(env!("CARGO_BIN_EXE_bullet-farmd"));
+    let mut candidates = vec![farmd.with_file_name("bullet-runner")];
+    if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
+        candidates.push(std::path::PathBuf::from(target).join("debug/bullet-runner"));
+    }
+    if let Some(found) = candidates.iter().find(|path| path.is_file()) {
+        return found.clone();
+    }
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("farmd manifest lives two levels under the workspace");
+    let status = std::process::Command::new(env!("CARGO"))
+        .args(["build", "--locked", "--bin", "bullet-runner"])
+        .current_dir(workspace)
+        .status()
+        .expect("COMMAND_RUNNER_BUILD_SPAWN");
+    assert!(
+        status.success(),
+        "COMMAND_RUNNER_BUILD_FAILED: cargo build --locked --bin bullet-runner"
+    );
+    candidates.push(workspace.join("target/debug/bullet-runner"));
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .expect("COMMAND_RUNNER_BIN_ABSENT: build bullet-runner in the farmd target")
+}
+
+fn write_stub(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let stub = dir.join("signed-in-stub");
+    let proposal = format!(
+        r#"{{"schema_version":1,"proposal_id":"cnt_{a}","producing_attempt_id":"atm_{b}","base_checkpoint_id":"ckp_{c}","base_checkpoint_digest":"{d}","operations":[{{"path":"PONG.txt","preimage":{{"kind":"absent"}},"mutation":{{"kind":"write","content_utf8":"PONG\n"}}}}],"gate_ids":["gat_{g}"]}}"#,
+        a = "1".repeat(64),
+        b = "2".repeat(64),
+        c = "3".repeat(64),
+        d = "4".repeat(64),
+        g = "8".repeat(64),
+    );
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o700)
+        .open(&stub)
+        .unwrap();
+    write!(file, "#!/bin/sh\nprintf '%s\\n' '{proposal}'\nexit 1\n").unwrap();
+    stub
+}
+
+#[tokio::test]
+async fn v2_http_then_real_runner_stub_retains_failure_and_refuses_a_second_spawn() {
+    let dir = support::private_tempdir();
+    let path = dir.path().join("coding.sqlite");
+    let server = Server::start(&path, Some(BOOT)).await;
+    let (cookie, csrf) = bootstrap(server.addr).await;
+    let headers = [
+        ("Cookie", cookie.as_str()),
+        ("Origin", ORIGIN),
+        ("X-Bullet-CSRF", csrf.as_str()),
+    ];
+    let body = coding("stack-d1-runner");
+    let accepted = request(server.addr, "POST", "/api/v1/commands", &headers, &body).await;
+    assert_eq!(status(&accepted), 202);
+    let id = http::body(&accepted)["id"].as_str().unwrap().to_owned();
+    let mut ledger = SqliteLedger::open(&path).unwrap();
+    let runner = RunnerId::from_seed("d1-real-runner");
+    let claim = ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:00.000Z")
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.command_id.as_str(), id);
+    let runner_bin = runner_bin();
+    let stub = write_stub(dir.path());
+    let workspace = dir.path().join("workspace");
+    let source = dir.path().join("source.git");
+    let preserve = dir.path().join("preserve");
+    let key = dir.path().join("candidate.key");
+    let recovery = dir.path().join("lease.recovery");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir_all(&preserve).unwrap();
+    std::fs::write(&key, []).unwrap();
+    std::fs::write(&recovery, []).unwrap();
+    let output = std::process::Command::new(&runner_bin)
+        .args([
+            "--provider",
+            "codex",
+            "--model",
+            "fixture-model",
+            "--signed-in-executable",
+        ])
+        .arg(&stub)
+        .args([
+            "--runner-id",
+            claim.runner_id.as_str(),
+            "--work-package-id",
+            &bullet_domain::WorkPackageId::from_seed("d1-real-runner").to_string(),
+            "--candidate-request-digest",
+            &claim.request.digest().to_hex(),
+            "--candidate-verification-key",
+        ])
+        .arg(&key)
+        .arg("--workspace-root")
+        .arg(&workspace)
+        .arg("--source-repo")
+        .arg(&source)
+        .args(["--base-sha", &"ab".repeat(20)])
+        .arg("--preservation-destination")
+        .arg(&preserve)
+        .args([
+            "--objective",
+            "Survive response loss",
+            "--gate-id",
+            &format!("gat_{}", "cd".repeat(32)),
+            "--scope",
+            "src/lib.rs",
+            "--idempotency-key",
+            "stack-d1-runner",
+            "--lease-recovery",
+        ])
+        .arg(&recovery)
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !combined.contains("sim"),
+        "real runner stub path must not name the simulator: {combined}"
+    );
+    assert_ne!(output.status.code(), Some(0));
+    let receipt = ComponentCommandCompletionV1::new(&claim, Digest::of(&output.stderr)).unwrap();
+    ledger
+        .settle_component_command_dispatch(
+            &claim.claim_id,
+            &runner,
+            1,
+            &receipt,
+            "2026-09-11T00:00:01.000Z",
+        )
+        .unwrap();
+    assert!(ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:02.000Z")
+        .unwrap()
+        .is_none());
+    let retry = request(server.addr, "POST", "/api/v1/commands", &headers, &body).await;
+    assert_eq!(status(&retry), 202);
+    assert_eq!(http::body(&retry)["id"], id);
+    assert_eq!(http::body(&retry)["status"], "UNKNOWN");
+    assert!(ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:03.000Z")
+        .unwrap()
+        .is_none());
     server.stop().await;
 }
