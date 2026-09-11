@@ -9,13 +9,9 @@ pub(super) fn list(session: &Session, after: u64, limit: u32) -> Result<Value, S
     if after > 9_007_199_254_740_991 || !(1..=100).contains(&limit) {
         return Err("COMMAND_DISCOVERY_CURSOR_INVALID".into());
     }
-    let response = http::request_query(
-        &session.farmd,
-        "GET",
+    let response = session.get(
         "/api/v1/commands",
         &[("after", &after.to_string()), ("limit", &limit.to_string())],
-        &[("Cookie", &session.cookie), ("Origin", &session.origin)],
-        None,
     )?;
     validate(session, response, after, limit)
 }

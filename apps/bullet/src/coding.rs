@@ -275,13 +275,7 @@ fn command_body(body: Value) -> Result<Value, String> {
 fn status(session: &Session, id: &str) -> Result<Value, String> {
     http::validate_secret(id, "cmd").map_err(|_| "COMMAND_ID_INVALID")?;
     let recorded = journal::reconciliation_request(session, id)?;
-    let response = http::request(
-        &session.farmd,
-        "GET",
-        &format!("/api/v1/commands/{id}"),
-        &[("Cookie", &session.cookie), ("Origin", &session.origin)],
-        None,
-    )?;
+    let response = session.get(&format!("/api/v1/commands/{id}"), &[])?;
     if response.status != 200 {
         return Err(format!("FARMD_COMMAND_REFUSED: HTTP {}", response.status));
     }

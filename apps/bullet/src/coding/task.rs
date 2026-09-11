@@ -86,13 +86,7 @@ pub(super) fn refusal(response: &http::HttpResponse) -> String {
 pub(super) fn get(session: &Session, id: &str) -> Result<models::CodingRunSnapshot, String> {
     let id = bullet_domain::CommandId::parse(id).map_err(|_| "COMMAND_ID_INVALID")?;
     let recorded = journal::reconciliation_request(session, id.as_str())?;
-    let response = http::request(
-        &session.farmd,
-        "GET",
-        &format!("/api/v1/commands/{id}/coding"),
-        &[("Cookie", &session.cookie), ("Origin", &session.origin)],
-        None,
-    )?;
+    let response = session.get(&format!("/api/v1/commands/{id}/coding"), &[])?;
     if response.status != 200 {
         return Err(refusal(&response));
     }
