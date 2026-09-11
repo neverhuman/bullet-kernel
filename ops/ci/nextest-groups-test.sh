@@ -10,7 +10,7 @@ for tool in awk cargo-nextest cmp cp jq mktemp rg sort; do
 done
 
 readonly group=sqlite-migration-identity
-readonly filter='(binary_id(bullet-adapters) & test(sqlite::migrations::)) | (binary_id(bullet-adapters::candidate_preparation) & test(=schema::exact_schema_eighteen_is_refused_without_byte_mutation))'
+readonly migration_filter='(binary_id(bullet-adapters) & test(sqlite::migrations::)) | (binary_id(bullet-adapters::candidate_preparation) & test(=schema::exact_schema_eighteen_is_refused_without_byte_mutation))'
 readonly receipt_group=command-receipt-filesystem-hostiles
 readonly receipt_filter='binary_id(bullet-runner::bin/bullet-command-worker) & (test(=receipt::tests::candidate_identity::cleanup_target_and_every_tombstone_subject_are_exact) | test(=receipt::tests::candidate_identity::preservation_token_state_artifact_and_cleanup_substitutions_refuse) | test(=receipt::tests::ledger::semantic_ledger_substitutions_refuse_without_further_mutation) | test(=receipt::tests::provider_fixture::provider_transcript_drift_truncation_open_shape_and_symlink_refuse) | test(=receipt::tests::provider_fixture::self_consistent_provider_operation_substitutions_refuse))'
 readonly receipt_timeout='slow-timeout = { period = "45s", terminate-after = 2 }'
@@ -22,7 +22,7 @@ trap cleanup EXIT
 validate_timeout_config() {
   local config="$1"
   awk -v fast_timeout="$fast_timeout" \
-    -v migration_filter="filter = '$filter'" \
+    -v migration_filter="filter = '$migration_filter'" \
     -v migration_group="test-group = 'sqlite-migration-identity'" \
     -v migration_group_line="sqlite-migration-identity = { max-threads = 1 }" \
     -v receipt_filter="filter = '$receipt_filter'" \
@@ -302,7 +302,7 @@ done
   || { refuse NEXTEST_SCHEMA_GROUP_INVALID 'expected one max-one migration group'; exit 1; }
 [[ "$(rg -Fxc 'test-group = '\''sqlite-migration-identity'\''' .config/nextest.toml)" -eq 1 ]] \
   || { refuse NEXTEST_SCHEMA_GROUP_INVALID 'group must have exactly one override'; exit 1; }
-rg -Fxq "filter = '$filter'" .config/nextest.toml \
+rg -Fxq "filter = '$migration_filter'" .config/nextest.toml \
   || { refuse NEXTEST_SCHEMA_FILTER_DRIFT 'migration group filter changed'; exit 1; }
 [[ "$(rg -Fxc "$receipt_group = { max-threads = 1 }" .config/nextest.toml)" -eq 1 ]] \
   || { refuse NEXTEST_RECEIPT_GROUP_INVALID 'expected one max-one filesystem-hostile group'; exit 1; }
@@ -332,7 +332,7 @@ cargo nextest --color never show-config test-groups --locked --workspace "${NEXT
 
 rg -Fxq 'group: sqlite-migration-identity (max threads = 1)' "$test_root/show-config" \
   || { refuse NEXTEST_SCHEMA_GROUP_INVALID 'nextest did not apply max-threads=1'; exit 1; }
-rg -Fq "* override for fast profile with filter '$filter':" "$test_root/show-config" \
+rg -Fq "* override for fast profile with filter '$migration_filter':" "$test_root/show-config" \
   || { refuse NEXTEST_SCHEMA_OVERRIDE_MISSING 'nextest did not apply the exact fast override'; exit 1; }
 
 awk '
