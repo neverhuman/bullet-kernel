@@ -141,6 +141,7 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         .as_deref()
         .or(reconnect.as_deref())
         .map(crate::client::terminal_text)
+        .map(|text| model::redact_ledger_hex(&text))
         .unwrap_or_default()
         .replace('\'', "'\\''");
     let path = reconnect_state_dir(&directory);

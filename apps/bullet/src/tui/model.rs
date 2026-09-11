@@ -52,21 +52,46 @@ pub(super) struct Row {
     pub(super) human: String,
     pub(super) raw: String,
 }
+/// Replace each 64-hex run so TUI paint, `--once`, and detach never leak ledger ids.
+pub(super) fn redact_ledger_hex(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut hex = String::new();
+    let flush = |out: &mut String, hex: &mut String| {
+        if hex.len() == 64 {
+            out.push_str("<redacted>");
+        } else {
+            out.push_str(hex);
+        }
+        hex.clear();
+    };
+    for c in text.chars() {
+        if c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_ascii_lowercase()) {
+            hex.push(c);
+        } else {
+            flush(&mut out, &mut hex);
+            out.push(c);
+        }
+    }
+    flush(&mut out, &mut hex);
+    out
+}
+
 fn row(value: &impl Serialize, id: &str, label: String, human: String) -> Row {
     Row {
         id: id.into(),
-        label: terminal_text(&label),
-        human: human
+        label: terminal_text(&redact_ledger_hex(&label)),
+        human: redact_ledger_hex(&human)
             .lines()
             .map(terminal_text)
             .collect::<Vec<_>>()
             .join("\n"),
-        raw: serde_json::to_string_pretty(value)
-            .unwrap_or_else(|_| "ENCODING_UNAVAILABLE".into())
-            .lines()
-            .map(terminal_text)
-            .collect::<Vec<_>>()
-            .join("\n"),
+        raw: redact_ledger_hex(
+            &serde_json::to_string_pretty(value).unwrap_or_else(|_| "ENCODING_UNAVAILABLE".into()),
+        )
+        .lines()
+        .map(terminal_text)
+        .collect::<Vec<_>>()
+        .join("\n"),
     }
 }
 
@@ -444,7 +469,11 @@ impl Model {
         if let Some(error) = &self.error {
             lines.push(format!("STALE / UNKNOWN: {}", terminal_text(error)));
         }
-        lines.extend(self.rows.iter().map(|r| format!("{} {}", r.id, r.label)));
+        lines.extend(
+            self.rows
+                .iter()
+                .map(|r| format!("{} {}", redact_ledger_hex(&r.id), r.label)),
+        );
         if self.rows.is_empty() {
             lines.push("zero rows, not a green fleet; unavailable subjects remain unknown.".into());
         }
@@ -489,6 +518,29 @@ mod tests {
         assert!(model
             .selected_detail()
             .contains("Waiting for an authenticated snapshot"));
+    }
+
+    #[test]
+    fn painted_surfaces_redact_sixty_four_hex() {
+        let hex = "ab".repeat(32);
+        let id = format!("cmd_{hex}");
+        let painted = row(
+            &serde_json::json!({"id": id, "status": "PENDING"}),
+            &id,
+            format!("label {id}"),
+            format!("human {id}"),
+        );
+        assert_eq!(painted.id, id);
+        assert!(!painted.label.contains(&hex));
+        assert!(!painted.human.contains(&hex));
+        assert!(!painted.raw.contains(&hex));
+        assert!(painted.raw.contains("cmd_<redacted>"));
+        let mut model = Model::default();
+        model.replace_rows(vec![painted]);
+        let text = model.plain();
+        assert!(!text.contains(&hex));
+        assert!(text.contains("cmd_<redacted>"));
+        assert_eq!(redact_ledger_hex("unobserved'subject"), "unobserved'subject");
     }
 
     #[test]

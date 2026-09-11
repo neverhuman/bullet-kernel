@@ -73,9 +73,12 @@ impl Fixture {
                     assert!(bytes.len() < 16_384);
                 }
                 let request = String::from_utf8(bytes).unwrap();
+                let snapshot_get =
+                    request.starts_with("GET /api/v1/operator-snapshot HTTP/1.1\r\n");
+                let commands_get = request.starts_with("GET /api/v1/commands HTTP/1.1\r\n");
                 assert!(
-                    request.starts_with("GET /api/v1/operator-snapshot HTTP/1.1\r\n"),
-                    "TUI must only read the snapshot, including detach"
+                    snapshot_get || commands_get,
+                    "TUI must only read the snapshot or command list, including detach"
                 );
                 let headers = request.to_ascii_lowercase();
                 assert!(headers.contains(&format!("\r\ncookie: {cookie}\r\n")));
@@ -87,7 +90,9 @@ impl Fixture {
                 if end.load(Ordering::SeqCst) {
                     break;
                 }
-                let body = if bad.load(Ordering::SeqCst) {
+                let body = if commands_get {
+                    r#"{"data":{"commands":[]}}"#.into()
+                } else if bad.load(Ordering::SeqCst) {
                     "{}".into()
                 } else {
                     snapshot()
