@@ -22,6 +22,24 @@ pub(super) struct Session {
     pub(super) csrf: String,
 }
 
+impl Session {
+    pub(super) fn get(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<super::http::HttpResponse, String> {
+        #[cfg(unix)]
+        {
+            crate::client::authenticated_get(&self.credentials, path, query)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, query);
+            Err("AUTH_PRIVATE_STORE_UNSUPPORTED".into())
+        }
+    }
+}
+
 impl ConnectionArgs {
     #[cfg(unix)]
     pub(super) fn load(self) -> Result<Session, String> {

@@ -52,18 +52,34 @@ pub(crate) fn snapshot_response(
 }
 
 #[cfg(unix)]
-pub(crate) fn operator_snapshot(
+pub(crate) fn authenticated_get(
     credentials: &crate::auth::store::Credentials,
-) -> Result<models::OperatorSnapshot, String> {
-    snapshot_response(crate::coding::http::request(
+    path: &str,
+    query: &[(&str, &str)],
+) -> Result<crate::coding::http::HttpResponse, String> {
+    let owner = crate::auth::session::status(credentials)?;
+    crate::coding::http::request_query(
         &credentials.farmd,
         "GET",
-        "/api/v1/operator-snapshot",
+        path,
+        query,
         &[
             ("Cookie", &credentials.cookie),
             ("Origin", &credentials.origin),
+            ("x-bullet-expected-session", &owner.session_id),
         ],
         None,
+    )
+}
+
+#[cfg(unix)]
+pub(crate) fn operator_snapshot(
+    credentials: &crate::auth::store::Credentials,
+) -> Result<models::OperatorSnapshot, String> {
+    snapshot_response(authenticated_get(
+        credentials,
+        "/api/v1/operator-snapshot",
+        &[],
     )?)
 }
 
@@ -71,18 +87,11 @@ pub(crate) fn operator_snapshot(
 pub(crate) fn coding_commands(
     credentials: &crate::auth::store::Credentials,
 ) -> Result<models::CommandDiscoverySnapshot, String> {
-    let response = crate::coding::http::request(
-        &credentials.farmd,
-        "GET",
-        "/api/v1/commands",
-        &[
-            ("Cookie", &credentials.cookie),
-            ("Origin", &credentials.origin),
-        ],
-        None,
-    )?;
-    command_response(response)
+    command_response(authenticated_get(credentials, "/api/v1/commands", &[])?)
 }
+
+#[cfg(all(test, unix))]
+mod session_binding_tests;
 
 pub(crate) fn command_response(
     response: crate::coding::http::HttpResponse,
