@@ -6,7 +6,7 @@ mod ui;
 use clap::Args;
 use std::path::PathBuf;
 
-#[derive(Args)]
+#[derive(Args, Default)]
 pub(crate) struct TuiArgs {
     /// Private credentials saved by bullet auth login.
     #[arg(long)]

@@ -2,10 +2,10 @@
 
 Status: current source components; not an installed or release-qualified operator workflow
 Owner: Bullet Farm maintainers
-Last reviewed: 2026-09-10
+Last reviewed: 2026-09-11
 Source of truth: `apps/bullet/src/{main,auth,client,coding,mission,tui,transaction,authority,provider,maintenance,contracts}.rs`,
 their supporting modules, `apps/bullet/src/authority/mint.rs`, and the process-bin sources below.
-<!-- bullet-doc-review:v1 subject=6cde6376aca767258b67c29fe3f0434ebcc47c4b max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/args.rs,apps/bullet/src/coding/task.rs,apps/bullet-farmd/src/commands/coding.rs,crates/application/src/coding_tasks.rs,crates/application/src/coding_tasks/validation.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
+<!-- bullet-doc-review:v1 subject=53f6d96c335fb28cff7e631d8faa668681761dfb max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/args.rs,apps/bullet/src/coding/task.rs,apps/bullet-farmd/src/commands/coding.rs,crates/application/src/coding_tasks.rs,crates/application/src/coding_tasks/validation.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
 
 `auth`, `coding`, remote `mission` reads and `tui` consume the loopback daemon. The local ledger helpers
 and guarded provider qualification paths remain separate. The operator controls
@@ -13,12 +13,18 @@ below have component proofs; they do not establish installed provider execution,
 independent verification, integration or release acceptance. Operating HOLD
 continues until its actual predecessor admission and operator checkpoint.
 
-Interactive `bullet tui` draws CONNECTING before its first network request;
-navigation and Ctrl+C detach remain available while that request waits. An
-explicit `--subject` is selected when the first valid snapshot arrives and is
-retained in the reconnect command if the client detaches first. `--once`, piped
-output and `TERM=dumb` retain synchronous plain-text snapshot behavior. Multiple
-consoles share short credential reads; detaching one does not stop another.
+`bullet` and `bulletfarm` with no subcommand run `tui` with default flags.
+`bullet --help` still lists every subcommand. A non-TTY or `TERM=dumb` client
+keeps the existing `TUI_TERMINAL_REQUIRED: use --once` refuse unless `--once`
+is set. The default durable Head conversation remains unimplemented.
+
+Interactive `bullet tui` (and the no-args default) draws CONNECTING before its
+first network request; navigation and Ctrl+C detach remain available while that
+request waits. An explicit `--subject` is selected when the first valid snapshot
+arrives and is retained in the reconnect command if the client detaches first.
+`--once`, piped output and `TERM=dumb` retain synchronous plain-text snapshot
+behavior. Multiple consoles share short credential reads; detaching one does
+not stop another.
 
 ## Environment
 
@@ -53,7 +59,7 @@ consoles share short credential reads; detaching one does not stop another.
 | `auth status` | check the saved session against the daemon and show nonsecret operator/session IDs and expiry |
 | `auth revoke` / `auth logout` | revoke the current server session; remove local credentials only after a matching acknowledgement |
 | `auth forget` | remove only the local credential copy; does not revoke server authority or remove request journals |
-| `tui` | read authenticated atomic operator snapshots, navigate missions/tasks/Attempts/Candidates/events/context, and detach with an exact reconnect subject |
+| `tui` (also the no-args default) | read authenticated atomic operator snapshots, navigate missions/tasks/Attempts/Candidates/events/context, and detach with an exact reconnect subject |
 | `coding submit` | journal the exact `run_coding` envelope before POST using saved credentials. Requires `--task <contract.json>`, `--account`, `--provider` ∈ `claude\|codex\|cursor\|antigravity`, and `--model`; optional `--effort` records the exact requested setting, and `--idempotency-key` reuses the original journal on exact retry. Secret-bearing argument flags are retired. |
 | `coding list` | discover this operator's durable command IDs and current phases after journal loss; `--after` resumes the returned cursor and `--limit` bounds each page to 1–100 commands |
 | `coding retry <id>` | resend only the exact saved journal, including a historical owned request; missing journal refuses without submitting |

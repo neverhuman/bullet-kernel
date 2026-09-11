@@ -26,7 +26,7 @@ use std::process::ExitCode;
 #[command(name = "bullet", about = "Bullet Farm CLI")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -271,7 +271,10 @@ fn demo() -> Result<(), String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command {
+    match cli
+        .command
+        .unwrap_or_else(|| Commands::Tui(tui::TuiArgs::default()))
+    {
         Commands::Provider { command } => provider::run(command),
         Commands::Dogfood { command } => dogfood::run(*command),
         Commands::Coding { command } => coding::run(command),
@@ -289,5 +292,41 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod default_command_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn no_args_selects_default_tui() {
+        let cli = Cli::try_parse_from(["bullet"]).expect("no-args parse");
+        assert!(
+            matches!(cli.command, None),
+            "no-args must leave the subcommand absent so main can default to tui"
+        );
+        let command = cli
+            .command
+            .unwrap_or_else(|| Commands::Tui(tui::TuiArgs::default()));
+        assert!(matches!(command, Commands::Tui(_)));
+    }
+
+    #[test]
+    fn help_still_lists_subcommands() {
+        let help = match Cli::try_parse_from(["bullet", "--help"]) {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("help must exit the parser"),
+        };
+        assert!(help.contains("tui"), "{help}");
+        assert!(help.contains("coding"), "{help}");
+        assert!(help.contains("auth"), "{help}");
+    }
+
+    #[test]
+    fn explicit_tui_once_is_unchanged() {
+        let cli = Cli::try_parse_from(["bullet", "tui", "--once"]).expect("tui --once");
+        assert!(matches!(cli.command, Some(Commands::Tui(_))));
     }
 }
