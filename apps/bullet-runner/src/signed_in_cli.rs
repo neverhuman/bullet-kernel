@@ -8,9 +8,10 @@ use bullet_domain::Observation;
 use bullet_harness_core::{
     unsupported, Ack, AgentEvent, AgentEventKind, AuthChallenge, CapabilityMatrix, CompactRequest,
     ContextTransition, EventId, HarnessAdapter, HarnessDescriptor, HarnessError,
-    HarnessEventStream, HarnessResult, InvocationId, ModelSnapshot, PermissionDecision,
-    PlanDecision, ProbeResult, ProfileRef, PromotionStage, QuotaObservation, ResumeSession,
-    SessionCheckpoint, SessionHandle, StartSession, SteeringMessage, Turn, TurnHandle,
+    HarnessEventStream, HarnessResult, InvocationId, ModelSnapshot, PatchProposal,
+    PermissionDecision, PlanDecision, ProbeResult, ProfileRef, PromotionStage, QuotaObservation,
+    ResumeSession, SessionCheckpoint, SessionHandle, StartSession, SteeringMessage, Turn,
+    TurnHandle,
 };
 use chrono::Utc;
 use serde_json::json;
@@ -171,6 +172,12 @@ impl HarnessAdapter for SignedInCliAdapter {
         })?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let invocation = InvocationId::new(session.session_id.as_str());
+        let mut payload = json!({ "exit": output.status.code() });
+        if let Ok(proposal) = PatchProposal::extract_from_text(&stdout) {
+            if let Ok(value) = proposal.authoritative_value() {
+                payload["proposal"] = value;
+            }
+        }
         *self
             .events
             .lock()
@@ -187,7 +194,7 @@ impl HarnessAdapter for SignedInCliAdapter {
             timestamp: Utc::now(),
             sequence: 0,
             causation_id: None,
-            payload: json!({ "stdout": stdout, "exit": output.status.code() }),
+            payload,
             raw_artifact: None,
         }];
         Ok(TurnHandle {

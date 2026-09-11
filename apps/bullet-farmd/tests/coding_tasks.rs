@@ -4,8 +4,10 @@ mod http;
 mod support;
 use bullet_adapters::SqliteLedger;
 use bullet_application::coding_tasks::{coding_run_id, RunCodingTaskPayload};
-use bullet_application::{CommandRequest, Ledger};
-use bullet_domain::RunnerId;
+use bullet_application::{
+    CommandDispatchStore, CommandRequest, ComponentCommandCompletionV1, Ledger,
+};
+use bullet_domain::{Digest, RunnerId};
 use http::*;
 use serde_json::{json, Value};
 use tokio::time::{timeout, Duration};
@@ -214,5 +216,70 @@ async fn task_response_loss_restart_discovery_and_exact_retry_keep_server_subjec
     assert_eq!(snapshot["as_of_sequence"], discovery["as_of_sequence"]);
     assert_eq!(snapshot["data"]["task"], decoded["payload"]["task"]);
     assert_eq!(effects(&SqliteLedger::open(&path).unwrap()), before);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn v2_http_dispatch_settles_one_failure_and_refuses_a_second_spawn() {
+    let dir = support::private_tempdir();
+    let path = dir.path().join("coding.sqlite");
+    let server = Server::start(&path, Some(BOOT)).await;
+    let (cookie, csrf) = bootstrap(server.addr).await;
+    let headers = [
+        ("Cookie", cookie.as_str()),
+        ("Origin", ORIGIN),
+        ("X-Bullet-CSRF", csrf.as_str()),
+    ];
+    let body = coding("stack-d1");
+    let accepted = request(server.addr, "POST", "/api/v1/commands", &headers, &body).await;
+    assert_eq!(status(&accepted), 202);
+    let id = http::body(&accepted)["id"].as_str().unwrap().to_owned();
+    let mut ledger = SqliteLedger::open(&path).unwrap();
+    let runner = RunnerId::from_seed("d1-fake-worker");
+    let claim = ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:00.000Z")
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.command_id.as_str(), id);
+    assert!(
+        bullet_application::coding_tasks::task_payload(&claim.request)
+            .unwrap()
+            .is_some()
+    );
+    let receipt =
+        ComponentCommandCompletionV1::new(&claim, Digest::of(b"d1-fake-failure")).unwrap();
+    ledger
+        .settle_component_command_dispatch(
+            &claim.claim_id,
+            &runner,
+            1,
+            &receipt,
+            "2026-09-11T00:00:01.000Z",
+        )
+        .unwrap();
+    assert!(ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:02.000Z")
+        .unwrap()
+        .is_none());
+    let retry = request(server.addr, "POST", "/api/v1/commands", &headers, &body).await;
+    assert_eq!(status(&retry), 202);
+    assert_eq!(http::body(&retry)["id"], id);
+    assert_eq!(http::body(&retry)["status"], "UNKNOWN");
+    assert!(ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:03.000Z")
+        .unwrap()
+        .is_none());
+    let snapshot = check_snapshot(
+        &request(
+            server.addr,
+            "GET",
+            &format!("/api/v1/commands/{id}/coding"),
+            &headers,
+            "",
+        )
+        .await,
+    );
+    assert_ne!(snapshot["data"]["command"]["status"], "VERIFIED");
+    assert_eq!(snapshot["data"]["command"]["id"], id);
     server.stop().await;
 }
