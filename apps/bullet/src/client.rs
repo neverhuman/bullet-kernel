@@ -67,6 +67,46 @@ pub(crate) fn operator_snapshot(
     )?)
 }
 
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct CodingCommand {
+    pub(crate) id: String,
+    pub(crate) status: String,
+    pub(crate) kind: String,
+}
+
+#[cfg(unix)]
+pub(crate) fn coding_commands(
+    credentials: &crate::auth::store::Credentials,
+) -> Result<Vec<CodingCommand>, String> {
+    let response = crate::coding::http::request(
+        &credentials.farmd,
+        "GET",
+        "/api/v1/commands",
+        &[
+            ("Cookie", &credentials.cookie),
+            ("Origin", &credentials.origin),
+        ],
+        None,
+    )?;
+    if response.status != 200 {
+        return Err(format!("FARMD_COMMANDS_REFUSED: HTTP {}", response.status));
+    }
+    let commands = response.body["data"]["commands"]
+        .as_array()
+        .ok_or("FARMD_COMMANDS_INVALID")?;
+    Ok(commands
+        .iter()
+        .filter(|command| command["kind"] == "run_coding")
+        .filter_map(|command| {
+            Some(CodingCommand {
+                id: command["id"].as_str()?.to_owned(),
+                status: command["status"].as_str()?.to_owned(),
+                kind: command["kind"].as_str()?.to_owned(),
+            })
+        })
+        .collect())
+}
+
 /// Escape terminal controls and directional overrides without changing ordinary Unicode.
 pub(crate) fn terminal_text(value: &str) -> String {
     value

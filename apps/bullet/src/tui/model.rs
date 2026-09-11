@@ -1,4 +1,4 @@
-use crate::client::{models::OperatorSnapshot, terminal_text};
+use crate::client::{models::OperatorSnapshot, terminal_text, CodingCommand};
 use serde::Serialize;
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -81,6 +81,7 @@ fn field_lines(pairs: &[(&str, String)]) -> String {
 #[derive(Default)]
 pub(super) struct Model {
     pub(super) snapshot: Option<OperatorSnapshot>,
+    pub(super) coding: Vec<CodingCommand>,
     pub(super) error: Option<String>,
     pub(super) view: View,
     pub(super) rows: Vec<Row>,
@@ -114,6 +115,12 @@ impl Model {
                 self.rebuild();
             }
             Err(error) => self.error = Some(error),
+        }
+    }
+    pub(super) fn set_coding(&mut self, commands: Vec<CodingCommand>) {
+        self.coding = commands;
+        if self.snapshot.is_some() {
+            self.rebuild();
         }
     }
     pub(super) fn selected(&self) -> Option<usize> {
@@ -185,69 +192,87 @@ impl Model {
         let observed = snapshot.observed_at.clone();
         let data = &snapshot.data;
         let rows = match self.view {
-            View::Missions => data
-                .missions
-                .iter()
-                .map(|v| {
-                    row(
-                        v,
-                        &v.id,
-                        format!("[{}] {}", v.state, v.title),
-                        field_lines(&[
-                            ("id", v.id.clone()),
-                            ("state", v.state.clone()),
-                            ("title", v.title.clone()),
-                            ("objective", v.objective.clone()),
-                            ("as_of_sequence", as_of.clone()),
-                            ("observed_at", observed.clone()),
-                        ]),
-                    )
-                })
-                .collect(),
-            View::Tasks => data
-                .graphs
-                .iter()
-                .filter(|g| self.mission.as_ref().is_none_or(|id| id == &g.mission.id))
-                .flat_map(|g| &g.packages)
-                .map(|v| {
-                    row(
-                        v,
-                        &v.id,
-                        format!("[{}] {}", v.state, v.title),
-                        field_lines(&[
-                            ("id", v.id.clone()),
-                            ("state", v.state.clone()),
-                            ("title", v.title.clone()),
-                            ("mission_id", v.mission_id.clone()),
-                            ("task_class", v.task_class.clone()),
-                            ("as_of_sequence", as_of.clone()),
-                            ("observed_at", observed.clone()),
-                        ]),
-                    )
-                })
-                .collect(),
-            View::Attempts => data
-                .sessions
-                .attempts
-                .iter()
-                .filter(|v| self.task.as_ref().is_none_or(|id| id == &v.work_package_id))
-                .map(|v| {
-                    row(
-                        v,
-                        &v.id,
-                        format!("[{} / lease {}] {}", v.state, v.lease, v.id),
-                        field_lines(&[
-                            ("id", v.id.clone()),
-                            ("state", v.state.clone()),
-                            ("lease", v.lease.clone()),
-                            ("work_package_id", v.work_package_id.clone()),
-                            ("fence", v.fence.to_string()),
-                            ("as_of_sequence", as_of.clone()),
-                            ("observed_at", observed.clone()),
-                        ]),
-                    )
-                })
-                .collect(),
+            View::Missions => {
+                let mut rows: Vec<Row> = data
+                    .missions
+                    .iter()
+                    .map(|v| {
+                        row(
+                            v,
+                            &v.id,
+                            format!("[{}] {}", v.state, v.title),
+                            field_lines(&[
+                                ("id", v.id.clone()),
+                                ("state", v.state.clone()),
+                                ("title", v.title.clone()),
+                                ("objective", v.objective.clone()),
+                                ("as_of_sequence", as_of.clone()),
+                                ("observed_at", observed.clone()),
+                            ]),
+                        )
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    rows.extend(self.coding_rows(&as_of, &observed, "mission"));
+                }
+                rows
+            }
+            View::Tasks => {
+                let mut rows: Vec<Row> = data
+                    .graphs
+                    .iter()
+                    .filter(|g| self.mission.as_ref().is_none_or(|id| id == &g.mission.id))
+                    .flat_map(|g| &g.packages)
+                    .map(|v| {
+                        row(
+                            v,
+                            &v.id,
+                            format!("[{}] {}", v.state, v.title),
+                            field_lines(&[
+                                ("id", v.id.clone()),
+                                ("state", v.state.clone()),
+                                ("title", v.title.clone()),
+                                ("mission_id", v.mission_id.clone()),
+                                ("task_class", v.task_class.clone()),
+                                ("as_of_sequence", as_of.clone()),
+                                ("observed_at", observed.clone()),
+                            ]),
+                        )
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    rows.extend(self.coding_rows(&as_of, &observed, "task"));
+                }
+                rows
+            }
+            View::Attempts => {
+                let mut rows: Vec<Row> = data
+                    .sessions
+                    .attempts
+                    .iter()
+                    .filter(|v| self.task.as_ref().is_none_or(|id| id == &v.work_package_id))
+                    .map(|v| {
+                        row(
+                            v,
+                            &v.id,
+                            format!("[{} / lease {}] {}", v.state, v.lease, v.id),
+                            field_lines(&[
+                                ("id", v.id.clone()),
+                                ("state", v.state.clone()),
+                                ("lease", v.lease.clone()),
+                                ("work_package_id", v.work_package_id.clone()),
+                                ("fence", v.fence.to_string()),
+                                ("as_of_sequence", as_of.clone()),
+                                ("observed_at", observed.clone()),
+                            ]),
+                        )
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    rows.extend(self.coding_rows(&as_of, &observed, "attempt"));
+                }
+                rows
+            }
             View::Review => data
                 .merge_rail
                 .candidates
@@ -311,6 +336,29 @@ impl Model {
                 .collect(),
         };
         self.replace_rows(rows);
+    }
+    fn coding_rows(&self, as_of: &str, observed: &str, surface: &str) -> Vec<Row> {
+        self.coding
+            .iter()
+            .map(|command| {
+                let label = match surface {
+                    "attempt" => format!("[{} / lease UNBOUND] coding attempt", command.status),
+                    _ => format!("[{}] coding {}", command.status, surface),
+                };
+                row(
+                    command,
+                    &command.id,
+                    label,
+                    field_lines(&[
+                        ("kind", command.kind.clone()),
+                        ("status", command.status.clone()),
+                        ("surface", surface.into()),
+                        ("as_of_sequence", as_of.into()),
+                        ("observed_at", observed.into()),
+                    ]),
+                )
+            })
+            .collect()
     }
     fn replace_rows(&mut self, rows: Vec<Row>) {
         self.rows = rows;
