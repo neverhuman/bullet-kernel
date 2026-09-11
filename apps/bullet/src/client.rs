@@ -72,16 +72,19 @@ pub(crate) struct CodingCommand {
     pub(crate) id: String,
     pub(crate) status: String,
     pub(crate) kind: String,
+    pub(crate) blockers: Vec<String>,
 }
 
 #[cfg(unix)]
 pub(crate) fn coding_commands(
     credentials: &crate::auth::store::Credentials,
-) -> Result<Vec<CodingCommand>, String> {
-    let response = crate::coding::http::request(
+    after: u64,
+) -> Result<(Vec<CodingCommand>, Option<u64>), String> {
+    let response = crate::coding::http::request_query(
         &credentials.farmd,
         "GET",
         "/api/v1/commands",
+        &[("after", &after.to_string()), ("limit", "50")],
         &[
             ("Cookie", &credentials.cookie),
             ("Origin", &credentials.origin),
@@ -94,17 +97,64 @@ pub(crate) fn coding_commands(
     let commands = response.body["data"]["commands"]
         .as_array()
         .ok_or("FARMD_COMMANDS_INVALID")?;
-    Ok(commands
-        .iter()
-        .filter(|command| command["kind"] == "run_coding")
-        .filter_map(|command| {
-            Some(CodingCommand {
-                id: command["id"].as_str()?.to_owned(),
-                status: command["status"].as_str()?.to_owned(),
-                kind: command["kind"].as_str()?.to_owned(),
+    let next_after = response.body["data"]["next_after"].as_u64();
+    Ok((
+        commands
+            .iter()
+            .filter(|command| command["kind"] == "run_coding")
+            .filter_map(|command| {
+                Some(CodingCommand {
+                    id: command["id"].as_str()?.to_owned(),
+                    status: command["status"].as_str()?.to_owned(),
+                    kind: command["kind"].as_str()?.to_owned(),
+                    blockers: command["blockers"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|blocker| {
+                            blocker["code"]
+                                .as_str()
+                                .or_else(|| blocker.as_str())
+                                .map(str::to_owned)
+                        })
+                        .collect(),
+                })
             })
-        })
-        .collect())
+            .collect(),
+        next_after,
+    ))
+}
+
+/// Same required names as `coding harness-check`; does not spawn a provider.
+pub(crate) fn harness_outcome() -> &'static str {
+    const REQUIRED: &[&str] = &[
+        "BULLET_HARNESS_HOME",
+        "BULLET_HARNESS_WORK_PACKAGE_ID",
+        "BULLET_HARNESS_CANDIDATE_REQUEST_DIGEST",
+        "BULLET_HARNESS_CANDIDATE_VERIFICATION_KEY",
+        "BULLET_HARNESS_WORKSPACE_ROOT",
+        "BULLET_HARNESS_SOURCE_REPO",
+        "BULLET_HARNESS_BASE_SHA",
+        "BULLET_HARNESS_PRESERVATION",
+        "BULLET_HARNESS_OBJECTIVE",
+        "BULLET_HARNESS_GATE_ID",
+        "BULLET_HARNESS_SCOPE",
+        "BULLET_HARNESS_IDEMPOTENCY_KEY",
+        "BULLET_HARNESS_LEASE_SOCKET",
+        "BULLET_HARNESS_FARMD_UID",
+        "BULLET_HARNESS_SOCKET_GID",
+        "BULLET_HARNESS_LEASE_RECOVERY",
+        "BULLET_HARNESS_EXECUTABLE",
+    ];
+    if REQUIRED.iter().all(|name| {
+        std::env::var(name)
+            .ok()
+            .is_some_and(|value| !value.is_empty())
+    }) {
+        "BOUND"
+    } else {
+        "UNBOUND"
+    }
 }
 
 /// Escape terminal controls and directional overrides without changing ordinary Unicode.

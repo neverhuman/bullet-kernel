@@ -3,6 +3,7 @@
 
 use bullet_domain::{CommandId, WorkPackageId};
 use serde_json::{json, Value};
+use std::path::Path;
 
 /// Same seed the command worker uses for v2 `run_coding` work packages.
 pub(super) const WORK_PACKAGE_SEED: &str = "bullet.coding-work-package.v1";
@@ -136,6 +137,74 @@ impl Produced {
     }
 }
 
+pub(super) fn write_env_file(path: &Path, produced: &Produced) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("HARNESS_ENV_FILE_NOT_ABSOLUTE".into());
+    }
+    if path.is_symlink() {
+        return Err("HARNESS_ENV_FILE_SYMLINK".into());
+    }
+    let mut lines = if path.exists() {
+        std::fs::read_to_string(path).map_err(|_| "HARNESS_ENV_FILE_UNREADABLE")?
+    } else {
+        String::new()
+    };
+    if lines.contains('\0') {
+        return Err("HARNESS_ENV_FILE_INVALID".into());
+    }
+    for (name, value) in [
+        (
+            "BULLET_HARNESS_WORK_PACKAGE_ID",
+            produced.work_package_id.as_str(),
+        ),
+        (
+            "BULLET_HARNESS_CANDIDATE_REQUEST_DIGEST",
+            produced.candidate_request_digest.as_str(),
+        ),
+        (
+            "BULLET_HARNESS_IDEMPOTENCY_KEY",
+            produced.idempotency_key.as_str(),
+        ),
+    ] {
+        let prefix = format!("{name}=");
+        let replacement = format!("{name}={value}");
+        let mut found = false;
+        let mut next = String::new();
+        for line in lines.lines() {
+            if line.starts_with(&prefix) {
+                next.push_str(&replacement);
+                next.push('\n');
+                found = true;
+            } else {
+                next.push_str(line);
+                next.push('\n');
+            }
+        }
+        if !found {
+            next.push_str(&replacement);
+            next.push('\n');
+        }
+        lines = next;
+    }
+    let tmp = path.with_extension("env.tmp");
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|_| "HARNESS_ENV_FILE_UNWRITABLE")?;
+        use std::io::Write;
+        file.write_all(lines.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "HARNESS_ENV_FILE_UNWRITABLE")?;
+    }
+    std::fs::rename(&tmp, path).map_err(|_| "HARNESS_ENV_FILE_UNWRITABLE")?;
+    Ok(())
+}
+
 pub(super) fn produce(
     command_id: &str,
     request_digest: &str,
@@ -211,6 +280,21 @@ mod tests {
         assert!(produced
             .export_lines()
             .contains(&format!("BULLET_HARNESS_WORK_PACKAGE_ID={expected}")));
+        let dir = std::env::temp_dir().join(format!("bullet-harness-bind-{}", command_id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("tmpdir");
+        let env_file = dir.join("harness.env");
+        std::fs::write(&env_file, "BULLET_HARNESS_HOME=/tmp/home\n").expect("seed");
+        write_env_file(&env_file, &produced).expect("merge");
+        let merged = std::fs::read_to_string(&env_file).expect("read");
+        assert!(merged.contains("BULLET_HARNESS_HOME=/tmp/home"));
+        assert!(merged.contains(&format!("BULLET_HARNESS_WORK_PACKAGE_ID={expected}")));
+        assert!(
+            write_env_file(std::path::Path::new("relative.env"), &produced)
+                .unwrap_err()
+                .contains("HARNESS_ENV_FILE_NOT_ABSOLUTE")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
