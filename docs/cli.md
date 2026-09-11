@@ -358,13 +358,14 @@ same key are an idempotency conflict. New caller-supplied launch nonces,
 reservations and allocated runners are refused; historical owned requests keep
 their exact retry/read semantics.
 
-Accepted intent stays queued while runnable binding admission is unavailable.
-`coding task` reports `CODING_BINDING_ADMISSION_UNAVAILABLE`, dependency evidence
-blockers and an expired deadline as applicable. Intent allocates no execution
-reservation, launch nonce, lease or legacy worker claim. Fresh expired deadlines,
-missing accepted dependencies and invocation-limit exhaustion have distinct typed
-refusals. This packet does not yet enforce aggregate monetary liabilities or
-connect runnable scheduling; its accepted limits remain constraints for that work.
+Accepted intent binds a request-digest nonce and quota reservation so dispatch
+may claim the task. `coding task` reports `CODING_BINDING_ADMISSION_UNAVAILABLE`
+only when that binding is missing, plus dependency evidence blockers and an
+expired deadline as applicable. Intent still allocates no Runner lease or live
+provider grant. Fresh expired deadlines, missing accepted dependencies and
+invocation-limit exhaustion have distinct typed refusals. This packet does not
+yet enforce aggregate monetary liabilities; accepted limits remain constraints
+for later provider work.
 
 `board` and `watch` read atomic operator projections with textual status labels.
 `NO_COLOR` or non-TTY output disables ANSI. All work reads require the saved

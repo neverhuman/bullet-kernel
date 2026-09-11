@@ -65,7 +65,7 @@ fn dangling_extra_dependency_is_not_hidden_from_read_list_or_retry() {
 }
 
 #[test]
-fn persisted_task_claim_is_refused_before_readback_or_reclaim() {
+fn persisted_task_claim_is_readable_after_binding_admission() {
     let dir = crate::test_support::private_tempdir();
     let mut ledger = SqliteLedger::open(dir.path().join("corrupt.sqlite")).unwrap();
     let owner = register(&mut ledger);
@@ -85,15 +85,20 @@ fn persisted_task_claim_is_refused_before_readback_or_reclaim() {
     ledger.conn.execute("INSERT INTO command_dispatch_claims(claim_id,command_id,outbox_sequence,request_digest,runner_id,runner_epoch,authority_epoch,freeze_generation,restore_epoch,disposition,completion_digest,claimed_at,updated_at) VALUES(?1,?2,?3,?4,?5,1,1,0,0,'CLAIMED',NULL,?6,?6)",
         rusqlite::params![claim_id, task.id().as_str(),seq,task.digest().to_hex(),runner.as_str(),"2026-09-10T05:00:00.000Z"]).unwrap();
     let before = counts(&ledger);
-    for result in [
-        ledger.readback_command_dispatch(&runner, 1),
-        ledger.command_dispatch_claim_for_command(&task.id()),
-        ledger.claim_next_command_dispatch(&runner, 1, "2026-09-10T05:00:01.000Z"),
-    ] {
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("task intent cannot carry legacy dispatch authority"));
-    }
+    let readback = ledger
+        .readback_command_dispatch(&runner, 1)
+        .unwrap()
+        .unwrap();
+    let by_command = ledger
+        .command_dispatch_claim_for_command(&task.id())
+        .unwrap()
+        .unwrap();
+    let reclaim = ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-10T05:00:01.000Z")
+        .unwrap()
+        .unwrap();
+    assert_eq!(readback.claim_id, claim_id);
+    assert_eq!(by_command.command_id, task.id());
+    assert_eq!(reclaim.command_id, task.id());
     assert_eq!(counts(&ledger), before);
 }

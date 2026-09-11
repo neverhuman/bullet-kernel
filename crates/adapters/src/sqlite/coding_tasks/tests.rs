@@ -58,7 +58,7 @@ fn counts(ledger: &SqliteLedger) -> Vec<i64> {
 
 #[test]
 fn task_dependency_run_owner_and_outbox_roll_back_at_every_write_boundary() {
-    for boundary in 0..=7 {
+    for boundary in 0..=10 {
         let dir = crate::test_support::private_tempdir();
         let path = dir.path().join("tasks.sqlite");
         let mut ledger = SqliteLedger::open(&path).unwrap();
@@ -93,7 +93,7 @@ fn task_dependency_run_owner_and_outbox_roll_back_at_every_write_boundary() {
             observation.task.dependencies,
             [parent.task.revision_id(&owner).unwrap()]
         );
-        assert_eq!(counts(&ledger), [2, 2, 2, 2, 2, 1, 2, 0, 0, 0]);
+        assert_eq!(counts(&ledger), [2, 2, 2, 2, 2, 1, 2, 2, 2, 0]);
     }
 }
 
@@ -121,15 +121,19 @@ fn lost_response_reopen_and_empty_cache_discovery_preserve_original_task_and_run
     assert_eq!(observed.task, payload().task);
     assert_eq!(observed.selection, payload().selection);
     assert_eq!(observed.as_of_sequence, page.as_of_sequence);
-    assert_eq!(
-        observed.blockers[0].code,
-        "CODING_BINDING_ADMISSION_UNAVAILABLE"
+    assert!(
+        observed
+            .blockers
+            .iter()
+            .all(|blocker| blocker.code != "CODING_BINDING_ADMISSION_UNAVAILABLE"),
+        "admitted v2 tasks bind nonce and quota: {:?}",
+        observed.blockers
     );
     assert!(RunnerId::parse(&observed.run_id).is_err());
 }
 
 #[test]
-fn queued_tasks_cannot_enter_legacy_dispatch_or_allocate_execution_authority() {
+fn queued_tasks_enter_dispatch_after_binding_admission() {
     let dir = crate::test_support::private_tempdir();
     let mut ledger = SqliteLedger::open(dir.path().join("tasks.sqlite")).unwrap();
     let owner = register(&mut ledger);
@@ -140,20 +144,15 @@ fn queued_tasks_cannot_enter_legacy_dispatch_or_allocate_execution_authority() {
     );
     assert_eq!(counts(&ledger), [0; 10]);
     ledger.submit_operator_command(&owner, &coding).unwrap();
-    assert_eq!(counts(&ledger), [1, 1, 1, 1, 1, 0, 1, 0, 0, 0]);
+    assert_eq!(counts(&ledger), [1, 1, 1, 1, 1, 0, 1, 1, 1, 0]);
     let runner = RunnerId::from_seed("component-worker");
     let now = "2026-09-10T05:00:00.000Z";
-    assert!(ledger
-        .claim_next_command_dispatch(&runner, 1, now)
-        .unwrap()
-        .is_none());
-    let demo = CommandRequest::new("following-demo", "run_demo", &serde_json::json!({})).unwrap();
-    ledger.submit_operator_command(&owner, &demo).unwrap();
     let claim = ledger
         .claim_next_command_dispatch(&runner, 1, now)
         .unwrap()
         .unwrap();
-    assert_eq!(claim.command_id, demo.id());
+    assert_eq!(claim.command_id, coding.id());
+    assert_eq!(claim.request.kind, "run_coding");
     assert_eq!(
         ledger
             .get_operator_command(&owner, &coding.id())
@@ -246,9 +245,9 @@ fn concurrent_clients_share_one_admission_and_enforce_the_task_limit() {
     barrier.wait();
     let admitted = ledger.submit_operator_command(&owner, &same).unwrap();
     assert_eq!(admitted, join.join().unwrap());
-    assert_eq!(counts(&ledger), [1, 1, 1, 1, 1, 0, 1, 0, 0, 0]);
+    assert_eq!(counts(&ledger), [1, 1, 1, 1, 1, 0, 1, 1, 1, 0]);
     assert!(ledger
         .submit_operator_command(&owner, &request("different-key", &body))
         .is_err());
-    assert_eq!(counts(&ledger), [1, 1, 1, 1, 1, 0, 1, 0, 0, 0]);
+    assert_eq!(counts(&ledger), [1, 1, 1, 1, 1, 0, 1, 1, 1, 0]);
 }

@@ -87,9 +87,14 @@ async fn coding_reads_and_submission_enforce_session_origin_csrf_and_closed_inte
         snapshot["data"]["task"],
         serde_json::from_str::<Value>(&body).unwrap()["payload"]["task"]
     );
-    assert_eq!(
-        snapshot["data"]["blockers"][0]["code"],
-        "CODING_BINDING_ADMISSION_UNAVAILABLE"
+    assert!(
+        snapshot["data"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|blocker| blocker["code"] != "CODING_BINDING_ADMISSION_UNAVAILABLE"),
+        "admitted v2 tasks bind nonce and quota: {}",
+        snapshot["data"]["blockers"]
     );
     let demo = request(
         server.addr,

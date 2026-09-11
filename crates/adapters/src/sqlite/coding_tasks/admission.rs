@@ -1,9 +1,17 @@
-use super::super::{commands, store};
+use super::super::{commands, nonces, store};
 use super::storage;
 use bullet_application::coding_tasks::{coding_run_id, CodingTaskRefusal, RunCodingTaskPayload};
 use bullet_application::{CommandRequest, LedgerError};
 use bullet_domain::Digest;
 use rusqlite::{params, Transaction};
+
+pub(super) fn binding_nonce(request: &CommandRequest) -> String {
+    request.digest().to_hex()
+}
+
+pub(super) fn binding_reservation_id(request: &CommandRequest) -> String {
+    format!("rsv_{}", request.digest().to_hex())
+}
 
 pub(in crate::sqlite) fn admit(
     tx: &Transaction<'_>,
@@ -64,6 +72,20 @@ pub(in crate::sqlite) fn admit(
     let selection = serde_json::to_string(&payload.selection).map_err(store)?;
     tx.execute("INSERT INTO coding_runs(run_id,command_id,operator_id,task_revision_id,request_digest,selection_json,accepted_sequence,accepted_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         params![coding_run_id(&request.id()), request.id().as_str(), operator, revision_id, request.digest().to_hex(), selection, i64::try_from(submitted.0).map_err(store)?, submitted.1]).map_err(store)?;
+    commands::fail_boundary(fail_after)?;
+    let digest = request.digest().to_hex();
+    let nonce = binding_nonce(request);
+    let reservation = binding_reservation_id(request);
+    nonces::issue_in(tx, &nonce, &digest).map_err(|error| store(error.to_string()))?;
+    commands::fail_boundary(fail_after)?;
+    nonces::consume_in(tx, &nonce, &digest).map_err(|error| store(error.to_string()))?;
+    commands::fail_boundary(fail_after)?;
+    tx.execute(
+        "INSERT INTO budget_reservations (reservation_id, amount, settled_amount, unknown_liability)
+         VALUES (?1, ?2, NULL, 0)",
+        params![reservation, 1_i64],
+    )
+    .map_err(store)?;
     commands::fail_boundary(fail_after)?;
     Ok(())
 }

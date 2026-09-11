@@ -54,10 +54,27 @@ impl CodingTaskStore for SqliteLedger {
         let now = chrono::DateTime::parse_from_rfc3339(&observed_at)
             .map_err(store)?
             .timestamp_millis();
-        let mut blockers = vec![CodingQueueBlocker {
-            code: "CODING_BINDING_ADMISSION_UNAVAILABLE".into(),
-            subject: None,
-        }];
+        let reservation = admission::binding_reservation_id(&request);
+        let nonce = admission::binding_nonce(&request);
+        let reserved: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM budget_reservations WHERE reservation_id=?1",
+                [&reservation],
+                |row| row.get(0),
+            )
+            .map_err(store)?;
+        let nonce_consumed = matches!(
+            super::nonces::inspect(&self.conn, &nonce).map_err(|error| store(error.to_string()))?,
+            Some((_, bullet_application::NonceState::Consumed))
+        );
+        let mut blockers = Vec::new();
+        if reserved != 1 || !nonce_consumed {
+            blockers.push(CodingQueueBlocker {
+                code: "CODING_BINDING_ADMISSION_UNAVAILABLE".into(),
+                subject: None,
+            });
+        }
         if run.task.contract.deadline_unix_ms <= u64::try_from(now).map_err(store)? {
             blockers.push(CodingQueueBlocker {
                 code: "CODING_TASK_DEADLINE_EXPIRED".into(),

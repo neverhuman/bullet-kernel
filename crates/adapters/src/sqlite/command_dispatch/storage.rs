@@ -32,7 +32,6 @@ pub(super) fn oldest_pending(
         .query_row(
             "SELECT o.seq, o.command_id, o.payload FROM outbox o
              WHERE o.kind = 'command_dispatch' AND o.phase = 'pending'
-               AND NOT EXISTS (SELECT 1 FROM coding_runs r WHERE r.command_id=o.command_id)
                AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.id=o.command_id AND c.kind='conversation_message')
              ORDER BY o.seq LIMIT 1",
             [],
@@ -58,7 +57,7 @@ pub(super) fn exact_request(
 ) -> Result<CommandRequest, CommandDispatchError> {
     let request = CommandRequest::from_json(&record.idempotency_key, &record.kind, &record.payload)
         .map_err(dispatch_store)?;
-    require_legacy_dispatch(&request)?;
+    require_dispatchable(conn, &request)?;
     request.matches(record).map_err(dispatch_store)?;
     let encoded = serde_json::to_string(&request).map_err(dispatch_store)?;
     let rows = outbox::for_command(conn, &record.id).map_err(dispatch_ledger)?;
@@ -196,7 +195,7 @@ fn decode_claim(
         .ok_or_else(|| dispatch_store("claim command is absent"))?;
     let request = CommandRequest::from_json(&record.idempotency_key, &record.kind, &record.payload)
         .map_err(dispatch_store)?;
-    require_legacy_dispatch(&request)?;
+    require_dispatchable(conn, &request)?;
     let claim = CommandDispatchClaim {
         schema_version: COMMAND_DISPATCH_CLAIM_SCHEMA.into(),
         claim_id: raw.0,
@@ -222,7 +221,10 @@ fn decode_claim(
     Ok(claim)
 }
 
-fn require_legacy_dispatch(request: &CommandRequest) -> Result<(), CommandDispatchError> {
+fn require_dispatchable(
+    conn: &Connection,
+    request: &CommandRequest,
+) -> Result<(), CommandDispatchError> {
     if request.kind == bullet_application::conversations::CONVERSATION_MESSAGE_KIND {
         return Err(dispatch_store(
             "conversation messages cannot carry Runner dispatch authority",
@@ -232,9 +234,18 @@ fn require_legacy_dispatch(request: &CommandRequest) -> Result<(), CommandDispat
         .map_err(dispatch_store)?
         .is_some()
     {
-        return Err(dispatch_store(
-            "task intent cannot carry legacy dispatch authority",
-        ));
+        let runs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM coding_runs WHERE command_id=?1",
+                [request.id().as_str()],
+                |row| row.get(0),
+            )
+            .map_err(dispatch_store)?;
+        if runs != 1 {
+            return Err(dispatch_store(
+                "task intent cannot carry legacy dispatch authority",
+            ));
+        }
     }
     Ok(())
 }
