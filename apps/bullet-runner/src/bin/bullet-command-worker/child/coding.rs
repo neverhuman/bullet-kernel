@@ -1,6 +1,6 @@
 //! Native `run_coding` argv and labeled observation — never a simulator.
 
-use super::{need_env, ChildOutput, WorkerError};
+use super::{need_env, ChildOutput, WorkerContext, WorkerError};
 use bullet_application::coding_tasks::{task_payload, RunCodingTaskPayload};
 use bullet_application::{CommandDispatchClaim, RunCodingPayload, RUN_CODING_KIND};
 use bullet_domain::WorkPackageId;
@@ -77,7 +77,8 @@ impl CodingLaunch {
             allocated_run: claim.runner_id.to_string(),
             work_package_id: WorkPackageId::from_seed(&seed).to_string(),
             candidate_request_digest: claim.request.digest().to_hex(),
-            idempotency_key: claim.request.idempotency_key.clone(),
+            idempotency_key: bullet_application::coding_tasks::coding_lease_key(&claim.request)
+                .worker("COMMAND_CODING_PAYLOAD_INVALID", "derive lease identity")?,
             objective: payload.task.objective.clone(),
             gate_ids: payload.task.gate_ids.clone(),
             scopes: payload.task.scope_paths.clone(),
@@ -382,9 +383,10 @@ mod tests {
         assert!(args.windows(2).any(|pair| {
             pair[0] == "--candidate-request-digest" && pair[1] == request.digest().to_hex()
         }));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--idempotency-key", "v2-harness"]));
+        let key = bullet_application::coding_tasks::coding_lease_key(&request).unwrap();
+        assert_ne!(key, request.idempotency_key);
+        let lease_arg = ["--idempotency-key", key.as_str()];
+        assert!(args.windows(2).any(|pair| pair == lease_arg));
         assert!(args.iter().any(|arg| arg == "--dogfood-credential"));
         let bad = dogfood_credential_args_error();
         assert_eq!(bad.code(), "COMMAND_CODING_CREDENTIAL_INVALID");

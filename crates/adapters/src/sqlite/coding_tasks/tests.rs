@@ -251,3 +251,134 @@ fn concurrent_clients_share_one_admission_and_enforce_the_task_limit() {
         .is_err());
     assert_eq!(counts(&ledger), [1, 1, 1, 1, 1, 0, 1, 1, 1, 0]);
 }
+
+#[test]
+fn coding_lease_identity_preserves_submission_and_exact_restart_replay() {
+    use bullet_application::coding_tasks::coding_lease_key;
+    use bullet_application::lease_transport::KernelLeaseTransport;
+    use bullet_application::{materialize_plan, PlanInput, SignedAcquireBody};
+    use bullet_domain::TaskClass;
+
+    let dir = crate::test_support::private_tempdir();
+    let path = dir.path().join("coding-lease.sqlite");
+    let mut ledger = SqliteLedger::open(&path).unwrap();
+    let owner = register(&mut ledger);
+    let coding = request("coding-lease-submission", &payload());
+    let original = ledger.submit_operator_command(&owner, &coding).unwrap();
+    let runner = RunnerId::from_seed("coding-lease-worker");
+    let claim = ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:00.000Z")
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.request, coding);
+    // Component fixture only: coding admission does not yet materialize this graph.
+    let graph = materialize_plan(
+        &mut ledger,
+        "coding-lease-component",
+        &PlanInput {
+            title: "Lease identity component".into(),
+            objective: "Preserve the separate submission and acquire commands".into(),
+            packages: vec![("component".into(), TaskClass::BoundedBugFix)],
+        },
+        "2026-09-11T00:00:00.000Z",
+    )
+    .unwrap();
+    let transport = KernelLeaseTransport::generate().unwrap();
+    let mut body = SignedAcquireBody {
+        work_package_id: graph.packages[0].id.clone(),
+        runner_id: claim.runner_id.clone(),
+        runner_epoch: claim.runner_epoch,
+        idempotency_key: claim.request.idempotency_key.clone(),
+        ttl_seconds: 15,
+    };
+    let before = counts(&ledger);
+    assert_eq!(
+        transport
+            .acquire(&mut ledger, &body, 1_800_000_000_000)
+            .expect_err("the old worker key collides with run_coding")
+            .reason_code(),
+        "IDEMPOTENCY_CONFLICT"
+    );
+    assert_eq!(counts(&ledger), before);
+    body.idempotency_key = coding_lease_key(&claim.request).unwrap();
+    let first = transport
+        .acquire(&mut ledger, &body, 1_800_000_000_000)
+        .unwrap();
+    let acquired = ledger.get_command(&body.idempotency_key).unwrap().unwrap();
+    assert_eq!(acquired.kind, "acquire_lease");
+    assert_ne!(acquired.id, original.command.id);
+    assert_eq!(
+        ledger.get_command(&coding.idempotency_key).unwrap(),
+        Some(original.command.clone())
+    );
+    let acquired_counts = counts(&ledger);
+    drop(ledger);
+
+    let mut reopened = SqliteLedger::open(&path).unwrap();
+    let recovered = reopened
+        .readback_command_dispatch(&runner, 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered, claim);
+    assert_eq!(
+        coding_lease_key(&recovered.request).unwrap(),
+        body.idempotency_key
+    );
+    let replay = transport
+        .acquire(&mut reopened, &body, 1_800_000_000_001)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&replay).unwrap(),
+        serde_json::to_vec(&first).unwrap()
+    );
+    assert_eq!(counts(&reopened), acquired_counts);
+    assert_eq!(
+        reopened.get_command(&body.idempotency_key).unwrap(),
+        Some(acquired)
+    );
+    let retried = reopened.submit_operator_command(&owner, &coding).unwrap();
+    assert_eq!(retried.command, original.command);
+    assert!(retried.as_of_sequence >= original.as_of_sequence);
+    assert_eq!(counts(&reopened), acquired_counts);
+}
+
+#[test]
+fn coding_lease_identity_separates_commands_and_refuses_changed_replay() {
+    use bullet_application::coding_tasks::coding_lease_key;
+
+    let dir = crate::test_support::private_tempdir();
+    let mut ledger = SqliteLedger::open(dir.path().join("coding-keys.sqlite")).unwrap();
+    let owner = register(&mut ledger);
+    let first = request("coding-first", &payload());
+    let same_intent = request("coding-new-identity", &payload());
+    let mut second_intent = payload();
+    second_intent.selection.account_id = "second-fixture-account".into();
+    let second = request("coding-second", &second_intent);
+    let original = ledger.submit_operator_command(&owner, &first).unwrap();
+    ledger.submit_operator_command(&owner, &second).unwrap();
+    let first_key = coding_lease_key(&first).unwrap();
+    assert_ne!(first_key, coding_lease_key(&same_intent).unwrap());
+    assert_ne!(first_key, coding_lease_key(&second).unwrap());
+    assert_ne!(first_key, first.idempotency_key);
+
+    let mut changed = payload();
+    changed.task.objective = "A different intentional submission".into();
+    let changed = request(&first.idempotency_key, &changed);
+    assert_eq!(changed.id(), first.id());
+    assert_ne!(first_key, coding_lease_key(&changed).unwrap());
+    let before = counts(&ledger);
+    assert_eq!(
+        ledger
+            .submit_operator_command(&owner, &changed)
+            .unwrap_err()
+            .reason_code(),
+        "IDEMPOTENCY_CONFLICT"
+    );
+    assert_eq!(counts(&ledger), before);
+    let retried = ledger.submit_operator_command(&owner, &first).unwrap();
+    assert_eq!(retried.command, original.command);
+    assert!(retried.as_of_sequence >= original.as_of_sequence);
+    assert_eq!(counts(&ledger), before);
+    let noncoding = CommandRequest::new("not-coding", "run_demo", &serde_json::json!({})).unwrap();
+    assert!(coding_lease_key(&noncoding).is_err());
+}

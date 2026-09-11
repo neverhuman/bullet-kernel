@@ -137,6 +137,35 @@ pub fn coding_run_id(command: &CommandId) -> String {
     format!("crn_{}", Digest::of(seed.as_bytes()).to_hex())
 }
 
+/// Stable lease-acquisition identity for one validated v2 coding command.
+///
+/// The command ID and exact request digest survive worker restart. This derives
+/// an operation key only; it creates no WorkPackage, lease or Candidate authority.
+///
+/// # Errors
+/// Invalid/non-task requests and a collision with the submission key refuse.
+pub fn coding_lease_key(request: &CommandRequest) -> Result<String, DomainError> {
+    request.validate()?;
+    if task_payload(request)?.is_none() {
+        return Err(encoding("lease identity requires a v2 coding task"));
+    }
+    let subject = format!(
+        "bullet.coding-lease-acquire.v1\0{}\0{}",
+        request.id(),
+        request.digest().to_hex()
+    );
+    let key = format!(
+        "coding-lease-v1:{}",
+        Digest::of(subject.as_bytes()).to_hex()
+    );
+    if key == request.idempotency_key {
+        return Err(DomainError::Idempotency(
+            "coding lease identity collides with submission".into(),
+        ));
+    }
+    Ok(key)
+}
+
 /// Validate a complete coding/owner identity without interpreting it as authority.
 pub fn validate_coding_subject(value: &str, prefix: &str) -> Result<(), DomainError> {
     if value.strip_prefix(prefix).is_some_and(|body| {
