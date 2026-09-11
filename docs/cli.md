@@ -67,7 +67,8 @@ not stop another.
 | `coding status <id>` | GET the same command subject using saved credentials; correlate kind and payload digest with its local journal when present |
 | `coding board` | fleet, sessions and outbox from one authenticated `/api/v1/operator-snapshot`; separate public health and optional `--command` observations. Empty fleet is zero lease rows. `--json` emits the observed projection objects. |
 | `coding watch` | poll the same board; `--interval-ms` must be ≥ 1 (`WATCH_INTERVAL_INVALID` otherwise). Not a coordinator fleet. |
-| `coding harness-check` | report `BULLET_HARNESS_*` PRESENT/ABSENT without spawning a provider. Exit 2 when unbound (`COMMAND_CODING_HARNESS_UNBOUND`). |
+| `coding harness-check` | report `BULLET_HARNESS_*` PRESENT/ABSENT without spawning a provider. Exit 2 when unbound (`COMMAND_CODING_HARNESS_UNBOUND`). Optional `--command-id` / `--request-digest` / `--idempotency-key` overlay the three ledger producers (same seed as the command worker). |
+| `coding harness-bind` | print `BULLET_HARNESS_WORK_PACKAGE_ID`, `BULLET_HARNESS_CANDIDATE_REQUEST_DIGEST`, and `BULLET_HARNESS_IDEMPOTENCY_KEY` from an admitted v2 command id, request digest, and idempotency key. Does not spawn a provider. |
 | `coding stop` | typed `STOP_UNIMPLEMENTED` and exit 2; does not SIGKILL a provider |
 
 `talk`, `ask`, `head`, `setup`, and `serve` are not CLI commands. Native Head,

@@ -28,7 +28,18 @@ pub(crate) fn run(command: CodingCommands) -> ExitCode {
             eprintln!("bullet: STOP_UNIMPLEMENTED: durable coding stop waits for farmd lifecycle admission");
             ExitCode::from(2)
         }
-        CodingCommands::HarnessCheck { json } => print_harness(json),
+        CodingCommands::HarnessCheck {
+            json,
+            command_id,
+            request_digest,
+            idempotency_key,
+        } => print_harness(json, command_id, request_digest, idempotency_key),
+        CodingCommands::HarnessBind {
+            command_id,
+            request_digest,
+            idempotency_key,
+            json,
+        } => print_harness_bind(command_id, request_digest, idempotency_key, json),
         CodingCommands::List {
             connection,
             after,
@@ -199,8 +210,31 @@ fn print_board(board: &render::Board, json_only: bool) {
     );
 }
 
-fn print_harness(json_only: bool) -> ExitCode {
-    let report = harness::from_env();
+fn print_harness(
+    json_only: bool,
+    command_id: Option<String>,
+    request_digest: Option<String>,
+    idempotency_key: Option<String>,
+) -> ExitCode {
+    let produced = match (command_id, request_digest, idempotency_key) {
+        (None, None, None) => None,
+        (Some(command_id), Some(request_digest), Some(idempotency_key)) => {
+            match harness::produce(&command_id, &request_digest, &idempotency_key) {
+                Ok(produced) => Some(produced),
+                Err(error) => return fail(error),
+            }
+        }
+        _ => {
+            return fail(
+                "HARNESS_BIND_INCOMPLETE: command-id, request-digest, and idempotency-key are required together"
+                    .into(),
+            )
+        }
+    };
+    let report = match produced.as_ref() {
+        Some(produced) => harness::from_env_with_produced(produced),
+        None => harness::from_env(),
+    };
     if json_only {
         print_json(&report.json().to_string());
     } else {
@@ -213,6 +247,25 @@ fn print_harness(json_only: bool) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(2)
+    }
+}
+
+fn print_harness_bind(
+    command_id: String,
+    request_digest: String,
+    idempotency_key: String,
+    json_only: bool,
+) -> ExitCode {
+    match harness::produce(&command_id, &request_digest, &idempotency_key) {
+        Ok(produced) => {
+            if json_only {
+                print_json(&produced.json().to_string());
+            } else {
+                print!("{}", produced.export_lines());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => fail(error),
     }
 }
 

@@ -95,6 +95,24 @@ pub(crate) enum CodingCommands {
     HarnessCheck {
         #[arg(long)]
         json: bool,
+        /// Overlay ledger producers from an admitted command (same seed as the worker).
+        #[arg(long, requires = "request_digest", requires = "idempotency_key")]
+        command_id: Option<String>,
+        #[arg(long)]
+        request_digest: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Print the three ledger harness identities for an admitted v2 command.
+    HarnessBind {
+        #[arg(long)]
+        command_id: String,
+        #[arg(long)]
+        request_digest: String,
+        #[arg(long)]
+        idempotency_key: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Refuse until durable native cancellation is implemented.
     Stop,

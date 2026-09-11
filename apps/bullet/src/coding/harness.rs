@@ -1,6 +1,11 @@
-//! Operator bind probe. Does not spawn a provider or write enrollments.
+//! Operator bind probe and ledger-identity producer. Does not spawn a provider
+//! or write enrollments.
 
+use bullet_domain::{CommandId, WorkPackageId};
 use serde_json::{json, Value};
+
+/// Same seed the command worker uses for v2 `run_coding` work packages.
+pub(super) const WORK_PACKAGE_SEED: &str = "bullet.coding-work-package.v1";
 
 pub(super) const REQUIRED: &[&str] = &[
     "BULLET_HARNESS_HOME",
@@ -105,7 +110,65 @@ pub(super) fn inspect(vars: &[(&str, Option<String>)]) -> Report {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Produced {
+    pub(super) work_package_id: String,
+    pub(super) candidate_request_digest: String,
+    pub(super) idempotency_key: String,
+}
+
+impl Produced {
+    pub(super) fn json(&self) -> Value {
+        json!({
+            "outcome": "PRODUCED",
+            "work_package_seed": WORK_PACKAGE_SEED,
+            "BULLET_HARNESS_WORK_PACKAGE_ID": self.work_package_id,
+            "BULLET_HARNESS_CANDIDATE_REQUEST_DIGEST": self.candidate_request_digest,
+            "BULLET_HARNESS_IDEMPOTENCY_KEY": self.idempotency_key,
+        })
+    }
+
+    pub(super) fn export_lines(&self) -> String {
+        format!(
+            "BULLET_HARNESS_WORK_PACKAGE_ID={}\nBULLET_HARNESS_CANDIDATE_REQUEST_DIGEST={}\nBULLET_HARNESS_IDEMPOTENCY_KEY={}\n",
+            self.work_package_id, self.candidate_request_digest, self.idempotency_key
+        )
+    }
+}
+
+pub(super) fn produce(
+    command_id: &str,
+    request_digest: &str,
+    idempotency_key: &str,
+) -> Result<Produced, String> {
+    let command_id = CommandId::parse(command_id).map_err(|_| "COMMAND_ID_INVALID")?;
+    if request_digest.len() != 64
+        || !request_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("REQUEST_DIGEST_INVALID: expected 64 lowercase hex".into());
+    }
+    if idempotency_key.is_empty() || idempotency_key.contains('\n') {
+        return Err("IDEMPOTENCY_KEY_INVALID: single-line key required".into());
+    }
+    let seed = format!("{WORK_PACKAGE_SEED}\0{command_id}");
+    Ok(Produced {
+        work_package_id: WorkPackageId::from_seed(&seed).to_string(),
+        candidate_request_digest: request_digest.to_string(),
+        idempotency_key: idempotency_key.to_string(),
+    })
+}
+
 pub(super) fn from_env() -> Report {
+    inspect(&env_pairs(None))
+}
+
+pub(super) fn from_env_with_produced(produced: &Produced) -> Report {
+    inspect(&env_pairs(Some(produced)))
+}
+
+fn env_pairs(produced: Option<&Produced>) -> Vec<(&'static str, Option<String>)> {
     let mut pairs = Vec::new();
     for name in REQUIRED
         .iter()
@@ -113,10 +176,76 @@ pub(super) fn from_env() -> Report {
         .chain(std::iter::once("BULLET_HARNESS_PATH"))
         .chain(CLAUDE_EXTRA.iter().copied())
     {
+        let overlay = produced.and_then(|produced| match name {
+            "BULLET_HARNESS_WORK_PACKAGE_ID" => Some(produced.work_package_id.clone()),
+            "BULLET_HARNESS_CANDIDATE_REQUEST_DIGEST" => {
+                Some(produced.candidate_request_digest.clone())
+            }
+            "BULLET_HARNESS_IDEMPOTENCY_KEY" => Some(produced.idempotency_key.clone()),
+            _ => None,
+        });
         pairs.push((
             name,
-            std::env::var(name).ok().filter(|value| !value.is_empty()),
+            overlay.or_else(|| std::env::var(name).ok().filter(|value| !value.is_empty())),
         ));
     }
-    inspect(&pairs)
+    pairs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bullet_domain::CommandId;
+
+    #[test]
+    fn produce_matches_worker_seed() {
+        let command_id = CommandId::from_seed("harness-bind");
+        let digest = "ab".repeat(32);
+        let produced = produce(command_id.as_str(), &digest, "bind-key").expect("produce");
+        let expected =
+            WorkPackageId::from_seed(&format!("{WORK_PACKAGE_SEED}\0{command_id}")).to_string();
+        assert_eq!(produced.work_package_id, expected);
+        assert_eq!(produced.candidate_request_digest, digest);
+        assert_eq!(produced.idempotency_key, "bind-key");
+        assert!(produced.json()["outcome"] == "PRODUCED");
+        assert!(produced
+            .export_lines()
+            .contains(&format!("BULLET_HARNESS_WORK_PACKAGE_ID={expected}")));
+    }
+
+    #[test]
+    fn produce_refuses_invalid_inputs() {
+        assert_eq!(
+            produce("cmd_nope", &"ab".repeat(32), "k").unwrap_err(),
+            "COMMAND_ID_INVALID"
+        );
+        let command_id = CommandId::from_seed("x");
+        assert!(produce(command_id.as_str(), "ZZ", "k")
+            .unwrap_err()
+            .starts_with("REQUEST_DIGEST_INVALID"));
+        assert!(produce(command_id.as_str(), &"ab".repeat(32), "k\n")
+            .unwrap_err()
+            .starts_with("IDEMPOTENCY_KEY_INVALID"));
+    }
+
+    #[test]
+    fn overlay_three_makes_those_rows_present() {
+        let command_id = CommandId::from_seed("bound-overlay");
+        let produced = produce(command_id.as_str(), &"cd".repeat(32), "overlay-key").unwrap();
+        let report = inspect(&env_pairs(Some(&produced)));
+        for name in [
+            "BULLET_HARNESS_WORK_PACKAGE_ID",
+            "BULLET_HARNESS_CANDIDATE_REQUEST_DIGEST",
+            "BULLET_HARNESS_IDEMPOTENCY_KEY",
+        ] {
+            assert!(
+                report
+                    .rows
+                    .iter()
+                    .any(|(row, state)| row == name && *state == "PRESENT"),
+                "{name} {:?}",
+                report.rows
+            );
+        }
+    }
 }
