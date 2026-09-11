@@ -226,6 +226,7 @@ fn submit(session: &Session, request: SubmitRequest<'_>) -> Result<Value, String
     submit_prepared(session, envelope, expected)
 }
 
+#[cfg(unix)]
 fn submit_prepared(
     session: &Session,
     envelope: Value,
@@ -236,6 +237,7 @@ fn submit_prepared(
         "COMMAND_JOURNALED: {command_id}; idempotency_key={}",
         crate::client::terminal_text(&expected.idempotency_key)
     );
+    let observed = crate::auth::session::status(&session.credentials)?;
     let response = http::request(
         &session.farmd,
         "POST",
@@ -244,6 +246,7 @@ fn submit_prepared(
             ("Origin", &session.origin),
             ("Cookie", &session.cookie),
             (CSRF_HEADER, &session.csrf),
+            ("X-Bullet-Expected-Session", &observed.session_id),
         ],
         Some(&envelope),
     )
@@ -258,6 +261,15 @@ fn submit_prepared(
     let body = command_body(response.body)?;
     journal::correlate(&expected, &body)?;
     Ok(body)
+}
+
+#[cfg(not(unix))]
+fn submit_prepared(
+    _session: &Session,
+    _envelope: Value,
+    _expected: bullet_application::CommandRequest,
+) -> Result<Value, String> {
+    Err("AUTH_PRIVATE_STORE_UNSUPPORTED".into())
 }
 
 fn command_body(body: Value) -> Result<Value, String> {

@@ -35,6 +35,7 @@ pub(super) fn revoke(credentials: &Credentials) -> Result<SessionRevocationView,
             ("Cookie", &credentials.cookie),
             ("Origin", &credentials.origin),
             ("X-Bullet-CSRF", &credentials.csrf),
+            ("X-Bullet-Expected-Session", &original.session_id),
         ],
         Some(&serde_json::json!({})),
     )

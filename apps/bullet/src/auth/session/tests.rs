@@ -142,6 +142,13 @@ fn revocation_requires_the_observed_identity_and_exact_authenticated_empty_reque
                 if method == "POST" {
                     assert!(request
                         .contains(&format!("\r\nx-bullet-csrf: csrf_{}\r\n", "b".repeat(64))));
+                    assert_eq!(
+                        request
+                            .lines()
+                            .filter(|line| line.starts_with("x-bullet-expected-session:"))
+                            .collect::<Vec<_>>(),
+                        vec![format!("x-bullet-expected-session: sid_{}", "2".repeat(64))]
+                    );
                     assert!(request.contains("\r\ncontent-length: 2\r\n"));
                     let mut body = [0; 2];
                     socket.read_exact(&mut body).unwrap();
@@ -166,11 +173,7 @@ fn revocation_requires_the_observed_identity_and_exact_authenticated_empty_reque
                     json!({"status":"AUTHENTICATED","operator_id":operator,"session_id":session,"issued_at":"2026-09-10T00:00:00Z","expires_at":expiry})
                 } else if outcome=="malformed" { json!({}) }
                 else { json!({"status":"REVOKED","operator_id":operator,"session_id":if outcome=="foreign" {format!("sid_{}","3".repeat(64))} else {session},"revoked_at":revoked_at}) }.to_string();
-                let acknowledgement = if method == "GET" {
-                    format!("x-bullet-session-id: sid_{}\r\n", "2".repeat(64))
-                } else {
-                    String::new()
-                };
+                let acknowledgement = format!("x-bullet-session-id: sid_{}\r\n", "2".repeat(64));
                 write!(socket,"HTTP/1.1 200 OK\r\n{acknowledgement}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
             }
         });
@@ -294,6 +297,156 @@ fn session_discovery_requires_generated_body_to_match_acknowledged_session() {
             assert_eq!(result.unwrap().session_id, expected);
         } else {
             assert_eq!(result.err().unwrap(), "AUTH_SESSION_SUBJECT_MISMATCH");
+        }
+    }
+}
+
+#[test]
+fn revoke_acknowledgement_precedes_body_and_local_credential_removal() {
+    use crate::auth::store::CredentialStore;
+    use std::os::unix::fs::PermissionsExt;
+    for outcome in ["missing", "foreign", "duplicate", "absent", "lost", "valid"] {
+        let directory = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let credentials = Credentials {
+            schema_version: 1,
+            farmd: endpoint.clone(),
+            origin: endpoint.clone(),
+            cookie: format!("bullet_session=ses_{}", "a".repeat(64)),
+            csrf: format!("csrf_{}", "b".repeat(64)),
+        };
+        CredentialStore::open(directory.path())
+            .unwrap()
+            .save(&credentials)
+            .unwrap();
+        let path = directory.path().to_path_buf();
+        let (sent, received) = std::sync::mpsc::channel();
+        let client = std::thread::spawn(move || {
+            sent.send(crate::auth::run(crate::auth::AuthCommands::Revoke {
+                state_dir: Some(path),
+            }))
+            .unwrap();
+        });
+        for method in ["GET", "POST"] {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
+                    Err(e) => panic!("accept failed: {e}"),
+                }
+                assert!(Instant::now() < deadline, "caller did not reach {method}");
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                bytes.push(byte[0]);
+                assert!(bytes.len() < 16_384);
+            }
+            let request = String::from_utf8(bytes).unwrap();
+            let path = if method == "GET" { "session" } else { "revoke" };
+            assert!(request.starts_with(&format!("{method} /api/v1/auth/{path} HTTP/1.1\r\n")));
+            for (name, value) in [
+                ("cookie", &credentials.cookie),
+                ("origin", &credentials.origin),
+            ] {
+                assert!(request.contains(&format!("\r\n{name}: {value}\r\n")));
+            }
+            let sid = format!("sid_{}", "2".repeat(64));
+            let expected = if method == "GET" {
+                vec![]
+            } else {
+                vec![format!("x-bullet-expected-session: {sid}")]
+            };
+            assert_eq!(
+                request
+                    .lines()
+                    .filter(|line| line.starts_with("x-bullet-expected-session:"))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            let operator = format!("opr_{}", "1".repeat(64));
+            if method == "GET" {
+                assert!(!request.contains("csrf"));
+                let body = json!({"status":"AUTHENTICATED","operator_id":operator,"session_id":sid,"issued_at":"2026-09-10T00:00:00Z","expires_at":"2026-09-10T08:00:00Z"}).to_string();
+                write!(socket,"HTTP/1.1 200 OK\r\nx-bullet-session-id: {sid}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                continue;
+            }
+            assert!(request.contains(&format!("\r\nx-bullet-csrf: {}\r\n", credentials.csrf)));
+            assert!(request.contains("\r\ncontent-length: 2\r\n"));
+            let mut bytes = [0; 2];
+            socket.read_exact(&mut bytes).unwrap();
+            assert_eq!(&bytes, b"{}");
+            if outcome == "lost" {
+                drop(socket);
+                continue;
+            }
+            let ack = match outcome {
+                "missing" | "absent" => String::new(),
+                "foreign" => format!("x-bullet-session-id: sid_{}\r\n", "3".repeat(64)),
+                "duplicate" => format!("x-bullet-session-id: {sid}\r\n").repeat(2),
+                _ => format!("x-bullet-session-id: {sid}\r\n"),
+            };
+            let body = json!({"status":"REVOKED","operator_id":operator,"session_id":sid,"revoked_at":"2026-09-10T00:01:00Z"}).to_string();
+            let status = if outcome == "absent" { 404 } else { 200 };
+            write!(socket,"HTTP/1.1 {status} Fixture\r\n{ack}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",body.len()).unwrap();
+            socket.flush().unwrap();
+            let early = received.recv_timeout(Duration::from_millis(if outcome == "valid" {
+                100
+            } else {
+                2000
+            }));
+            if outcome == "valid" {
+                assert!(matches!(
+                    early,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ));
+                socket.write_all(body.as_bytes()).unwrap();
+            } else {
+                let _ = socket.write_all(body.as_bytes());
+                assert!(early
+                    .expect("ack refusal must precede body release")
+                    .unwrap_err()
+                    .contains("AUTH_REVOCATION_UNKNOWN"));
+            }
+        }
+        client.join().unwrap();
+        if outcome == "valid" {
+            assert!(received
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .is_ok());
+            assert!(CredentialStore::read_credentials(directory.path())
+                .unwrap()
+                .is_none());
+        } else {
+            if outcome == "lost" {
+                assert!(received
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .unwrap_err()
+                    .contains("AUTH_REVOCATION_UNKNOWN"));
+            }
+            let retained = CredentialStore::read_credentials(directory.path())
+                .unwrap()
+                .unwrap();
+            assert_eq!(retained.cookie, credentials.cookie);
+            assert_eq!(retained.csrf, credentials.csrf);
+            assert_eq!(retained.farmd, credentials.farmd);
+            assert_eq!(retained.origin, credentials.origin);
         }
     }
 }
