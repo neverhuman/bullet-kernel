@@ -192,18 +192,30 @@ fn serve(
     }
     let request = String::from_utf8(bytes)?;
     let commands = request.starts_with("GET /api/v1/commands HTTP/1.1\r\n");
+    let discovery = request.starts_with("GET /api/v1/auth/session HTTP/1.1\r\n");
     ensure!(
-        commands || request.starts_with("GET /api/v1/operator-snapshot HTTP/1.1\r\n"),
+        discovery || commands || request.starts_with("GET /api/v1/operator-snapshot HTTP/1.1\r\n"),
         "MUTATION_OR_UNEXPECTED_READ"
     );
-    let headers = request.to_ascii_lowercase();
+    let values = |name: &str| {
+        request
+            .split("\r\n")
+            .skip(1)
+            .filter_map(|line| line.split_once(':'))
+            .filter_map(|(key, value)| key.eq_ignore_ascii_case(name).then_some(value.trim()))
+            .collect::<Vec<_>>()
+    };
+    ensure!(values("cookie") == vec![cookie], "FIXTURE_COOKIE_MISMATCH");
+    ensure!(values("origin") == vec![origin], "FIXTURE_ORIGIN_MISMATCH");
+    let session_id = format!("sid_{}", "c".repeat(64));
     ensure!(
-        headers.contains(&format!("\r\ncookie: {cookie}\r\n")),
-        "FIXTURE_COOKIE_MISMATCH"
-    );
-    ensure!(
-        headers.contains(&format!("\r\norigin: {origin}\r\n")),
-        "FIXTURE_ORIGIN_MISMATCH"
+        values("x-bullet-expected-session")
+            == if discovery {
+                vec![]
+            } else {
+                vec![session_id.as_str()]
+            },
+        "FIXTURE_EXPECTED_SESSION_MISMATCH"
     );
     reads.fetch_add(1, Ordering::SeqCst);
     while gate.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst) {
@@ -213,15 +225,27 @@ fn serve(
         return Ok(());
     }
     let sequence = if commands { 9 } else { 0 };
-    let (status, body) = match status.load(Ordering::SeqCst) {
-        200 => ("200 OK", if commands { submissions() } else { snapshot() }),
-        401 => ("401 Unauthorized", "{}".into()),
-        403 => ("403 Forbidden", "{}".into()),
-        _ => bail!("FIXTURE_STATUS_INVALID"),
+    // Status injection exercises UI refusal recovery after authenticated discovery;
+    // it does not establish actual server-side session revocation.
+    let (status, body) = if discovery {
+        (
+            "200 OK",
+            json!({"status":"AUTHENTICATED","operator_id":format!("opr_{}", "1".repeat(64)),
+            "session_id":session_id,"issued_at":"2026-09-10T00:00:00Z",
+            "expires_at":"2026-09-10T08:00:00Z"})
+            .to_string(),
+        )
+    } else {
+        match status.load(Ordering::SeqCst) {
+            200 => ("200 OK", if commands { submissions() } else { snapshot() }),
+            401 => ("401 Unauthorized", "{}".into()),
+            403 => ("403 Forbidden", "{}".into()),
+            _ => bail!("FIXTURE_STATUS_INVALID"),
+        }
     };
     // A detached client may close its socket while the response is withheld.
     // Delivery loss is expected here; the request above was fully validated.
-    let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nX-Bullet-As-Of-Sequence: {sequence}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    let _ = write!(stream, "HTTP/1.1 {status}\r\nX-Bullet-Session-Id: {session_id}\r\nContent-Type: application/json\r\nX-Bullet-As-Of-Sequence: {sequence}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     Ok(())
 }
 

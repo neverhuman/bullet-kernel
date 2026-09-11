@@ -82,13 +82,32 @@ impl Fixture {
                 }
                 let request = String::from_utf8(bytes).unwrap();
                 let commands = request.starts_with("GET /api/v1/commands HTTP/1.1\r\n");
+                let discovery = request.starts_with("GET /api/v1/auth/session HTTP/1.1\r\n");
                 assert!(
-                    commands || request.starts_with("GET /api/v1/operator-snapshot HTTP/1.1\r\n"),
-                    "TUI must only read snapshots, including detach"
+                    discovery || commands || request.starts_with("GET /api/v1/operator-snapshot HTTP/1.1\r\n"),
+                    "TUI must only observe its authenticated session and read snapshots, including detach"
                 );
-                let headers = request.to_ascii_lowercase();
-                assert!(headers.contains(&format!("\r\ncookie: {cookie}\r\n")));
-                assert!(headers.contains(&format!("\r\norigin: {origin}\r\n")));
+                let values = |name: &str| {
+                    request
+                        .split("\r\n")
+                        .skip(1)
+                        .filter_map(|line| line.split_once(':'))
+                        .filter_map(|(key, value)| {
+                            key.eq_ignore_ascii_case(name).then_some(value.trim())
+                        })
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(values("cookie"), vec![cookie.as_str()]);
+                assert_eq!(values("origin"), vec![origin.as_str()]);
+                let session_id = format!("sid_{}", "c".repeat(64));
+                assert_eq!(
+                    values("x-bullet-expected-session"),
+                    if discovery {
+                        vec![]
+                    } else {
+                        vec![session_id.as_str()]
+                    }
+                );
                 count.fetch_add(1, Ordering::SeqCst);
                 while gate.load(Ordering::SeqCst) && !end.load(Ordering::SeqCst) {
                     std::thread::sleep(Duration::from_millis(5));
@@ -96,7 +115,11 @@ impl Fixture {
                 if end.load(Ordering::SeqCst) {
                     break;
                 }
-                let requested_status = if commands && command_failure.load(Ordering::SeqCst) != 0 {
+                // Inject projection refusal after a valid session observation.
+                // This is synthetic UI error recovery, not live session revocation.
+                let requested_status = if discovery {
+                    0
+                } else if commands && command_failure.load(Ordering::SeqCst) != 0 {
                     command_failure.load(Ordering::SeqCst)
                 } else {
                     refusal.load(Ordering::SeqCst)
@@ -108,7 +131,12 @@ impl Fixture {
                     500 => "500 Internal Server Error",
                     other => panic!("unsupported fixture refusal: {other}"),
                 };
-                let body = if bad.load(Ordering::SeqCst) || status != "200 OK" {
+                let body = if discovery {
+                    json!({"status":"AUTHENTICATED","operator_id":format!("opr_{}", "1".repeat(64)),
+                        "session_id":session_id,"issued_at":"2026-09-10T00:00:00Z",
+                        "expires_at":"2026-09-10T08:00:00Z"})
+                    .to_string()
+                } else if bad.load(Ordering::SeqCst) || status != "200 OK" {
                     "{}".into()
                 } else if commands {
                     json!({"data":{"commands":[{"id":format!("cmd_{}", "2".repeat(64)),
@@ -119,7 +147,7 @@ impl Fixture {
                     snapshot()
                 };
                 let sequence = if commands { 9 } else { 0 };
-                write!(socket,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nX-Bullet-As-Of-Sequence: {sequence}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                write!(socket,"HTTP/1.1 {status}\r\nX-Bullet-Session-Id: {session_id}\r\nContent-Type: application/json\r\nX-Bullet-As-Of-Sequence: {sequence}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
             }
         });
         Self {
