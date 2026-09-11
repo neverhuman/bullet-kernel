@@ -304,7 +304,7 @@ mod default_command_tests {
     fn no_args_selects_default_tui() {
         let cli = Cli::try_parse_from(["bullet"]).expect("no-args parse");
         assert!(
-            matches!(cli.command, None),
+            cli.command.is_none(),
             "no-args must leave the subcommand absent so main can default to tui"
         );
         let command = cli

@@ -13,11 +13,11 @@ that aggregator fail.
 
 | Partition | Selected | Meaning |
 | --- | ---: | --- |
-| standalone | 1257 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
+| standalone | 1265 | all component tests outside the provider-contract/simulation, egress, and family partitions; every selected identity executes with zero skipped, including the explicitly feature-enabled verifier fixture tests |
 | egress | 3 | the exact host-dependent namespace/nftables/CONNECT-proxy identities; only the capability-admitted `egress` lane executes them |
 | contract | 34 | four offline provider protocol binaries plus `bullet-test-simulation` |
 | family | 9 | five `transaction_demo` identities plus `heartbeat_stale`, `kill_retry`, `loop_sim`, and `synthetic_e2e` |
-| total | 1303 | exact union of the four disjoint partitions above |
+| total | 1311 | exact union of the four disjoint partitions above |
 
 `ops/ci/inventory-test.sh` independently lists all four partitions, requires
 every set to be nonzero, checks pairwise disjointness and exact union,
@@ -182,7 +182,7 @@ provider conformance.
 
 | Lane | Scope |
 | --- | --- |
-| `fast` | exactly 1257 standalone nextest identities, all executed with zero skipped |
+| `fast` | exactly 1265 standalone nextest identities, all executed with zero skipped |
 | `lint` | rustfmt, all-target Clippy, actionlint 1.7.8, ShellCheck 0.10.0, workflow policy, inventory/observation/nightly meta-tests |
 | `contract` | exactly 34 offline provider-contract and simulation tests |
 | `security` | current-tree gitleaks 8.21.2; full cargo-deny 0.19.8 advisories/bans/licenses/sources with independently proved RustSec freshness; zizmor 1.25.2 |
