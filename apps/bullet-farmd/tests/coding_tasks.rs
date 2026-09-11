@@ -284,10 +284,33 @@ async fn v2_http_dispatch_settles_one_failure_and_refuses_a_second_spawn() {
     server.stop().await;
 }
 
-fn sibling_bin(name: &str) -> Option<std::path::PathBuf> {
+fn runner_bin() -> std::path::PathBuf {
     let farmd = std::path::PathBuf::from(env!("CARGO_BIN_EXE_bullet-farmd"));
-    let candidate = farmd.with_file_name(name);
-    candidate.is_file().then_some(candidate)
+    let mut candidates = vec![farmd.with_file_name("bullet-runner")];
+    if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
+        candidates.push(std::path::PathBuf::from(target).join("debug/bullet-runner"));
+    }
+    if let Some(found) = candidates.iter().find(|path| path.is_file()) {
+        return found.clone();
+    }
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("farmd manifest lives two levels under the workspace");
+    let status = std::process::Command::new(env!("CARGO"))
+        .args(["build", "--locked", "--bin", "bullet-runner"])
+        .current_dir(workspace)
+        .status()
+        .expect("COMMAND_RUNNER_BUILD_SPAWN");
+    assert!(
+        status.success(),
+        "COMMAND_RUNNER_BUILD_FAILED: cargo build --locked --bin bullet-runner"
+    );
+    candidates.push(workspace.join("target/debug/bullet-runner"));
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .expect("COMMAND_RUNNER_BIN_ABSENT: build bullet-runner in the farmd target")
 }
 
 fn write_stub(dir: &std::path::Path) -> std::path::PathBuf {
@@ -305,6 +328,7 @@ fn write_stub(dir: &std::path::Path) -> std::path::PathBuf {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(true)
         .mode(0o700)
         .open(&stub)
         .unwrap();
@@ -334,9 +358,7 @@ async fn v2_http_then_real_runner_stub_retains_failure_and_refuses_a_second_spaw
         .unwrap()
         .unwrap();
     assert_eq!(claim.command_id.as_str(), id);
-    let runner_bin = sibling_bin("bullet-runner").expect(
-        "COMMAND_RUNNER_BIN_ABSENT: build bullet-runner in the same target as bullet-farmd",
-    );
+    let runner_bin = runner_bin();
     let stub = write_stub(dir.path());
     let workspace = dir.path().join("workspace");
     let source = dir.path().join("source.git");
