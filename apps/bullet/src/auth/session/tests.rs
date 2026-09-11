@@ -188,15 +188,14 @@ fn revocation_requires_the_observed_identity_and_exact_authenticated_empty_reque
     }
 }
 
-fn observed_session_fixture(
-    acknowledgement: String,
-    body: String,
-) -> (
+type SessionFixture = (
     std::sync::mpsc::Receiver<Result<crate::client::models::OperatorSessionView, String>>,
     std::sync::mpsc::Sender<()>,
     std::thread::JoinHandle<()>,
     std::thread::JoinHandle<()>,
-) {
+);
+
+fn observed_session_fixture(acknowledgement: String, body: String) -> SessionFixture {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let credentials = Credentials {
@@ -264,7 +263,6 @@ fn session_discovery_refuses_missing_invalid_or_duplicate_ack_before_reading_bod
         server.join().unwrap();
         client.join().unwrap();
         let error = early
-            .ok()
             .expect("ack refusal must precede body release")
             .err()
             .unwrap();

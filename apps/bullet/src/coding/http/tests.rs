@@ -194,16 +194,18 @@ fn expected_session_header_refuses_invalid_and_duplicate_values_before_connectin
     );
 }
 
-fn held_session_response(
-    status: u16,
-    acknowledgement: String,
-    body: &'static str,
-) -> (
+type ResponseFixture = (
     std::sync::mpsc::Receiver<Result<HttpResponse, String>>,
     std::sync::mpsc::Sender<()>,
     std::thread::JoinHandle<()>,
     std::thread::JoinHandle<()>,
-) {
+);
+
+fn held_session_response(
+    status: u16,
+    acknowledgement: String,
+    body: &'static str,
+) -> ResponseFixture {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (release, wait) = std::sync::mpsc::channel();
@@ -274,7 +276,6 @@ fn missing_foreign_and_duplicate_session_ack_refuse_before_held_body_or_absence(
             server.join().unwrap();
             client.join().unwrap();
             let error = early
-                .ok()
                 .expect("session refusal must precede body release")
                 .err()
                 .unwrap();
