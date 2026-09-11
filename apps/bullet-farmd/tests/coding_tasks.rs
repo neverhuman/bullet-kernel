@@ -283,3 +283,143 @@ async fn v2_http_dispatch_settles_one_failure_and_refuses_a_second_spawn() {
     assert_eq!(snapshot["data"]["command"]["id"], id);
     server.stop().await;
 }
+
+fn sibling_bin(name: &str) -> Option<std::path::PathBuf> {
+    let farmd = std::path::PathBuf::from(env!("CARGO_BIN_EXE_bullet-farmd"));
+    let candidate = farmd.with_file_name(name);
+    candidate.is_file().then_some(candidate)
+}
+
+fn write_stub(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let stub = dir.join("signed-in-stub");
+    let proposal = format!(
+        r#"{{"schema_version":1,"proposal_id":"cnt_{a}","producing_attempt_id":"atm_{b}","base_checkpoint_id":"ckp_{c}","base_checkpoint_digest":"{d}","operations":[{{"path":"PONG.txt","preimage":{{"kind":"absent"}},"mutation":{{"kind":"write","content_utf8":"PONG\n"}}}}],"gate_ids":["gat_{g}"]}}"#,
+        a = "1".repeat(64),
+        b = "2".repeat(64),
+        c = "3".repeat(64),
+        d = "4".repeat(64),
+        g = "8".repeat(64),
+    );
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .mode(0o700)
+        .open(&stub)
+        .unwrap();
+    write!(file, "#!/bin/sh\nprintf '%s\\n' '{proposal}'\nexit 1\n").unwrap();
+    stub
+}
+
+#[tokio::test]
+async fn v2_http_then_real_runner_stub_retains_failure_and_refuses_a_second_spawn() {
+    let dir = support::private_tempdir();
+    let path = dir.path().join("coding.sqlite");
+    let server = Server::start(&path, Some(BOOT)).await;
+    let (cookie, csrf) = bootstrap(server.addr).await;
+    let headers = [
+        ("Cookie", cookie.as_str()),
+        ("Origin", ORIGIN),
+        ("X-Bullet-CSRF", csrf.as_str()),
+    ];
+    let body = coding("stack-d1-runner");
+    let accepted = request(server.addr, "POST", "/api/v1/commands", &headers, &body).await;
+    assert_eq!(status(&accepted), 202);
+    let id = http::body(&accepted)["id"].as_str().unwrap().to_owned();
+    let mut ledger = SqliteLedger::open(&path).unwrap();
+    let runner = RunnerId::from_seed("d1-real-runner");
+    let claim = ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:00.000Z")
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.command_id.as_str(), id);
+    let runner_bin = sibling_bin("bullet-runner").expect(
+        "COMMAND_RUNNER_BIN_ABSENT: build bullet-runner in the same target as bullet-farmd",
+    );
+    let stub = write_stub(dir.path());
+    let workspace = dir.path().join("workspace");
+    let source = dir.path().join("source.git");
+    let preserve = dir.path().join("preserve");
+    let key = dir.path().join("candidate.key");
+    let recovery = dir.path().join("lease.recovery");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir_all(&preserve).unwrap();
+    std::fs::write(&key, []).unwrap();
+    std::fs::write(&recovery, []).unwrap();
+    let output = std::process::Command::new(&runner_bin)
+        .args([
+            "--provider",
+            "codex",
+            "--model",
+            "fixture-model",
+            "--signed-in-executable",
+        ])
+        .arg(&stub)
+        .args([
+            "--runner-id",
+            claim.runner_id.as_str(),
+            "--work-package-id",
+            &bullet_domain::WorkPackageId::from_seed("d1-real-runner").to_string(),
+            "--candidate-request-digest",
+            &claim.request.digest().to_hex(),
+            "--candidate-verification-key",
+        ])
+        .arg(&key)
+        .arg("--workspace-root")
+        .arg(&workspace)
+        .arg("--source-repo")
+        .arg(&source)
+        .args(["--base-sha", &"ab".repeat(20)])
+        .arg("--preservation-destination")
+        .arg(&preserve)
+        .args([
+            "--objective",
+            "Survive response loss",
+            "--gate-id",
+            &format!("gat_{}", "cd".repeat(32)),
+            "--scope",
+            "src/lib.rs",
+            "--idempotency-key",
+            "stack-d1-runner",
+            "--lease-recovery",
+        ])
+        .arg(&recovery)
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !combined.contains("sim"),
+        "real runner stub path must not name the simulator: {combined}"
+    );
+    assert_ne!(output.status.code(), Some(0));
+    let receipt =
+        ComponentCommandCompletionV1::new(&claim, Digest::of(&output.stderr)).unwrap();
+    ledger
+        .settle_component_command_dispatch(
+            &claim.claim_id,
+            &runner,
+            1,
+            &receipt,
+            "2026-09-11T00:00:01.000Z",
+        )
+        .unwrap();
+    assert!(ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:02.000Z")
+        .unwrap()
+        .is_none());
+    let retry = request(server.addr, "POST", "/api/v1/commands", &headers, &body).await;
+    assert_eq!(status(&retry), 202);
+    assert_eq!(http::body(&retry)["id"], id);
+    assert_eq!(http::body(&retry)["status"], "UNKNOWN");
+    assert!(ledger
+        .claim_next_command_dispatch(&runner, 1, "2026-09-11T00:00:03.000Z")
+        .unwrap()
+        .is_none());
+    server.stop().await;
+}
