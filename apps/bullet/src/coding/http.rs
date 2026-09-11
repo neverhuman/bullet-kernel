@@ -34,9 +34,49 @@ pub(crate) fn request_query(
     headers: &[(&str, &str)],
     body: Option<&Value>,
 ) -> Result<HttpResponse, String> {
+    request_inner(farmd, method, path, query, headers, body, false).map(|(response, _)| response)
+}
+
+/// Session discovery has one fixed authenticated endpoint. Its acknowledgement
+/// is required before consuming the model that names the previously unknown ID.
+pub(crate) fn observe_session(
+    farmd: &str,
+    origin: &str,
+    cookie: &str,
+) -> Result<(HttpResponse, String), String> {
+    let (response, session) = request_inner(
+        farmd,
+        "GET",
+        "/api/v1/auth/session",
+        &[],
+        &[("Origin", origin), ("Cookie", cookie)],
+        None,
+        true,
+    )?;
+    Ok((response, session.ok_or("FARMD_SESSION_ACK_MISSING")?))
+}
+
+fn request_inner(
+    farmd: &str,
+    method: &str,
+    path: &str,
+    query: &[(&str, &str)],
+    headers: &[(&str, &str)],
+    body: Option<&Value>,
+    observe_session: bool,
+) -> Result<(HttpResponse, Option<String>), String> {
     parse_loopback(farmd)?;
     if !path.starts_with('/') || path.starts_with("//") || path.contains(['?', '#', '\\']) {
         return Err("FARMD_PATH_INVALID: expected an absolute API path".into());
+    }
+    let mut expected_session = None;
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case("x-bullet-expected-session") {
+            if expected_session.replace(*value).is_some() {
+                return Err("FARMD_EXPECTED_SESSION_AMBIGUOUS".into());
+            }
+            validate_secret(value, "sid").map_err(|_| "FARMD_EXPECTED_SESSION_INVALID")?;
+        }
     }
     let mut url = Url::parse(farmd).map_err(|_| "FARMD_URL_INVALID")?;
     // Paths are assigned, never resolved as a new authority.
@@ -65,6 +105,25 @@ pub(crate) fn request_query(
     let response = request.send().map_err(|_| {
         "FARMD_REQUEST_FAILED: reconnect and reconcile the original command before retrying"
     })?;
+    // An authenticated caller's expected owner must be acknowledged before any
+    // body, cookie, projection or absence result can be consumed.
+    let session_id = if expected_session.is_some() || observe_session {
+        let mut acknowledgements = response.headers().get_all("x-bullet-session-id").iter();
+        let acknowledged = acknowledgements.next().ok_or("FARMD_SESSION_ACK_MISSING")?;
+        if acknowledgements.next().is_some() {
+            return Err("FARMD_SESSION_ACK_AMBIGUOUS".into());
+        }
+        if expected_session.is_some_and(|expected| acknowledged.as_bytes() != expected.as_bytes()) {
+            return Err("FARMD_SESSION_ACK_MISMATCH".into());
+        }
+        let session = acknowledged
+            .to_str()
+            .map_err(|_| "FARMD_SESSION_ACK_INVALID")?;
+        validate_secret(session, "sid").map_err(|_| "FARMD_SESSION_ACK_INVALID")?;
+        Some(session.to_owned())
+    } else {
+        None
+    };
     let status = response.status().as_u16();
     let sequences = response
         .headers()
@@ -136,12 +195,15 @@ pub(crate) fn request_query(
             .map_err(|_| "FARMD_JSON_INVALID: response was not unambiguous UTF-8 JSON")?
             .0
     };
-    Ok(HttpResponse {
-        status,
-        body,
-        set_cookie,
-        sequence,
-    })
+    Ok((
+        HttpResponse {
+            status,
+            body,
+            set_cookie,
+            sequence,
+        },
+        session_id,
+    ))
 }
 
 pub(crate) fn exchange_bootstrap(

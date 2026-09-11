@@ -150,3 +150,159 @@ fn query_pairs_are_encoded_without_changing_the_authority_or_path() {
         assert!(request_query(&url, "GET", path, &[], &[], None).is_err());
     }
 }
+
+#[test]
+fn expected_session_header_refuses_invalid_and_duplicate_values_before_connecting() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let session = format!("sid_{}", "a".repeat(64));
+    for value in [
+        "".to_owned(),
+        "sid_bad".into(),
+        format!("sid_{}", "A".repeat(64)),
+        format!("ses_{}", "a".repeat(64)),
+        format!("{} ", session),
+    ] {
+        let error = request(
+            &url,
+            "GET",
+            "/api/v1/commands/absent",
+            &[("X-Bullet-Expected-Session", &value)],
+            None,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error, "FARMD_EXPECTED_SESSION_INVALID");
+    }
+    let error = request(
+        &url,
+        "GET",
+        "/api/v1/commands/absent",
+        &[
+            ("x-bullet-expected-session", &session),
+            ("X-Bullet-Expected-Session", &session),
+        ],
+        None,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(error, "FARMD_EXPECTED_SESSION_AMBIGUOUS");
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+fn held_session_response(
+    status: u16,
+    acknowledgement: String,
+    body: &'static str,
+) -> (
+    std::sync::mpsc::Receiver<Result<HttpResponse, String>>,
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<()>,
+    std::thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (release, wait) = std::sync::mpsc::channel();
+    let (sent, received) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let request = String::from_utf8(read_request(&mut socket)).unwrap();
+        assert!(request.contains(&format!(
+            "x-bullet-expected-session: sid_{}\r\n",
+            "a".repeat(64)
+        )));
+        let headers = format!(
+            "HTTP/1.1 {status} Fixture\r\n{acknowledgement}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        socket.write_all(headers.as_bytes()).unwrap();
+        socket.flush().unwrap();
+        // The client must reject an unacknowledged response while this body is
+        // still withheld, rather than failing later on JSON or the request timeout.
+        wait.recv_timeout(Duration::from_secs(5)).unwrap();
+        let _ = socket.write_all(body.as_bytes());
+    });
+    let client = std::thread::spawn(move || {
+        let session = format!("sid_{}", "a".repeat(64));
+        let result = request(
+            &url,
+            "GET",
+            "/api/v1/commands/absent",
+            &[("x-bullet-expected-session", &session)],
+            None,
+        );
+        let _ = sent.send(result);
+    });
+    (received, release, server, client)
+}
+
+#[test]
+fn missing_foreign_and_duplicate_session_ack_refuse_before_held_body_or_absence() {
+    let session = format!("sid_{}", "a".repeat(64));
+    let foreign = format!("sid_{}", "b".repeat(64));
+    for status in [200, 404] {
+        for (acknowledgement, expected) in [
+            (String::new(), "FARMD_SESSION_ACK_MISSING"),
+            (
+                format!("x-bullet-session-id: {foreign}\r\n"),
+                "FARMD_SESSION_ACK_MISMATCH",
+            ),
+            (
+                format!("x-bullet-session-id: {session}\r\nX-Bullet-Session-Id: {session}\r\n"),
+                "FARMD_SESSION_ACK_AMBIGUOUS",
+            ),
+            (
+                format!("x-bullet-session-id: {session}, {session}\r\n"),
+                "FARMD_SESSION_ACK_MISMATCH",
+            ),
+            (
+                "x-bullet-session-id: \r\n".into(),
+                "FARMD_SESSION_ACK_MISMATCH",
+            ),
+        ] {
+            let (received, release, server, client) =
+                held_session_response(status, acknowledgement, "PRIVATE_BODY_NOT_JSON");
+            let early = received.recv_timeout(Duration::from_secs(2));
+            release.send(()).unwrap();
+            server.join().unwrap();
+            client.join().unwrap();
+            let error = early
+                .ok()
+                .expect("session refusal must precede body release")
+                .err()
+                .unwrap();
+            assert_eq!(error, expected);
+            assert!(!error.contains("PRIVATE_BODY"));
+        }
+    }
+}
+
+#[test]
+fn matching_session_ack_allows_body_and_owner_bound_not_found() {
+    for status in [200, 404] {
+        let acknowledgement = format!("x-bullet-session-id: sid_{}\r\n", "a".repeat(64));
+        let (received, release, server, client) =
+            held_session_response(status, acknowledgement, r#"{"subject":"exact-request"}"#);
+        let before_release = received.recv_timeout(Duration::from_millis(100));
+        release.send(()).unwrap();
+        server.join().unwrap();
+        client.join().unwrap();
+        assert!(matches!(
+            before_release,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        let response = received
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status, status);
+        assert_eq!(response.body, json!({"subject":"exact-request"}));
+    }
+}
