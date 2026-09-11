@@ -10,15 +10,23 @@ pub(super) enum View {
     Review,
     Events,
     Context,
+    Outbox,
+    Ready,
+    Fleet,
+    Submissions,
 }
 impl View {
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::Missions,
         Self::Tasks,
         Self::Attempts,
         Self::Review,
         Self::Events,
         Self::Context,
+        Self::Outbox,
+        Self::Ready,
+        Self::Fleet,
+        Self::Submissions,
     ];
     pub(super) fn title(self) -> &'static str {
         match self {
@@ -28,6 +36,10 @@ impl View {
             Self::Review => "Merge Rail",
             Self::Events => "Incidents and Audit",
             Self::Context => "Context Lineage",
+            Self::Outbox => "Outbox",
+            Self::Ready => "Ready queue",
+            Self::Fleet => "Fleet",
+            Self::Submissions => "Submissions",
         }
     }
 }
@@ -52,13 +64,22 @@ pub(super) struct Row {
     pub(super) human: String,
     pub(super) raw: String,
 }
-/// Replace each 64-hex run so TUI paint, `--once`, and detach never leak ledger ids.
+/// Human rows shorten each 64-hex run to `abcd…wxyz`. Raw JSON keeps the exact id.
+pub(super) fn abbreviate_ledger_hex(text: &str) -> String {
+    map_ledger_hex(text, |hex| format!("{}…{}", &hex[..4], &hex[60..]))
+}
+
+/// Detach / reconnect still hide 64-hex runs from the printed command.
 pub(super) fn redact_ledger_hex(text: &str) -> String {
+    map_ledger_hex(text, |_| "<redacted>".into())
+}
+
+fn map_ledger_hex(text: &str, rewrite: impl Fn(&str) -> String) -> String {
     let mut out = String::with_capacity(text.len());
     let mut hex = String::new();
     let flush = |out: &mut String, hex: &mut String| {
         if hex.len() == 64 {
-            out.push_str("<redacted>");
+            out.push_str(&rewrite(hex));
         } else {
             out.push_str(hex);
         }
@@ -79,19 +100,18 @@ pub(super) fn redact_ledger_hex(text: &str) -> String {
 fn row(value: &impl Serialize, id: &str, label: String, human: String) -> Row {
     Row {
         id: id.into(),
-        label: terminal_text(&redact_ledger_hex(&label)),
-        human: redact_ledger_hex(&human)
+        label: terminal_text(&abbreviate_ledger_hex(&label)),
+        human: abbreviate_ledger_hex(&human)
             .lines()
             .map(terminal_text)
             .collect::<Vec<_>>()
             .join("\n"),
-        raw: redact_ledger_hex(
-            &serde_json::to_string_pretty(value).unwrap_or_else(|_| "ENCODING_UNAVAILABLE".into()),
-        )
-        .lines()
-        .map(terminal_text)
-        .collect::<Vec<_>>()
-        .join("\n"),
+        raw: serde_json::to_string_pretty(value)
+            .unwrap_or_else(|_| "ENCODING_UNAVAILABLE".into())
+            .lines()
+            .map(terminal_text)
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
 }
 
@@ -121,6 +141,9 @@ pub(super) struct Model {
     pub(super) refresh_pending: bool,
     pub(super) raw_json: bool,
     pub(super) destination: String,
+    pub(super) view_stack: Vec<View>,
+    pub(super) coding_after: u64,
+    pub(super) coding_next_after: Option<u64>,
 }
 
 impl Model {
@@ -142,10 +165,28 @@ impl Model {
             Err(error) => self.error = Some(error),
         }
     }
-    pub(super) fn set_coding(&mut self, commands: Vec<CodingCommand>) {
+    pub(super) fn set_coding(&mut self, commands: Vec<CodingCommand>, next_after: Option<u64>) {
         self.coding = commands;
+        self.coding_next_after = next_after;
         if self.snapshot.is_some() {
             self.rebuild();
+        }
+    }
+    pub(super) fn page_coding(&mut self, forward: bool) -> bool {
+        if self.view != View::Submissions {
+            return false;
+        }
+        if forward {
+            let Some(next) = self.coding_next_after else {
+                return false;
+            };
+            self.coding_after = next;
+            true
+        } else if self.coding_after > 0 {
+            self.coding_after = 0;
+            true
+        } else {
+            false
         }
     }
     pub(super) fn selected(&self) -> Option<usize> {
@@ -193,7 +234,8 @@ impl Model {
             ""
         };
         format!(
-            "HOLD · LIVE {live} · UNBOUND · HEAD_RUNTIME_BINDING_REQUIRED · STOP_UNIMPLEMENTED · {}\n{destination} · {snapshot}{pending}",
+            "HOLD · LIVE {live} · UNBOUND · HEAD_RUNTIME_BINDING_REQUIRED · STOP_UNIMPLEMENTED · harness {} · {}\n{destination} · {snapshot}{pending}",
+            crate::client::harness_outcome(),
             self.observation()
         )
     }
@@ -359,6 +401,64 @@ impl Model {
                     )
                 })
                 .collect(),
+            View::Outbox => data
+                .outbox
+                .items
+                .iter()
+                .map(|v| {
+                    row(
+                        v,
+                        &v.seq.to_string(),
+                        format!("[{}] {} seq {}", v.phase, v.kind, v.seq),
+                        field_lines(&[
+                            ("seq", v.seq.to_string()),
+                            ("kind", v.kind.clone()),
+                            ("phase", v.phase.clone()),
+                            ("as_of_sequence", as_of.clone()),
+                            ("observed_at", observed.clone()),
+                        ]),
+                    )
+                })
+                .collect(),
+            View::Ready => data
+                .fleet
+                .ready_queue
+                .iter()
+                .map(|v| {
+                    row(
+                        v,
+                        &v.work_package_id,
+                        format!("ready {}", v.work_package_id),
+                        field_lines(&[
+                            ("work_package_id", v.work_package_id.clone()),
+                            ("enqueued_at", v.enqueued_at.clone()),
+                            ("as_of_sequence", as_of.clone()),
+                            ("observed_at", observed.clone()),
+                        ]),
+                    )
+                })
+                .collect(),
+            View::Fleet => data
+                .fleet
+                .leases
+                .iter()
+                .map(|v| {
+                    row(
+                        v,
+                        &v.attempt_id,
+                        format!("[{}] {} fence {}", v.liveness, v.attempt_id, v.fence),
+                        field_lines(&[
+                            ("attempt_id", v.attempt_id.clone()),
+                            ("liveness", v.liveness.clone()),
+                            ("fence", v.fence.to_string()),
+                            ("runner_id", v.runner_id.clone()),
+                            ("as_of_sequence", as_of.clone()),
+                            ("observed_at", observed.clone()),
+                        ]),
+                    )
+                })
+                .collect(),
+            View::Submissions => self.coding_rows(&as_of, &observed, "submission"),
         };
         self.replace_rows(rows);
     }
@@ -370,18 +470,17 @@ impl Model {
                     "attempt" => format!("[{} / lease UNBOUND] coding attempt", command.status),
                     _ => format!("[{}] coding {}", command.status, surface),
                 };
-                row(
-                    command,
-                    &command.id,
-                    label,
-                    field_lines(&[
-                        ("kind", command.kind.clone()),
-                        ("status", command.status.clone()),
-                        ("surface", surface.into()),
-                        ("as_of_sequence", as_of.into()),
-                        ("observed_at", observed.into()),
-                    ]),
-                )
+                let mut pairs = vec![
+                    ("kind", command.kind.clone()),
+                    ("status", command.status.clone()),
+                    ("surface", surface.into()),
+                    ("as_of_sequence", as_of.into()),
+                    ("observed_at", observed.into()),
+                ];
+                for blocker in &command.blockers {
+                    pairs.push(("blocked", blocker.clone()));
+                }
+                row(command, &command.id, label, field_lines(&pairs))
             })
             .collect()
     }
@@ -408,17 +507,17 @@ impl Model {
     pub(super) fn enter(&mut self) {
         if self.palette {
             if self.palette_selection < View::ALL.len() {
-                self.view = View::ALL[self.palette_selection];
+                self.push_view(View::ALL[self.palette_selection]);
                 self.mission = None;
                 self.task = None;
             }
             self.palette = false;
         } else if self.selected_id.is_some() && self.view == View::Missions {
             self.mission = self.selected_id.take();
-            self.view = View::Tasks;
+            self.push_view(View::Tasks);
         } else if self.selected_id.is_some() && self.view == View::Tasks {
             self.task = self.selected_id.take();
-            self.view = View::Attempts;
+            self.push_view(View::Attempts);
         } else {
             self.details_focus = true;
         }
@@ -432,13 +531,25 @@ impl Model {
             self.palette = false;
         } else if self.details_focus {
             self.details_focus = false;
+        } else if let Some(prev) = self.view_stack.pop() {
+            self.view = prev;
+            if self.view != View::Attempts {
+                self.task = None;
+            }
+            if self.view != View::Tasks && self.view != View::Attempts {
+                self.mission = None;
+            }
+            self.rebuild();
         } else {
-            self.view = match self.view {
-                View::Attempts if self.task.is_some() => View::Tasks,
-                _ => View::Missions,
-            };
+            self.view = View::Missions;
             self.task = None;
             self.rebuild();
+        }
+    }
+    fn push_view(&mut self, next: View) {
+        if self.view != next {
+            self.view_stack.push(self.view);
+            self.view = next;
         }
     }
     pub(super) fn reconnect(&mut self, id: &str) {
@@ -472,7 +583,7 @@ impl Model {
         lines.extend(
             self.rows
                 .iter()
-                .map(|r| format!("{} {}", redact_ledger_hex(&r.id), r.label)),
+                .map(|r| format!("{} {}", abbreviate_ledger_hex(&r.id), r.label)),
         );
         if self.rows.is_empty() {
             lines.push("zero rows, not a green fleet; unavailable subjects remain unknown.".into());
@@ -512,6 +623,7 @@ mod tests {
         assert!(text.contains("UNBOUND"));
         assert!(text.contains("HEAD_RUNTIME_BINDING_REQUIRED"));
         assert!(text.contains("STOP_UNIMPLEMENTED"));
+        assert!(text.contains("harness UNBOUND"));
         assert!(text.contains("CONNECTING"));
         assert!(text.contains("snapshot UNKNOWN"));
         assert!(!text.contains("VERIFIED"));
@@ -524,6 +636,7 @@ mod tests {
     fn painted_surfaces_redact_sixty_four_hex() {
         let hex = "ab".repeat(32);
         let id = format!("cmd_{hex}");
+        let short = format!("cmd_{}…{}", &hex[..4], &hex[60..]);
         let painted = row(
             &serde_json::json!({"id": id, "status": "PENDING"}),
             &id,
@@ -533,13 +646,15 @@ mod tests {
         assert_eq!(painted.id, id);
         assert!(!painted.label.contains(&hex));
         assert!(!painted.human.contains(&hex));
-        assert!(!painted.raw.contains(&hex));
-        assert!(painted.raw.contains("cmd_<redacted>"));
+        assert!(painted.label.contains(&short));
+        assert!(painted.human.contains(&short));
+        assert!(painted.raw.contains(&hex));
+        assert!(!painted.raw.contains("<redacted>"));
         let mut model = Model::default();
         model.replace_rows(vec![painted]);
         let text = model.plain();
         assert!(!text.contains(&hex));
-        assert!(text.contains("cmd_<redacted>"));
+        assert!(text.contains(&short));
         assert_eq!(
             redact_ledger_hex("unobserved'subject"),
             "unobserved'subject"

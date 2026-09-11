@@ -71,7 +71,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, model: &mut Model, color: bool) {
         panes[1],
     );
     let message = model.error.as_deref().map(crate::client::terminal_text)
-        .unwrap_or_else(|| "Ctrl+K navigate · Tab panes · j/k move · Enter detail · Esc back · r refresh · J raw JSON · ? help · Ctrl+C detach".into());
+        .unwrap_or_else(|| "Ctrl+K navigate · Tab panes · j/k move · Enter detail · Esc back · r refresh · n/p submissions page · J raw JSON · ? help · submit via bullet coding submit · Ctrl+C detach".into());
     frame.render_widget(
         Paragraph::new(message)
             .style(style.fg(amber))
@@ -102,9 +102,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, model: &mut Model, color: bool) {
         );
     }
     if model.help {
-        let area = centered(frame.area(), 78, 16);
+        let area = centered(frame.area(), 78, 18);
         frame.render_widget(Clear, area);
-        frame.render_widget(Paragraph::new("Ctrl+K: jump list (Portal surface titles)\nTab: focus list or details\nArrows / j / k: move selection or scroll details\nEnter: mission → task → Attempt → details\nEscape: back; close palette or help\nr: request one snapshot refresh\nJ: toggle raw JSON in details\n?: this help\nCtrl+C: detach; farm work continues (STOP_UNIMPLEMENTED)\n\nCandidates are preserved subjects, not approval decisions.\nNative session controls and approval mutations require their durable backend.\nRecent events are a bounded audit tail; this view is polled every two seconds.")
+        frame.render_widget(Paragraph::new("Ctrl+K: jump list (Portal surface titles)\nTab: focus list or details\nArrows / j / k: move selection or scroll details\nEnter: mission → task → Attempt → details\nEscape: back one view; close palette or help\nr: request one snapshot refresh\nn / p or ] / [: page Submissions (--after)\nJ: toggle raw JSON in details (exact ids)\n?: this help\nCtrl+C: detach; farm work continues (STOP_UNIMPLEMENTED)\nSubmit and stop stay on `bullet coding submit` / `coding stop`.\n\nCandidates are preserved subjects, not approval decisions.\nNative session controls and approval mutations require their durable backend.\nRecent events are a bounded audit tail; this view is polled every two seconds.")
             .style(style).wrap(Wrap { trim: true }).block(Block::bordered().title("Operator help")), area);
     }
 }
