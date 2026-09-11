@@ -156,6 +156,24 @@ fn run_coding_claim_is_retained_and_unknown_kind_is_refused() {
     let state = coding_store.begin(claim, &"b".repeat(64)).unwrap();
     assert_eq!(state.claim.request.kind, RUN_CODING_KIND);
 
+    let (_task_temp, task_store) = store();
+    let task = serde_json::json!({
+        "schema_version":"bullet.run-coding.v2",
+        "task": {"title":"Bound task","objective":"retain v2 claim",
+            "repository_id":format!("rep_{}","ab".repeat(32)), "base_commit":"ab".repeat(20),
+            "scope_paths":["src/lib.rs"], "acceptance_criteria":["one"],
+            "gate_ids":[format!("gat_{}","cd".repeat(32))], "dependencies":[],
+            "budget":{"max_invocations":1,"max_cost_microusd":1000}, "deadline_unix_ms":4_102_444_800_000u64},
+        "selection":{"account_id":"fixture-account","provider":"claude","model":"fixture-model","effort":null}
+    });
+    let task_request = CommandRequest::new("coding-task", RUN_CODING_KIND, &task).unwrap();
+    let mut task_claim = claim_for("coding-task");
+    task_claim.request = task_request.clone();
+    task_claim.command_id = task_request.id();
+    task_claim.request_digest = task_request.digest();
+    let task_state = task_store.begin(task_claim, &"b".repeat(64)).unwrap();
+    assert_eq!(task_state.claim.request.kind, RUN_CODING_KIND);
+
     let (_other, empty) = store();
     let mut bad = claim_for("unknown-kind");
     bad.request =

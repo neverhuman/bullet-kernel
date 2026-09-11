@@ -1,6 +1,7 @@
 //! Crash-retained command claim and component receipt custody.
 
 use super::error::{WorkerContext, WorkerError};
+use bullet_application::coding_tasks::task_payload;
 use bullet_application::{
     CommandDispatchClaim, CommandDispatchDisposition, CommandRequest, RunCodingPayload,
     RUN_CODING_KIND, RUN_DEMO_KIND,
@@ -411,7 +412,10 @@ fn sync_dir(path: &Path) -> Result<(), WorkerError> {
 fn claim_kind_is_admitted(request: &CommandRequest) -> bool {
     match request.kind.as_str() {
         RUN_DEMO_KIND => request.payload == "{}",
-        RUN_CODING_KIND => RunCodingPayload::parse(&request.payload).is_ok(),
+        RUN_CODING_KIND => {
+            RunCodingPayload::parse(&request.payload).is_ok()
+                || task_payload(request).ok().flatten().is_some()
+        }
         _ => false,
     }
 }
