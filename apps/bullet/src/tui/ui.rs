@@ -4,27 +4,75 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
-pub(super) fn draw(frame: &mut Frame<'_>, model: &mut Model, color: bool) {
-    let bg = if color {
-        Color::Rgb(8, 16, 31)
-    } else {
-        Color::Reset
-    };
-    let text = if color {
-        Color::Rgb(227, 237, 247)
-    } else {
-        Color::Reset
-    };
-    let cyan = if color {
-        Color::Rgb(50, 220, 240)
-    } else {
-        Color::Reset
-    };
-    let amber = if color {
-        Color::Rgb(255, 196, 77)
-    } else {
-        Color::Reset
-    };
+/// The four colours the operator console paints with.
+///
+/// Terminals that do not advertise 24-bit colour quantise RGB on their own
+/// terms: the navy ground collapses to black and the amber chrome lands on a
+/// muddy dark red, which is unreadable. Rather than emit truecolor and hope,
+/// pick a representation the terminal can actually render.
+#[derive(Clone, Copy)]
+pub(super) struct Palette {
+    bg: Color,
+    text: Color,
+    cyan: Color,
+    amber: Color,
+}
+
+impl Palette {
+    /// No colour at all: every cell inherits the terminal.
+    pub(super) fn none() -> Self {
+        Self {
+            bg: Color::Reset,
+            text: Color::Reset,
+            cyan: Color::Reset,
+            amber: Color::Reset,
+        }
+    }
+
+    /// Exact 24-bit colours, for terminals that advertise them.
+    fn truecolor() -> Self {
+        Self {
+            bg: Color::Rgb(8, 16, 31),
+            text: Color::Rgb(227, 237, 247),
+            cyan: Color::Rgb(50, 220, 240),
+            amber: Color::Rgb(255, 196, 77),
+        }
+    }
+
+    /// Indexed ANSI, which every terminal renders exactly. The ground is left
+    /// to the terminal so the console sits in the operator's own theme instead
+    /// of fighting it with a near-black it may not be able to reproduce.
+    fn indexed() -> Self {
+        Self {
+            bg: Color::Reset,
+            text: Color::Reset,
+            cyan: Color::Cyan,
+            amber: Color::Yellow,
+        }
+    }
+
+    /// `NO_COLOR` wins; otherwise trust `COLORTERM`, the only portable signal a
+    /// terminal gives for 24-bit support.
+    pub(super) fn detect() -> Self {
+        if std::env::var_os("NO_COLOR").is_some() {
+            return Self::none();
+        }
+        match std::env::var("COLORTERM") {
+            Ok(value) if value.contains("truecolor") || value.contains("24bit") => {
+                Self::truecolor()
+            }
+            _ => Self::indexed(),
+        }
+    }
+}
+
+pub(super) fn draw(frame: &mut Frame<'_>, model: &mut Model, palette: Palette) {
+    let Palette {
+        bg,
+        text,
+        cyan,
+        amber,
+    } = palette;
     let style = Style::default().fg(text).bg(bg);
     frame.render_widget(Block::default().style(style), frame.area());
     let areas = Layout::vertical([
@@ -70,8 +118,13 @@ pub(super) fn draw(frame: &mut Frame<'_>, model: &mut Model, color: bool) {
             .block(Block::bordered().title(title)),
         panes[1],
     );
-    let message = model.error.as_deref().map(crate::client::terminal_text)
-        .unwrap_or_else(|| "Ctrl+K navigate · Tab panes · j/k move · Enter detail · Esc back · r refresh · n/p submissions page · J raw JSON · ? help · submit via bullet coding submit · Ctrl+C detach".into());
+    // The hints are most needed exactly when something has gone wrong, so an
+    // error is shown above them rather than replacing them.
+    const HINTS: &str = "Ctrl+K navigate · Tab panes · j/k move · Enter detail · Esc back · r refresh · n/p submissions page · J raw JSON · ? help · submit via bullet coding submit · Ctrl+C detach";
+    let message = match model.error.as_deref().map(crate::client::terminal_text) {
+        Some(error) => format!("{error}\n{HINTS}"),
+        None => HINTS.to_string(),
+    };
     frame.render_widget(
         Paragraph::new(message)
             .style(style.fg(amber))
@@ -133,7 +186,7 @@ mod tests {
             ..Model::default()
         };
         terminal
-            .draw(|frame| draw(frame, &mut model, false))
+            .draw(|frame| draw(frame, &mut model, Palette::none()))
             .unwrap();
         let text = terminal
             .backend()

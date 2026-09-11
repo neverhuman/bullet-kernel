@@ -71,10 +71,10 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     });
     let mut terminal = ratatui::try_init().map_err(|_| "TUI_TERMINAL_UNAVAILABLE")?;
     let _restore = RestoreTerminal;
-    let color = std::env::var_os("NO_COLOR").is_none();
+    let palette = ui::Palette::detect();
     // First paint must not wait for any network request, even on a cold connection.
     terminal
-        .draw(|frame| ui::draw(frame, &mut state, color))
+        .draw(|frame| ui::draw(frame, &mut state, palette))
         .map_err(|_| "TUI_DRAW_FAILED")?;
     request_tx
         .try_send(state.coding_after)
@@ -104,7 +104,7 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         }
         state.refresh_pending = pending;
         terminal
-            .draw(|frame| ui::draw(frame, &mut state, color))
+            .draw(|frame| ui::draw(frame, &mut state, palette))
             .map_err(|_| "TUI_DRAW_FAILED")?;
         if !event::poll(Duration::from_millis(100)).map_err(|_| "TUI_INPUT_FAILED")? {
             continue;
