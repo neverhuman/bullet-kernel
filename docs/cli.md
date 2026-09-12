@@ -2,10 +2,10 @@
 
 Status: current source components; not an installed or release-qualified operator workflow
 Owner: Bullet Farm maintainers
-Last reviewed: 2026-09-11
+Last reviewed: 2026-09-12
 Source of truth: `apps/bullet/src/{main,auth,client,coding,mission,tui,transaction,authority,provider,maintenance,contracts}.rs`,
 their supporting modules, `apps/bullet/src/authority/mint.rs`, and the process-bin sources below.
-<!-- bullet-doc-review:v1 subject=797e7a8ad2fe407dcbaabe5090a3f123a4f66400 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/args.rs,apps/bullet/src/coding/task.rs,apps/bullet-farmd/src/commands/coding.rs,crates/application/src/coding_tasks.rs,crates/application/src/coding_tasks/validation.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
+<!-- bullet-doc-review:v1 subject=025001dd55e1ffc52e63311b191a818eeeb037b9 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/tui/loader.rs,apps/bullet/src/tui/fleet.rs,apps/bullet/src/coding/http.rs,apps/bullet/src/mission.rs,apps/bullet/src/mission/remote.rs,apps/bullet/src/auth.rs,apps/bullet/src/auth/input.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/client/coherence.rs,apps/bullet/src/coding.rs,apps/bullet/src/coding/args.rs,apps/bullet/src/coding/task.rs,apps/bullet-farmd/src/commands/coding.rs,crates/application/src/coding_tasks.rs,crates/application/src/coding_tasks/validation.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,apps/bullet/src/coding/journal.rs,apps/bullet/src/coding/discovery.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/transaction.rs,apps/bullet/src/authority.rs,apps/bullet/src/provider.rs,apps/bullet/src/maintenance.rs,apps/bullet/src/contracts.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/main/bootstrap.rs,apps/bullet-runner/src/main.rs,apps/bullet-effects/src/main.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,crates/runner/src/signed_lease_rpc/recovery.rs -->
 
 `auth`, `coding`, remote `mission` reads and `tui` consume the loopback daemon. The local ledger helpers
 and guarded provider qualification paths remain separate. The operator controls
@@ -21,7 +21,8 @@ remain unimplemented.
 
 Interactive `bullet tui` draws CONNECTING before credential or network discovery;
 navigation and Ctrl+C detach remain available while discovery waits. An
-explicit `--subject` is selected when the first valid snapshot arrives and is
+explicit `--subject` is selected after command discovery settles and its relevant
+snapshot is valid, and is
 retained in the reconnect command if the client detaches first. `--once`, piped
 output and `TERM=dumb` retain synchronous plain-text snapshot behavior. Multiple
 consoles share short credential reads; detaching one does not stop another.
@@ -30,7 +31,7 @@ consoles share short credential reads; detaching one does not stop another.
 
 | Variable | Used by | Meaning |
 | --- | --- | --- |
-| `BULLET_DATA_DIR` | `farm init`, `demo`, `demo-synthetic` | data directory; default `./target/demo` |
+| `BULLET_DATA_DIR` | `farm init`, `demo`, `demo-synthetic` | data directory; default `./target/demo` currently fails ledger path admission; use an absolute private directory |
 | `BULLET_POLICY_PATH` | `authority mint-launch-grant`, `provider live-conformance` | absolute path overriding `<data-dir>/policy/policy.json` |
 | `BULLET_PROVIDER_KILL=1` | every provider argv build | kill switch; refuses every spawn (`PROVIDER_KILL_ACTIVE`) |
 | `NO_COLOR` | `auth status`, `coding board`/`watch`/`harness-check`, `tui` | present means text labels only; color also requires a TTY |
@@ -98,6 +99,13 @@ store. TUI refresh discovers credentials in a background worker and checks their
 identity again after each request. A changed login clears the previous owner's
 display; delayed responses from that identity are discarded. Missing or busy
 credentials leave navigation available, and refresh can recover without restart.
+
+Authenticated reads first observe `/api/v1/auth/session`, bind its acknowledged
+session ID, and send `X-Bullet-Expected-Session` on the selected read. Submission
+and revocation also bind that session. Missing, duplicate or mismatched
+`X-Bullet-Session-Id` responses refuse before body consumption, including absence
+results. This transport fence does not supply the unfinished durable composer
+or browser recovery journal.
 
 Submission prints a nonsecret journaled command ID before sending. After response
 loss, run `bullet coding status <id>` with the same state directory, or retry the

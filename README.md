@@ -4,9 +4,9 @@
 [![Jankurai](https://img.shields.io/badge/jankurai-audit-blue.svg)](docs/testing.md)
 
 Control-plane modular monolith for Bullet Farm. Agents start at [`AGENTS.md`](AGENTS.md).
-Product-surface claims and the CI inventory were last reviewed 2026-09-11
-against product subject `797e7a8a`.
-<!-- bullet-doc-review:v1 subject=797e7a8ad2fe407dcbaabe5090a3f123a4f66400 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,ops/ci/inventory.sh -->
+Product-surface claims and the CI inventory were last reviewed 2026-09-12
+against source subject `025001dd`.
+<!-- bullet-doc-review:v1 subject=025001dd55e1ffc52e63311b191a818eeeb037b9 max_distance=25 paths=apps/bullet/src/main.rs,apps/bullet/src/auth/session.rs,apps/bullet/src/auth/store.rs,apps/bullet/src/client.rs,apps/bullet/src/coding/http.rs,apps/bullet/src/tui.rs,apps/bullet/src/tui/loader.rs,apps/bullet/src/tui/model.rs,apps/bullet/src/tui/ui.rs,apps/bullet/src/tui/fleet.rs,crates/adapters/src/sqlite/migrations.rs,crates/adapters/src/sqlite/migrations/catalog.rs,apps/bullet-farmd/src/main.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/lib.rs,crates/runner/src/signed_lease_rpc.rs,crates/verifier/src/lib.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,ops/ci/inventory.sh -->
 Evidence classes follow
 `bullet-farm/docs/release.md`; nothing in this repository is `LIVE_PROOF` or
 `RELEASE_PROOF`, and every receipt named here is a component receipt.
@@ -86,12 +86,43 @@ recovery in an explicit file. Missing lease inputs refuse with
 `LEASE_TRANSPORT_ADMISSION_UNAVAILABLE`. Candidate admission is also required,
 and serving dispatch selects only `sim`; no subscription Runner is qualified.
 
-## Quick start
+## Open the operator console
+
+Run `bullet` or `bulletfarm` without arguments to open the same TUI. For this
+source checkout, build and open it with:
+
+```bash
+cargo run --locked -p bullet --bin bullet
+```
+
+The shell renders before credential or network discovery. Use Ctrl+K to choose
+a view, Tab to switch panes, arrows or j/k to move, Enter for details, Escape
+to go back, `?` for help, `r` to refresh and Ctrl+C to detach. Fleet shows observed
+leases; Ready Queue shows queued work; Outbox shows delivery records. Submissions
+keeps its own command snapshot. Empty views do not imply provider activity.
+
+If the console reports `AUTH_REQUIRED`, authenticate against your configured
+loopback farmd with `bullet auth login` (from source, append `-- auth login` to
+the Cargo command). Follow the [CLI authentication and recovery guide](docs/cli.md#operator-client-custody-and-recovery)
+for the exact destination, Origin, protected bootstrap input and reconnect
+options. A stopped daemon remains an explicit connection error. There is no
+`bullet serve` or `bullet setup` service launcher yet.
+
+This console currently observes durable work. Its in-TUI task composer, durable
+Head replies, supervised native terminals and admitted provider execution remain
+unfinished; running the TUI does not start Claude, Codex or Cursor.
+
+## Local component checks
 
 ```bash
 just fast
-BULLET_DATA_DIR=./target/demo cargo run -p bullet --bin bullet -- demo
+bullet_demo_dir="$(mktemp -d /tmp/bullet-demo.XXXXXXXX)"
+BULLET_DATA_DIR="$bullet_demo_dir" cargo run --locked -p bullet --bin bullet -- demo
 ```
+
+Keep the private absolute directory and its receipt for inspection. The default
+`./target/demo` path currently fails ledger path admission; an absolute private
+directory avoids that source defect without claiming a product fix.
 
 Run `just setup` only if this checkout has not yet been prepared (toolchain
 and repo-side dependencies).
@@ -107,9 +138,9 @@ Serving ledger opens retain a shared lock on the admitted database descriptor.
 The current implementation supports the ext2/ext3/ext4 filesystem family and
 refuses other filesystems or exclusive-custody contention. Startup inspects a
 private snapshot, with a 1 GiB input/recovery bound, before writable SQLite can
-recover source journals. Authentic schema 22 returns `UPGRADE_REQUIRED`; it is
-never migrated during serving startup. Backups read an owned recovered private
-snapshot under the same source custody and preserve verified schema 22 or 23.
+recover source journals. Authentic schemas 22 through 26 return `UPGRADE_REQUIRED`; they are
+never migrated during serving startup. Schema 27 is current. Backups read an owned recovered private
+snapshot under the same source custody and preserve verified schemas 22 through 27.
 Custody survives publication, exact receipt read-back and confirmed source close.
 Exclusive upgrades, durable backup/receipt retry and external authority high-water
 enforcement remain unimplemented.

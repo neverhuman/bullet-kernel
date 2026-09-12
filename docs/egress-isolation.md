@@ -2,10 +2,10 @@
 
 Status: committed Linux boundary; `COMPONENT_PROOF` on a capable host
 Owner: Bullet Farm maintainers
-Last reviewed: 2026-09-11 against source `88de763`
+Last reviewed: 2026-09-12 against source `025001dd`
 Source of truth: `crates/harness-egress/src/{lib,allowlist,decisions,error,namespace,probes,proxy,receipt,request,ruleset,sandbox,tools,tunnel}.rs`;
 consumer: `crates/harness-core/src/admission/signed.rs`
-<!-- bullet-doc-review:v1 subject=88de763bf2507c1dbb13f48c2c095e3d745ce813 max_distance=25 paths=crates/harness-egress/src/lib.rs,crates/harness-egress/src/sandbox.rs,crates/harness-core/src/admission/signed.rs,crates/harness-egress/src/filesystem.rs,crates/application/src/dogfood_run.rs,crates/application/src/dogfood_adapter.rs,crates/harness-claude/src/dogfood.rs,apps/bullet-runner/src/main.rs,apps/bullet-runner/src/signed_in_cli.rs,ops/ci/egress.sh -->
+<!-- bullet-doc-review:v1 subject=025001dd55e1ffc52e63311b191a818eeeb037b9 max_distance=25 paths=crates/harness-egress/src/lib.rs,crates/harness-egress/src/sandbox.rs,crates/harness-core/src/admission/signed.rs,crates/harness-egress/src/filesystem.rs,crates/application/src/dogfood_run.rs,crates/application/src/dogfood_adapter.rs,crates/harness-claude/src/dogfood.rs,apps/bullet-runner/src/main.rs,apps/bullet-runner/src/signed_in_cli.rs,ops/ci/egress.sh -->
 
 `bullet-harness-egress` constructs a fresh Linux user + network namespace
 whose only route out is a `slirp4netns` uplink to a host-side, allow-listing

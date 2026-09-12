@@ -1,9 +1,9 @@
 # Kernel architecture
 
-Last reviewed: 2026-09-11 against source `88de763`. Every claim names the code
+Last reviewed: 2026-09-12 against source `025001dd`. Every claim names the code
 it is read from. Evidence classes follow `bullet-farm/docs/release.md`; nothing
 below is `TRANSACTION_PROOF`, `LIVE_PROOF`, or `RELEASE_PROOF`.
-<!-- bullet-doc-review:v1 subject=88de763bf2507c1dbb13f48c2c095e3d745ce813 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,apps/bullet-farmd/src/commands.rs,apps/bullet-farmd/src/commands/conversations.rs,apps/bullet-farmd/src/api/routes.rs,apps/bullet/src/contracts.rs,crates/application/src/conversations.rs,crates/adapters/src/sqlite/conversations/admission.rs,crates/adapters/src/sqlite/migrations/catalog.rs,apps/bullet-runner/src/signed_in_cli.rs,apps/bullet-farmd/src/auth/read.rs,apps/bullet/src/coding/http.rs,apps/bullet/src/tui/submissions.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,crates/adapters/src/sqlite/candidate_preparation/source.rs,apps/bullet-runner/src/bin/bullet-command-worker/child/coding.rs,crates/application/src/dogfood_adapter.rs,crates/application/src/dogfood_run.rs,crates/harness-claude/src/dogfood.rs,crates/runner/src/attempt/session.rs,crates/runner/src/attempt/session/failure.rs -->
+<!-- bullet-doc-review:v1 subject=025001dd55e1ffc52e63311b191a818eeeb037b9 max_distance=25 paths=crates/domain/src/lib.rs,crates/application/src/coding_tasks.rs,apps/bullet/src/auth/session.rs,crates/application/src/lib.rs,crates/adapters/src/lib.rs,apps/bullet-farmd/src/api.rs,apps/bullet-farmd/src/lease_transport_rpc.rs,crates/runner/src/signed_lease_rpc.rs,crates/adapters/src/sqlite/backup/create.rs,crates/adapters/src/sqlite/backup/restore.rs,crates/adapters/src/sqlite/open.rs,apps/bullet-farmd/src/main/launch.rs,apps/bullet-runner/src/main.rs,crates/runner/src/signed_lease_rpc/recovery.rs,apps/bullet-farmd/src/commands.rs,apps/bullet-farmd/src/commands/conversations.rs,apps/bullet-farmd/src/api/routes.rs,apps/bullet/src/contracts.rs,crates/application/src/conversations.rs,crates/adapters/src/sqlite/conversations/admission.rs,crates/adapters/src/sqlite/migrations/catalog.rs,apps/bullet-runner/src/signed_in_cli.rs,apps/bullet-farmd/src/auth/read.rs,apps/bullet/src/coding/http.rs,apps/bullet/src/tui/submissions.rs,crates/adapters/src/sqlite/coding_tasks/admission.rs,crates/adapters/src/sqlite/candidate_preparation/source.rs,apps/bullet-runner/src/bin/bullet-command-worker/child/coding.rs,crates/application/src/dogfood_adapter.rs,crates/application/src/dogfood_run.rs,crates/harness-claude/src/dogfood.rs,crates/runner/src/attempt/session.rs,crates/runner/src/attempt/session/failure.rs -->
 
 ## Ledger core
 
@@ -64,13 +64,17 @@ and SSE require authenticated durable sessions. Browser Origin and CSRF checks
 remain enforced; operator-owned command and conversation discovery survives
 local cache loss and daemon restart.
 
-The read middleware (`apps/bullet-farmd/src/auth/read.rs`) checks an optional
+The session middleware (`apps/bullet-farmd/src/auth/read.rs`) checks an optional
 `X-Bullet-Expected-Session` on authenticated `/api/v1/` GET/HEAD requests and
-refuses a mismatch with `403 SESSION_CHANGED` before the handler runs. After
-an authenticated handler returns, it adds `X-Bullet-Session-Id` and
-`Cache-Control: no-store`. The CLI
-request path (`apps/bullet/src/coding/http.rs`) does not yet send or validate
-these identity headers; client owner-binding and recovery acceptance remain open.
+POSTs to `/api/v1/commands` and `/api/v1/auth/revoke`. It refuses a mismatch with
+`403 SESSION_CHANGED` before the handler runs; mutation Origin/CSRF checks keep
+their precedence. Authenticated handler responses carry `X-Bullet-Session-Id`
+and `Cache-Control: no-store`, including the acknowledged self-revocation.
+The CLI request path (`apps/bullet/src/coding/http.rs`) observes the authenticated
+session first and requires its exact response acknowledgement before consuming
+bodies, cookies or absence results. Missing, duplicate and mismatched headers
+refuse. This implemented transport fence does not complete durable composer,
+browser journal or native-session recovery acceptance.
 
 Public `POST /api/v1/commands` returns the command's current durable phase.
 Exact owned retries retain their original subject; they do not create another
@@ -87,7 +91,10 @@ derives a WorkPackage id from the command and puts the command request digest
 in the Candidate-request argument. The Candidate-source consumer instead checks
 its own typed canonical source digest (`crates/adapters/src/sqlite/candidate_preparation/source.rs`).
 A coherent producer joining accepted task intent to those durable execution
-subjects is still missing. Intent allocates no Runner lease or live provider grant.
+subjects is still missing. Intent allocates no Runner lease or live provider grant. The worker uses
+`coding_lease_key` (`crates/application/src/coding_tasks.rs`), a domain-separated
+key derived from the validated command ID and request digest. It is distinct
+from the submission retry key and grants no lease or Candidate authority.
 The retired HTTP worker reconciler (`POST /internal/v1/commands/{id}/reconcile`)
 authenticates and then returns `410 WORKLOAD_API_UDS_REQUIRED`; workload mutation
 uses the separate internal Unix-socket boundary. Durable store and corruption
