@@ -8,8 +8,16 @@ slow-timeout = { period = "20s", terminate-after = 2 }
 fail-fast = true
 
 [test-groups]
+operator-terminal = { max-threads = 1 }
 sqlite-migration-identity = { max-threads = 1 }
 command-receipt-filesystem-hostiles = { max-threads = 1 }
+
+# Each case owns real PTYs and may launch six simultaneous CLI clients.
+# Reserve the fast budget instead of overlapping independent cold-start suites.
+[[profile.fast.overrides]]
+filter = 'binary_id(=bullet::operator_terminal) | binary_id(=bullet::operator_tui) | binary_id(=bullet::operator_tui_startup)'
+test-group = 'operator-terminal'
+threads-required = 4
 
 [[profile.fast.overrides]]
 filter = '(binary_id(bullet-adapters) & test(sqlite::migrations::)) | (binary_id(bullet-adapters::candidate_preparation) & test(=schema::exact_schema_eighteen_is_refused_without_byte_mutation))'
