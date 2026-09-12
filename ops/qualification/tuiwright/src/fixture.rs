@@ -54,7 +54,8 @@ impl Fixture {
             errors.clone(),
         );
         let worker = std::thread::spawn(move || {
-            let mut connections = Vec::new();
+            let mut connections: Vec<JoinHandle<()>> = Vec::new();
+            let mut accepted = 0usize;
             while !end.load(Ordering::SeqCst) {
                 let (stream, _) = match listener.accept() {
                     Ok(value) => value,
@@ -67,7 +68,24 @@ impl Fixture {
                         break;
                     }
                 };
-                if connections.len() >= 64 {
+                // Six polling clients create many sequential connections. Keep
+                // live handlers bounded without mistaking completed requests
+                // for concurrency; retain join failures before releasing them.
+                let mut index = 0;
+                while index < connections.len() {
+                    if connections[index].is_finished() {
+                        if connections.swap_remove(index).join().is_err() {
+                            failures
+                                .lock()
+                                .unwrap()
+                                .push("FIXTURE_THREAD_PANICKED".into());
+                        }
+                    } else {
+                        index += 1;
+                    }
+                }
+                accepted += 1;
+                if connections.len() >= 64 || accepted > 4096 {
                     failures
                         .lock()
                         .unwrap()

@@ -64,6 +64,14 @@ pub fn probe(args: &[String]) -> Result<()> {
     tcsetattr(&stdin, OptionalActions::Now, &raw)?;
     println!("HARNESS PROCESS FIXTURE");
     std::io::stdout().flush()?;
+    if mode == "parent-death" {
+        // Closing the parent's PTY can make terminal reads/restoration fail
+        // before PDEATHSIG is delivered. This probe must remain alive until
+        // the death signal itself, not exit through a competing I/O failure.
+        loop {
+            std::thread::park();
+        }
+    }
     let result = (|| -> Result<()> {
         let mut input = stdin.lock();
         let mut byte = [0];
