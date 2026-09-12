@@ -77,6 +77,7 @@ fn navigate(id: &str, client: usize, session: &Session, evidence: &mut Evidence)
             let screen = session.page().screen();
             // Page changes its parser dimensions immediately. These corners at
             // the new right edge additionally require Bullet's actual redraw.
+            // Four footer rows reserve error, divider and two shortcut lines.
             if screen.cols == cols
                 && screen.rows == rows
                 && screen.contains_text("┌Tasks")
@@ -84,8 +85,9 @@ fn navigate(id: &str, client: usize, session: &Session, evidence: &mut Evidence)
                     .cell(3, cols - 1)
                     .is_some_and(|cell| cell.text == "┐")
                 && screen
-                    .cell(rows - 4, cols - 1)
+                    .cell(rows - 5, cols - 1)
                     .is_some_and(|cell| cell.text == "┘")
+                && screen.contains_text("Ctrl+C detach")
             {
                 break screen;
             }
@@ -125,7 +127,8 @@ fn submissions(id: &str, client: usize, session: &Session, evidence: &mut Eviden
     }
     key(id, client, session, Key::Ctrl('k'), evidence)?;
     session.wait_text("Navigate")?;
-    for _ in 0..6 {
+    // Missions through Fleet occupy indices 0..=8; Submissions is index 9.
+    for _ in 0..9 {
         key(id, client, session, Key::Char('j'), evidence)?;
     }
     key(id, client, session, Key::Enter, evidence)?;
@@ -141,7 +144,7 @@ fn submissions(id: &str, client: usize, session: &Session, evidence: &mut Eviden
     );
     // Read only the inspector's interior, joining its wrapped lines. Preserve
     // the complete unmodified raster/text observation in the screen artifact.
-    let detail = (4..26)
+    let detail = (4..screen.rows - 5)
         .map(|row| {
             (55..119)
                 .filter_map(|col| screen.cell(row, col))
