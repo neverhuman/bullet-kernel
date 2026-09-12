@@ -142,10 +142,26 @@ enum ContractsCommands {
     Check,
 }
 
+/// Where the local ledger lives when `BULLET_DATA_DIR` is unset.
+///
+/// The default used to be the relative `./target/demo`, which depends on the
+/// working directory: run from a directory with no `target/` and the ledger
+/// refuses the path as a non-normal component, which reads as a corrupt
+/// install rather than a missing variable. Default to an absolute private
+/// path under the user's state directory instead.
 fn data_dir() -> PathBuf {
-    std::env::var("BULLET_DATA_DIR")
+    if let Some(configured) = std::env::var_os("BULLET_DATA_DIR") {
+        return PathBuf::from(configured);
+    }
+    let state = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./target/demo"))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("state"))
+        });
+    match state {
+        Some(base) => base.join("bullet").join("ledger"),
+        None => PathBuf::from("./target/demo"),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -237,7 +253,10 @@ fn run(command: Commands) -> Result<(), String> {
 
 fn demo() -> Result<(), String> {
     let dir = data_dir();
-    fs::create_dir_all(&dir).map_err(|err| format!("create data dir: {err}"))?;
+    // `create_dir_all` applies the umask, so a default 002 leaves the directory
+    // group-writable and the ledger then refuses it for custody. Create it the
+    // same private way `farm init` does.
+    ensure_private_data_dir(&dir)?;
     let path = dir.join("ledger.sqlite");
     let mut ledger = SqliteLedger::open(&path).map_err(|err| format!("open ledger: {err}"))?;
     let receipt = run_demo(&mut ledger).map_err(|err| format!("demo failed: {err}"))?;
