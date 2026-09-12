@@ -14,8 +14,10 @@ independent verification, integration or release acceptance. Operating HOLD
 continues until its actual predecessor admission and operator checkpoint.
 
 `bulletfarm` compiles the same command dispatcher as `bullet`, with equivalent
-flags and exit contracts. Both currently require a subcommand; the default
-durable Head conversation remains unimplemented.
+flags and exit contracts. Run `bullet` with no subcommand to open the operator TUI.
+Advanced subcommands remain available for auth, diagnostics, and maintenance.
+The default durable Head conversation and first-class chat/assistant commands
+remain unimplemented.
 
 Interactive `bullet tui` draws CONNECTING before credential or network discovery;
 navigation and Ctrl+C detach remain available while discovery waits. An

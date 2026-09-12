@@ -12,10 +12,8 @@ pub(super) enum Event {
         directory: PathBuf,
         destination: String,
     },
-    Snapshot {
-        operator: Box<Result<OperatorSnapshot, String>>,
-        commands: Box<Result<CommandDiscoverySnapshot, String>>,
-    },
+    Operator(Box<Result<OperatorSnapshot, String>>),
+    Commands(Box<Result<CommandDiscoverySnapshot, String>>),
     Authentication(String),
 }
 
@@ -59,6 +57,11 @@ fn load(selected: Option<PathBuf>, responses: &SyncSender<Event>) -> Result<(), 
     ) {
         return snapshot.map(|_| ());
     }
+    // These reads have separate observation identities. Publish the validated
+    // operator projection immediately; command discovery must not delay it.
+    responses
+        .send(Event::Operator(Box::new(snapshot)))
+        .map_err(|_| "TUI_DETACHED")?;
     let commands = crate::client::coding_commands(&credentials);
     let current = CredentialStore::read_credentials(&directory)?
         .ok_or("AUTH_REQUIRED: local credentials were removed")?;
@@ -72,10 +75,7 @@ fn load(selected: Option<PathBuf>, responses: &SyncSender<Event>) -> Result<(), 
         return commands.map(|_| ());
     }
     responses
-        .send(Event::Snapshot {
-            operator: Box::new(snapshot),
-            commands: Box::new(commands),
-        })
+        .send(Event::Commands(Box::new(commands)))
         .map_err(|_| "TUI_DETACHED".into())
 }
 

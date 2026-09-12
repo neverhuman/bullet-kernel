@@ -62,10 +62,10 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
     }
     let mut terminal = ratatui::try_init().map_err(|_| "TUI_TERMINAL_UNAVAILABLE")?;
     let _restore = RestoreTerminal;
-    let color = std::env::var_os("NO_COLOR").is_none();
+    let palette = ui::Palette::detect();
     // Paint before even starting credential or destination discovery.
     terminal
-        .draw(|frame| ui::draw(frame, &mut state, color))
+        .draw(|frame| ui::draw(frame, &mut state, palette))
         .map_err(|_| "TUI_DRAW_FAILED")?;
     let (request_tx, response_rx) = loader::start(args.state_dir.clone());
     let mut directory = args.state_dir;
@@ -91,10 +91,10 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
                     directory = Some(path);
                     state.destination = destination;
                 }
-                loader::Event::Snapshot { operator, commands } => {
+                loader::Event::Operator(operator) => state.update(*operator),
+                loader::Event::Commands(commands) => {
                     pending = false;
                     state.submissions.update(*commands);
-                    state.update(*operator);
                     state.rebuild();
                     let ready = reconnect.as_deref().is_some_and(|subject| {
                         if subject.starts_with("cmd_") {
@@ -128,7 +128,7 @@ pub(crate) fn run(args: TuiArgs) -> Result<(), String> {
         }
         state.refresh_pending = pending;
         terminal
-            .draw(|frame| ui::draw(frame, &mut state, color))
+            .draw(|frame| ui::draw(frame, &mut state, palette))
             .map_err(|_| "TUI_DRAW_FAILED")?;
         if !event::poll(Duration::from_millis(100)).map_err(|_| "TUI_INPUT_FAILED")? {
             continue;

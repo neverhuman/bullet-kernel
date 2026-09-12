@@ -23,7 +23,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "bullet", about = "Bullet Farm CLI")]
+#[command(
+    name = "bullet",
+    about = "Bullet Farm CLI",
+    after_help = "\
+Run `bullet` (no arguments) to open the operator TUI.\n\
+Subcommands are retained for operator workflow, diagnostics, and maintenance.\n\
+Inside the console: Ctrl+K navigates, Tab switches panes, ? opens help, Ctrl+C detaches."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -33,55 +40,66 @@ struct Cli {
 enum Commands {
     /// Browse authenticated durable work; Ctrl+C detaches this client.
     Tui(tui::TuiArgs),
+
     /// Authenticate this client without putting credentials in shell arguments.
     Auth {
         #[command(subcommand)]
         command: auth::AuthCommands,
     },
+
     /// Initialize a local data directory.
     Farm {
         #[command(subcommand)]
         command: FarmCommands,
     },
+
     /// Run the first simulator demonstration.
     Demo,
+
     /// Run simulator-only integration scaffolding. This is not transaction proof.
     DemoSynthetic {
         /// Existing origin repository instead of the generated fixture.
         #[arg(long)]
         target: Option<PathBuf>,
     },
+
     /// Generated-contract tooling. The YAML is the source of truth.
     Contracts {
         #[command(subcommand)]
         command: ContractsCommands,
     },
+
     /// Operator-held launch-grant authority: keygen and offline minting.
     Authority {
         #[command(subcommand)]
         command: authority::AuthorityCommands,
     },
+
     /// Browse authenticated missions; explicit local component materialization is also available.
     Mission {
         #[command(subcommand)]
         command: mission::MissionCommands,
     },
+
     /// Provider live-conformance: policy-gated and fail-closed at runtime observation.
     Provider {
         #[command(subcommand)]
         command: provider::ProviderCommands,
     },
+
     /// Read a run receipt back: verify its digest and chain, then render it.
     Run {
         #[command(subcommand)]
         command: run::RunCommands,
     },
+
     /// Five-plane transaction receipt. Currently ABSENT and ineligible.
     Transaction {
         /// Emit one JSON object on stdout.
         #[arg(long)]
         json: bool,
     },
+
     /// Internal dogfood compose. Not a release profile and not live-conformance.
     Dogfood {
         /// Boxed: the read-only compose carries the most operator inputs of
