@@ -73,7 +73,7 @@ impl Fixture {
         let command_failure = command_refusal.clone();
         let (bad, count, end) = (malformed.clone(), reads.clone(), stop.clone());
         let worker = std::thread::spawn(move || {
-            while !end.load(Ordering::SeqCst) {
+            'accept: while !end.load(Ordering::SeqCst) {
                 let (mut socket, _) = match listener.accept() {
                     Ok(value) => value,
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -91,7 +91,15 @@ impl Fixture {
                 let mut bytes = Vec::new();
                 while !bytes.ends_with(b"\r\n\r\n") {
                     let mut byte = [0];
-                    socket.read_exact(&mut byte).unwrap();
+                    if let Err(error) = socket.read_exact(&mut byte) {
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                        ) {
+                            continue 'accept;
+                        }
+                        panic!("fixture request read failed: {error}");
+                    }
                     bytes.push(byte[0]);
                     assert!(bytes.len() < 16_384);
                 }
@@ -173,7 +181,18 @@ impl Fixture {
                     snapshot()
                 };
                 let sequence = if commands { 9 } else { 0 };
-                write!(socket,"HTTP/1.1 {status}\r\nX-Bullet-Session-Id: {session_id}\r\nContent-Type: application/json\r\nX-Bullet-As-Of-Sequence: {sequence}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                let response = format!("HTTP/1.1 {status}\r\nX-Bullet-Session-Id: {session_id}\r\nContent-Type: application/json\r\nX-Bullet-As-Of-Sequence: {sequence}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                // Detaching a console may close its socket during this write.
+                // Keep serving the remaining clients; protocol checks above
+                // still fail loudly for invalid or unauthorized requests.
+                if let Err(error) = socket.write_all(response.as_bytes()) {
+                    if !matches!(
+                        error.kind(),
+                        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                    ) {
+                        panic!("fixture response write failed: {error}");
+                    }
+                }
             }
         });
         Self {
