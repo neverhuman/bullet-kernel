@@ -122,6 +122,11 @@ These reads do not open a local ledger. For legacy component inspection, supply
 `mission status --data-dir <directory> --mission <id>`; local mode rejects
 `--state-dir`, `--farmd` and `--json`. Materialization remains a local helper.
 
+Open Fleet, Ready Queue and Outbox through Ctrl+K to inspect lease liveness,
+queued work and delivery records. These views use the operator snapshot and
+show their exact subjects and observation sequence. Empty rows do not imply
+provider execution or successful delivery.
+
 The TUI uses Ctrl+K for a jump list of Portal surface titles (six unknown
 surfaces stay `no ledger subject` and do not invent a view), Tab for panes,
 arrows or j/k for selection, Enter for details, Escape for back, `?` for help,

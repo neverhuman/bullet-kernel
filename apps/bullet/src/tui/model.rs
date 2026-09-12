@@ -1,6 +1,9 @@
 use crate::client::{models::OperatorSnapshot, terminal_text};
 use serde::Serialize;
 
+#[path = "fleet.rs"]
+mod fleet;
+
 #[derive(Clone, Copy, Default, PartialEq)]
 pub(super) enum View {
     #[default]
@@ -10,16 +13,22 @@ pub(super) enum View {
     Review,
     Events,
     Context,
+    Outbox,
+    Ready,
+    Fleet,
     Submissions,
 }
 impl View {
-    pub(super) const ALL: [Self; 7] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::Missions,
         Self::Tasks,
         Self::Attempts,
         Self::Review,
         Self::Events,
         Self::Context,
+        Self::Outbox,
+        Self::Ready,
+        Self::Fleet,
         Self::Submissions,
     ];
     pub(super) fn title(self) -> &'static str {
@@ -30,6 +39,9 @@ impl View {
             Self::Review => "Merge Rail",
             Self::Events => "Incidents and Audit",
             Self::Context => "Context Lineage",
+            Self::Outbox => "Outbox",
+            Self::Ready => "Ready queue",
+            Self::Fleet => "Fleet",
             Self::Submissions => "Submissions",
         }
     }
@@ -216,6 +228,7 @@ impl Model {
         let data = &snapshot.data;
         let rows = match self.view {
             View::Submissions => unreachable!(),
+            View::Outbox | View::Ready | View::Fleet => fleet::rows(snapshot, self.view),
             View::Missions => data
                 .missions
                 .iter()

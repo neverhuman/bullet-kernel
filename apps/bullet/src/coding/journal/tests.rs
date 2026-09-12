@@ -268,7 +268,10 @@ fn submission_socket(
     selected: &str,
 ) -> (std::net::TcpStream, String) {
     use std::io::Read;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    // Submission commits and syncs its journal before connecting. Allow bounded
+    // setup time for real storage under load; acknowledgement-before-body has
+    // its own two-second assertion below and must not inherit this allowance.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut socket = loop {
         match listener.accept() {
             Ok((socket, _)) => break socket,

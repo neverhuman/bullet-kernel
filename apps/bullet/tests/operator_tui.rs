@@ -326,7 +326,8 @@ fn connecting_status_chrome_and_palette_unknown_surfaces_stay_honest() {
     console.until("refresh pending");
     console.send(b"\x0b");
     console.until("no ledger subject");
-    console.send(b"j".repeat(8).as_slice());
+    // Ten navigable views precede the first unavailable surface.
+    console.send(b"j".repeat(10).as_slice());
     console.send(b"\r");
     console.until("Mission Graph");
     assert!(!console
@@ -377,6 +378,19 @@ fn submissions_keep_their_own_identity_and_never_become_execution_rows() {
     console.send(b"jj\r");
     console.until("Session Supervisor");
     assert!(!console.parser.screen().contents().contains("run_coding"));
+    for (index, title) in [(6, "Outbox"), (7, "Ready queue"), (8, "Fleet")] {
+        console.send(b"\x0b");
+        console.until("Navigate");
+        console.send(b"j".repeat(index).as_slice());
+        console.send(b"\r");
+        console.until(&format!("┌{title}"));
+        console.until("zero rows, not a green fleet");
+        let screen = console.parser.screen().contents();
+        assert!(screen.contains("snapshot 0"));
+        assert!(!screen.contains("submissions snapshot 9"));
+        assert!(!screen.contains("run_coding"));
+        assert!(!screen.contains(&subject));
+    }
     console.detach();
 }
 
